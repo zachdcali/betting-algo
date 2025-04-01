@@ -13,6 +13,7 @@ import logging
 import random
 import numpy as np
 import csv
+import traceback
 
 # Set up logging
 logging.basicConfig(
@@ -470,275 +471,338 @@ class UTRScraper:
             logger.error(f"Error getting profile for player {player_id}: {e}")
             return None
     
-    def get_player_rating_history(self, player_id):
+    def get_player_rating_history(self, player_id, max_retries=3):
         """
         Get a player's UTR rating history using direct URL navigation
         
         Parameters:
         player_id (str): Player's UTR ID
+        max_retries (int): Maximum number of retry attempts
         
         Returns:
         DataFrame: Rating history with dates and UTR values
         """
-        try:
-            # Check if we already have this player's rating history
-            rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
-            if rating_file.exists() and os.path.getsize(rating_file) > 0:
-                logger.info(f"Already have rating history for player {player_id}, loading from file")
+        for retry in range(max_retries):
+            try:
+                # Check if we already have this player's rating history
+                rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+                if rating_file.exists() and os.path.getsize(rating_file) > 0:
+                    logger.info(f"Already have rating history for player {player_id}, loading from file")
+                    try:
+                        ratings_df = pd.read_csv(rating_file)
+                        if not ratings_df.empty and 'date' in ratings_df.columns and 'utr' in ratings_df.columns:
+                            logger.info(f"Successfully loaded {len(ratings_df)} rating entries from file")
+                            return ratings_df
+                        else:
+                            logger.warning(f"Rating file for player {player_id} exists but has invalid structure")
+                    except Exception as e:
+                        logger.warning(f"Error loading existing rating file: {e}")
+                        # Continue with fetching new data
+                
+                logger.info(f"Getting rating history for player ID: {player_id} (attempt {retry+1}/{max_retries})")
+                
+                # Go directly to player stats page using the URL parameter
+                stats_url = f"https://app.utrsports.net/profiles/{player_id}?t=6"
+                
+                # Add timeout handling here - prevent the entire script from failing
                 try:
-                    ratings_df = pd.read_csv(rating_file)
-                    if not ratings_df.empty and 'date' in ratings_df.columns and 'utr' in ratings_df.columns:
-                        logger.info(f"Successfully loaded {len(ratings_df)} rating entries from file")
-                        return ratings_df
+                    self.page.goto(stats_url, timeout=30000)  # Increased timeout for better reliability
+                except PlaywrightTimeoutError as e:
+                    logger.warning(f"Timeout navigating to stats page for player {player_id} (attempt {retry+1}): {e}")
+                    # If not the last retry, try again
+                    if retry < max_retries - 1:
+                        logger.info(f"Retrying after timeout ({retry+1}/{max_retries})...")
+                        time.sleep(random.uniform(3.0, 6.0))  # Longer delay after timeouts
+                        continue
                     else:
-                        logger.warning(f"Rating file for player {player_id} exists but has invalid structure")
-                except Exception as e:
-                    logger.warning(f"Error loading existing rating file: {e}")
-                    # Continue with fetching new data
-            
-            logger.info(f"Getting rating history for player ID: {player_id}")
-            
-            # Go directly to player stats page using the URL parameter
-            stats_url = f"https://app.utrsports.net/profiles/{player_id}?t=6"
-            
-            # Add timeout handling here - prevent the entire script from failing
-            try:
-                self.page.goto(stats_url, timeout=20000)  # Reduced timeout from 30000ms to 20000ms
-            except PlaywrightTimeoutError as e:
-                logger.warning(f"Timeout navigating to stats page for player {player_id}: {e}")
-                # Create an empty DataFrame and save it to avoid retrying this player
-                empty_df = pd.DataFrame(columns=['date', 'utr'])
-                empty_df.to_csv(rating_file, index=False)
-                logger.info(f"Created empty ratings file for player {player_id} to avoid future retries")
-                return empty_df
-            
-            # Wait for the page to load - using a more generic selector with shorter timeout
-            try:
-                self.page.wait_for_selector('h1', state="visible", timeout=15000)  # Reduced timeout
-            except PlaywrightTimeoutError:
-                logger.warning(f"Timeout waiting for page content for player {player_id}")
-                # Try to proceed anyway, in case some content is available
-            
-            time.sleep(3)  # Additional wait to ensure page is fully loaded
-            
-            # Take a screenshot for debugging - with error handling
-            try:
-                self.page.screenshot(path=f"stats_page_{player_id}.png")
-            except Exception as e:
-                logger.warning(f"Failed to take screenshot: {e}")
-            
-            # Use our helper function to select singles
-            self.select_verified_singles()
-            
-            # Check for premium content blocker
-            premium_blocker = self.page.query_selector('div:has-text("Subscribe to UTR Pro")')
-            if premium_blocker:
-                logger.warning(f"Rating history for player {player_id} requires premium subscription")
-                # Create an empty DataFrame with a note
-                empty_df = pd.DataFrame(columns=['date', 'utr', 'note'])
-                empty_df.loc[0] = [datetime.now().strftime("%Y-%m-%d"), None, "Premium content"]
-                empty_df.to_csv(rating_file, index=False)
-                return empty_df
-
-            # Check for "Show All" button for full rating history and click it if present
-            try:
-                # Try different selector patterns for the "Show all" button
-                show_all_selectors = [
-                    'a:has-text("Show all")',
-                    'a.underline:has-text("Show all")',
-                    'button:has-text("Show all")',
-                    'div:has-text("Show all")'
-                ]
+                        # Create an empty DataFrame and save it to avoid retrying this player
+                        empty_df = pd.DataFrame(columns=['date', 'utr'])
+                        empty_df.to_csv(rating_file, index=False)
+                        logger.info(f"Created empty ratings file for player {player_id} after max retries")
+                        return empty_df
                 
-                for selector in show_all_selectors:
-                    show_all = self.page.query_selector(selector)
-                    if show_all:
-                        logger.info(f"Found 'Show all' button using selector: {selector}")
-                        show_all.click()
-                        # Wait for additional history to load
-                        time.sleep(3)
-                        # Take another screenshot after clicking Show All
-                        try:
-                            self.page.screenshot(path=f"stats_page_after_show_all_{player_id}.png")
-                        except Exception as e:
-                            logger.warning(f"Failed to take screenshot after Show All: {e}")
-                        break
-                        
-            except Exception as e:
-                logger.warning(f"Could not find or click 'Show all' button: {e}")
-            
-            # Try multiple different selectors for rating history items
-            history_selectors = [
-                '.newStatsTabContent__historyItem__INNPC',  # Original selector
-                'div[class*="historyItem"]',  # More generic selector targeting class containing "historyItem"
-                'div.history-item',           # Another possible class name
-                '.rating-history-item'        # Another possible class name
-            ]
-                
-            history_items = []
-            for selector in history_selectors:
-                items = self.page.query_selector_all(selector)
-                if items and len(items) > 0:
-                    logger.info(f"Found {len(items)} rating history items using selector: {selector}")
-                    history_items = items
-                    break
-                
-            # Try a more brute force approach if the selectors don't work
-            if not history_items:
-                logger.info("Trying alternative approach to extract rating history")
-                # Get all date-like text on the page
-                date_elements = self.page.query_selector_all('div:text-matches("\\d{4}-\\d{2}-\\d{2}")')
-                if date_elements:
-                    logger.info(f"Found {len(date_elements)} date elements on the page")
-                    
-                    # Extract dates and try to find nearby rating values
-                    rating_history = []
-                    for date_elem in date_elements:
-                        try:
-                            date_str = date_elem.inner_text().strip()
-                            # Look for a nearby number that could be a UTR rating
-                            parent = date_elem.evaluate_handle('node => node.parentElement')
-                            parent_text = parent.inner_text()
-                            
-                            # Use regex to find a number like "15.23" in the parent element's text
-                            utr_match = re.search(r'([\d.]{2,5})', parent_text)
-                            if utr_match and date_str:
-                                rating_value = float(utr_match.group(1))
-                                rating_history.append({
-                                    "date": date_str,
-                                    "utr": rating_value
-                                })
-                        except Exception as e:
-                            logger.error(f"Error extracting alternative rating data: {e}")
-                    
-                    if rating_history:
-                        df = pd.DataFrame(rating_history)
-                        csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
-                        df.to_csv(csv_file, index=False)
-                        logger.info(f"Saved rating history (alternative method) for player {player_id}: {len(rating_history)} entries")
-                        return df
-                    
-            # Process standard history items if found
-            rating_history = []
-            
-            for item in history_items:
+                # Wait for the page to load - using a more generic selector with sufficient timeout
                 try:
-                    # Try different selectors for date and rating within each history item
-                    date_selectors = [
-                        '.newStatsTabContent__historyItemDate__JFjy',
-                        'div[class*="Date"]',
-                        'div[class*="date"]',
-                        'span[class*="date"]'
+                    self.page.wait_for_selector('h1, .header, [class*="header"]', state="visible", timeout=20000)
+                except PlaywrightTimeoutError:
+                    logger.warning(f"Timeout waiting for page content for player {player_id} (attempt {retry+1})")
+                    # Try to proceed anyway, in case some content is available
+                
+                time.sleep(4)  # Increased wait to ensure page is fully loaded
+                
+                # Take a screenshot for debugging - with error handling
+                try:
+                    self.page.screenshot(path=f"stats_page_{player_id}.png")
+                except Exception as e:
+                    logger.warning(f"Failed to take screenshot: {e}")
+                
+                # Use our helper function to select singles
+                self.select_verified_singles()
+                
+                # Check for premium content blocker with multiple selectors
+                premium_blocker = self.page.query_selector('div:has-text("Subscribe to UTR Pro"), div:has-text("Upgrade to UTR Pro")')
+                if premium_blocker:
+                    logger.warning(f"Rating history for player {player_id} requires premium subscription")
+                    
+                    # If not the last retry, try the JavaScript extraction approach directly
+                    if retry < max_retries - 1:
+                        logger.info(f"Attempting JavaScript extraction on retry {retry+1}")
+                        
+                        # Try to extract UTR history from the raw HTML
+                        html_content = self.page.content()
+                        
+                        # Look for patterns like "date":"2023-05-15","rating":15.23
+                        date_rating_matches = re.findall(r'"date":"(\d{4}-\d{2}-\d{2})","rating":([\d.]+)', html_content)
+                        
+                        if date_rating_matches:
+                            logger.info(f"Extracted {len(date_rating_matches)} ratings from HTML despite premium block")
+                            
+                            rating_history = [
+                                {"date": date, "utr": float(rating)}
+                                for date, rating in date_rating_matches
+                            ]
+                            
+                            df = pd.DataFrame(rating_history)
+                            csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+                            df.to_csv(csv_file, index=False)
+                            
+                            logger.info(f"Saved rating history (HTML extraction) for player {player_id}: {len(rating_history)} entries")
+                            return df
+                        
+                        # If HTML extraction failed, retry with next attempt
+                        logger.info(f"JavaScript extraction failed, continuing to retry {retry+2}")
+                        time.sleep(random.uniform(3.0, 5.0))
+                        continue
+                    else:
+                        # Final attempt failed - create an empty DataFrame with a note
+                        empty_df = pd.DataFrame(columns=['date', 'utr', 'note'])
+                        empty_df.loc[0] = [datetime.now().strftime("%Y-%m-%d"), None, "Premium content"]
+                        empty_df.to_csv(rating_file, index=False)
+                        return empty_df
+
+                # Check for "Show All" button for full rating history and click it if present
+                try:
+                    # Try different selector patterns for the "Show all" button
+                    show_all_selectors = [
+                        'a:has-text("Show all")',
+                        'a.underline:has-text("Show all")',
+                        'button:has-text("Show all")',
+                        'div:has-text("Show all")'
                     ]
                     
-                    rating_selectors = [
-                        '.newStatsTabContent__historyItemRating__GQUXX',
-                        'div[class*="Rating"]',
-                        'div[class*="rating"]',
-                        'span[class*="rating"]'
-                    ]
-                    
-                    # Try to find date using selectors
-                    date_str = None
-                    for date_selector in date_selectors:
-                        date_element = item.query_selector(date_selector)
-                        if date_element:
-                            date_str = date_element.inner_text().strip()
+                    for selector in show_all_selectors:
+                        show_all = self.page.query_selector(selector)
+                        if show_all:
+                            logger.info(f"Found 'Show all' button using selector: {selector}")
+                            show_all.click()
+                            # Wait for additional history to load
+                            time.sleep(4)
+                            # Take another screenshot after clicking Show All
+                            try:
+                                self.page.screenshot(path=f"stats_page_after_show_all_{player_id}.png")
+                            except Exception as e:
+                                logger.warning(f"Failed to take screenshot after Show All: {e}")
                             break
-                    
-                    # If date not found, try to extract it directly from the item text
-                    if not date_str:
-                        item_text = item.inner_text()
-                        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', item_text)
-                        if date_match:
-                            date_str = date_match.group(1)
-                    
-                    # Try to find rating using selectors
-                    rating_str = None
-                    for rating_selector in rating_selectors:
-                        rating_element = item.query_selector(rating_selector)
-                        if rating_element:
-                            rating_str = rating_element.inner_text().strip()
-                            break
-                    
-                    # If rating not found, try to extract it directly from the item text
-                    if not rating_str and date_str:
-                        item_text = item.inner_text()
-                        # Look for a number after the date
-                        rating_match = re.search(r'([\d.]{2,5})', item_text.replace(date_str, '', 1))
-                        if rating_match:
-                            rating_str = rating_match.group(1)
-                    
-                    if date_str and rating_str:
-                        # Parse date and rating
-                        try:
-                            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
-                            # Extract just the UTR rating number using regex
-                            rating_match = re.search(r'([\d.]+)', rating_str)
-                            if rating_match:
-                                rating_value = float(rating_match.group(1))
-                                rating_history.append({
-                                    "date": parsed_date,
-                                    "utr": rating_value
-                                })
-                        except Exception as e:
-                            logger.error(f"Error parsing date or rating: {e}")
                             
                 except Exception as e:
-                    logger.error(f"Error extracting rating history item: {e}")
-                    continue
-            
-            # Create DataFrame and save
-            if rating_history:
-                df = pd.DataFrame(rating_history)
+                    logger.warning(f"Could not find or click 'Show all' button: {e}")
                 
-                # Save as CSV
-                csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
-                df.to_csv(csv_file, index=False)
-                
-                logger.info(f"Saved rating history for player {player_id}: {len(rating_history)} entries")
-                return df
-            else:
-                # One last attempt - try to extract UTR history from the raw HTML
-                html_content = self.page.content()
-                
-                # Look for patterns like "date":"2023-05-15","rating":15.23
-                date_rating_matches = re.findall(r'"date":"(\d{4}-\d{2}-\d{2})","rating":([\d.]+)', html_content)
-                
-                if date_rating_matches:
-                    logger.info(f"Extracted {len(date_rating_matches)} ratings from HTML")
+                # Try multiple different selectors for rating history items
+                history_selectors = [
+                    '.newStatsTabContent__historyItem__INNPC',  # Original selector
+                    'div[class*="historyItem"]',     # More generic selector targeting class containing "historyItem"
+                    'div.history-item',              # Another possible class name
+                    '.rating-history-item',          # Another possible class name
+                    '[class*="rating-history"] div', # Any div inside rating history container
+                    'div[class*="history"]'          # Any div with "history" in class name
+                ]
                     
-                    rating_history = [
-                        {"date": date, "utr": float(rating)}
-                        for date, rating in date_rating_matches
-                    ]
+                history_items = []
+                for selector in history_selectors:
+                    items = self.page.query_selector_all(selector)
+                    if items and len(items) > 0:
+                        logger.info(f"Found {len(items)} rating history items using selector: {selector}")
+                        history_items = items
+                        break
                     
+                # Try a more brute force approach if the selectors don't work
+                if not history_items:
+                    logger.info("Trying alternative approach to extract rating history")
+                    # Get all date-like text on the page
+                    date_elements = self.page.query_selector_all('div:text-matches("\\d{4}-\\d{2}-\\d{2}")')
+                    if date_elements:
+                        logger.info(f"Found {len(date_elements)} date elements on the page")
+                        
+                        # Extract dates and try to find nearby rating values
+                        rating_history = []
+                        for date_elem in date_elements:
+                            try:
+                                date_str = date_elem.inner_text().strip()
+                                # Look for a nearby number that could be a UTR rating
+                                parent = date_elem.evaluate_handle('node => node.parentElement')
+                                parent_text = parent.inner_text()
+                                
+                                # Use regex to find a number like "15.23" in the parent element's text
+                                utr_match = re.search(r'([\d.]{2,5})', parent_text)
+                                if utr_match and date_str:
+                                    rating_value = float(utr_match.group(1))
+                                    rating_history.append({
+                                        "date": date_str,
+                                        "utr": rating_value
+                                    })
+                            except Exception as e:
+                                logger.error(f"Error extracting alternative rating data: {e}")
+                        
+                        if rating_history:
+                            df = pd.DataFrame(rating_history)
+                            csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+                            df.to_csv(csv_file, index=False)
+                            logger.info(f"Saved rating history (alternative method) for player {player_id}: {len(rating_history)} entries")
+                            return df
+                        
+                # Process standard history items if found
+                rating_history = []
+                
+                for item in history_items:
+                    try:
+                        # Try different selectors for date and rating within each history item
+                        date_selectors = [
+                            '.newStatsTabContent__historyItemDate__JFjy',
+                            'div[class*="Date"]',
+                            'div[class*="date"]',
+                            'span[class*="date"]'
+                        ]
+                        
+                        rating_selectors = [
+                            '.newStatsTabContent__historyItemRating__GQUXX',
+                            'div[class*="Rating"]',
+                            'div[class*="rating"]',
+                            'span[class*="rating"]'
+                        ]
+                        
+                        # Try to find date using selectors
+                        date_str = None
+                        for date_selector in date_selectors:
+                            date_element = item.query_selector(date_selector)
+                            if date_element:
+                                date_str = date_element.inner_text().strip()
+                                break
+                        
+                        # If date not found, try to extract it directly from the item text
+                        if not date_str:
+                            item_text = item.inner_text()
+                            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', item_text)
+                            if date_match:
+                                date_str = date_match.group(1)
+                        
+                        # Try to find rating using selectors
+                        rating_str = None
+                        for rating_selector in rating_selectors:
+                            rating_element = item.query_selector(rating_selector)
+                            if rating_element:
+                                rating_str = rating_element.inner_text().strip()
+                                break
+                        
+                        # If rating not found, try to extract it directly from the item text
+                        if not rating_str and date_str:
+                            item_text = item.inner_text()
+                            # Look for a number after the date
+                            rating_match = re.search(r'([\d.]{2,5})', item_text.replace(date_str, '', 1))
+                            if rating_match:
+                                rating_str = rating_match.group(1)
+                        
+                        if date_str and rating_str:
+                            # Parse date and rating
+                            try:
+                                parsed_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
+                                # Extract just the UTR rating number using regex
+                                rating_match = re.search(r'([\d.]+)', rating_str)
+                                if rating_match:
+                                    rating_value = float(rating_match.group(1))
+                                    rating_history.append({
+                                        "date": parsed_date,
+                                        "utr": rating_value
+                                    })
+                            except Exception as e:
+                                logger.error(f"Error parsing date or rating: {e}")
+                                
+                    except Exception as e:
+                        logger.error(f"Error extracting rating history item: {e}")
+                        continue
+                
+                # Create DataFrame and save
+                if rating_history:
                     df = pd.DataFrame(rating_history)
+                    
+                    # Save as CSV
                     csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
                     df.to_csv(csv_file, index=False)
                     
-                    logger.info(f"Saved rating history (HTML extraction) for player {player_id}: {len(rating_history)} entries")
+                    logger.info(f"Saved rating history for player {player_id}: {len(rating_history)} entries")
                     return df
+                else:
+                    # One last attempt - try to extract UTR history from the raw HTML
+                    html_content = self.page.content()
+                    
+                    # Look for patterns like "date":"2023-05-15","rating":15.23
+                    date_rating_matches = re.findall(r'"date":"(\d{4}-\d{2}-\d{2})","rating":([\d.]+)', html_content)
+                    
+                    if date_rating_matches:
+                        logger.info(f"Extracted {len(date_rating_matches)} ratings from HTML")
+                        
+                        rating_history = [
+                            {"date": date, "utr": float(rating)}
+                            for date, rating in date_rating_matches
+                        ]
+                        
+                        df = pd.DataFrame(rating_history)
+                        csv_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+                        df.to_csv(csv_file, index=False)
+                        
+                        logger.info(f"Saved rating history (HTML extraction) for player {player_id}: {len(rating_history)} entries")
+                        return df
+                    
+                    # If this isn't the last retry, try again
+                    if retry < max_retries - 1:
+                        logger.warning(f"No rating history found for player {player_id} on attempt {retry+1}, retrying...")
+                        time.sleep(random.uniform(3.0, 6.0))
+                        continue
+                    else:
+                        # Create empty file to avoid retrying this player
+                        logger.warning(f"No rating history found for player {player_id} after {max_retries} attempts")
+                        empty_df = pd.DataFrame(columns=['date', 'utr'])
+                        empty_df.to_csv(rating_file, index=False)
+                        return empty_df
+                        
+            except Exception as e:
+                logger.error(f"Error getting rating history for player {player_id} (attempt {retry+1}): {e}")
+                try:
+                    # Added proper error handling around the screenshot operation
+                    self.page.screenshot(path=f"rating_history_error_{player_id}_{retry+1}.png")
+                except Exception as screenshot_error:
+                    logger.error(f"Additionally failed to take error screenshot: {screenshot_error}")
                 
-                # Create empty file to avoid retrying this player
-                logger.warning(f"No rating history found for player {player_id}")
-                empty_df = pd.DataFrame(columns=['date', 'utr'])
-                empty_df.to_csv(rating_file, index=False)
-                return empty_df
-                
-        except Exception as e:
-            logger.error(f"Error getting rating history for player {player_id}: {e}")
-            try:
-                # Added proper error handling around the screenshot operation
-                self.page.screenshot(path=f"rating_history_error_{player_id}.png")
-            except Exception as screenshot_error:
-                logger.error(f"Additionally failed to take error screenshot: {screenshot_error}")
-            
-            # Create an empty file to prevent retrying this player
-            empty_df = pd.DataFrame(columns=['date', 'utr'])
-            empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
-            
-            return pd.DataFrame()
+                # If not the last retry, try again after resetting browser
+                if retry < max_retries - 1:
+                    logger.info(f"Retrying after error ({retry+1}/{max_retries})...")
+                    time.sleep(random.uniform(3.0, 6.0))
+                    
+                    # Restart browser on major errors
+                    try:
+                        self.close_browser()
+                        time.sleep(2)
+                        self.start_browser()
+                        self.login()
+                    except Exception as browser_error:
+                        logger.error(f"Error restarting browser: {browser_error}")
+                        
+                    continue
+                else:
+                    # Create an empty file to prevent retrying this player
+                    empty_df = pd.DataFrame(columns=['date', 'utr'])
+                    empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
+                    
+                    return pd.DataFrame()
         
     def select_year_from_dropdown(self, year):
         """
@@ -748,7 +812,7 @@ class UTRScraper:
         year (str): Year to select (e.g. "2025")
         
         Returns:
-        bool: Whether the year was successfully selected
+        str or bool: "year_not_found" if year not present, True if successful, False if failed for other reasons
         """
         try:
             logger.info(f"Attempting to select year {year} from dropdown")
@@ -834,14 +898,24 @@ class UTRScraper:
                     const yearItems = document.querySelectorAll(`div[id*="{year}"]`);
                     if (yearItems.length > 0) return yearItems[0];
                     
+                    // If nothing found, return null explicitly
                     return null;
                 }}
                 """
-                year_item = self.page.evaluate_handle(year_js)
+                try:
+                    year_item = self.page.evaluate_handle(year_js)
+                    # Check if the JavaScript returned a non-null value that's actually an element
+                    if not year_item.as_element():
+                        logger.info(f"Year {year} not found in dropdown - player likely has no matches for this year")
+                        return "year_not_found"
+                except Exception as e:
+                    logger.warning(f"JavaScript evaluation error: {e}")
+                    # If JavaScript evaluation fails, assume year not found
+                    return "year_not_found"
             
             if not year_item:
-                logger.warning(f"Could not find year {year} element")
-                return False
+                logger.info(f"Year {year} not found in dropdown - player likely has no matches for this year")
+                return "year_not_found"
                 
             # Click the year
             year_item.click()
@@ -1160,7 +1234,14 @@ class UTRScraper:
                 logger.info(f"Selecting year: {year}")
                 try:
                     year_selected = self.select_year_from_dropdown(year)
-                    if not year_selected:
+                    if year_selected == "year_not_found":
+                        # Create empty dataframe for this year and return it
+                        empty_df = pd.DataFrame()
+                        year_file = self.matches_dir / f"player_{player_id}_matches_{year}.csv"
+                        empty_df.to_csv(year_file, index=False)
+                        logger.info(f"No matches found for year {year} - year not in dropdown")
+                        return empty_df
+                    elif not year_selected:
                         # Check if any year dropdown is available at all
                         year_dropdown = self.page.query_selector('div:has-text("LATEST")')
                         if not year_dropdown:
@@ -1243,30 +1324,92 @@ class UTRScraper:
             except Exception as e:
                 logger.warning(f"Error getting player name from page: {e}")
             
-            # Try to get the global tournament name if possible
-            global_tournament_name = None
+            # Find all tournament sections on the page
+            tournament_sections = []
+
             try:
-                # Look for tournament headers
-                tournament_selectors = [
-                    'h1.tournament-name', 
-                    'h2.tournament-name',
-                    'div.tournament-header h1',
-                    'div[class*="eventHeader"]',
-                    'div[class*="tournament"]',
-                    'div[class*="eventName"]',
-                    '.eventItem__eventHeader__2nDGc'
+                # Look for tournament sections (the containers that contain the tournament name)
+                tournament_section_selectors = [
+                    'div[class*="eventItem__eventItem"]',
+                    'div.eventItem__eventItem__2xpsd',
+                    'div[class*="eventItem"]'
                 ]
                 
-                for selector in tournament_selectors:
-                    tournament_elem = self.page.query_selector(selector)
-                    if tournament_elem:
-                        global_tournament_name = tournament_elem.inner_text().strip()
-                        if global_tournament_name and (not player_name or player_name not in global_tournament_name):
-                            global_tournament_name = global_tournament_name.split('\n')[0].strip()
-                            logger.info(f"Found global tournament name: {global_tournament_name}")
-                            break
+                for selector in tournament_section_selectors:
+                    sections = self.page.query_selector_all(selector)
+                    if sections and len(sections) > 0:
+                        logger.info(f"Found {len(sections)} tournament sections using selector: {selector}")
+                        
+                        # Process each tournament section
+                        for idx, section in enumerate(sections):
+                            try:
+                                # Get tournament name from the section
+                                name_selectors = [
+                                    'span[class*="eventName"]',
+                                    'span.eventItem__eventName__6hntZ',
+                                    'div[class*="eventName"]'
+                                ]
+                                
+                                tournament_name = None
+                                for name_selector in name_selectors:
+                                    name_elem = section.query_selector(name_selector)
+                                    if name_elem:
+                                        tournament_name = name_elem.inner_text().strip()
+                                        logger.info(f"Found tournament name: {tournament_name}")
+                                        break
+                                
+                                if not tournament_name:
+                                    logger.warning(f"Could not find tournament name in section {idx+1}")
+                                    continue
+                                
+                                # Get the position of this section in the DOM
+                                y_position = self.page.evaluate("""
+                                    (element) => {
+                                        const rect = element.getBoundingClientRect();
+                                        return rect.top;
+                                    }
+                                """, section)
+                                
+                                tournament_sections.append({
+                                    "name": tournament_name,
+                                    "position": y_position,
+                                    "index": idx
+                                })
+                                
+                                logger.info(f"Tournament section {idx+1}: {tournament_name} at position {y_position}")
+                            except Exception as e:
+                                logger.warning(f"Error processing tournament section {idx+1}: {e}")
+                        
+                        # We found sections with this selector, no need to try others
+                        break
+                
+                # Sort sections by position
+                if tournament_sections:
+                    tournament_sections.sort(key=lambda x: x["position"])
+                    logger.info(f"Total tournament sections found: {len(tournament_sections)}")
             except Exception as e:
-                logger.warning(f"Error getting global tournament name: {e}")
+                logger.error(f"Error finding tournament sections: {e}")
+
+            # Add a tournament lookup function using DOM position
+            def get_tournament_for_position(y_position):
+                """Find which tournament a match at position y_position belongs to"""
+                matching_tournament = "Unknown Tournament"
+                
+                if not tournament_sections:
+                    return matching_tournament
+                
+                # Find the last tournament section that's above this position
+                best_match = None
+                for section in tournament_sections:
+                    section_pos = section["position"]
+                    if section_pos <= y_position:
+                        if best_match is None or section_pos > best_match["position"]:
+                            best_match = section
+                
+                if best_match:
+                    return best_match["name"]
+                
+                return matching_tournament
             
             matches = []
             
@@ -1461,57 +1604,40 @@ class UTRScraper:
                         except Exception as e:
                             logger.warning(f"Error extracting date from element: {e}")
                     
-                    # Extract tournament name with better targeting
-                    tournament_name = ""
+                    # NEW CODE: Determine which tournament this match belongs to
+                    # Get the position of this card on the page
                     try:
-                        # First try card-specific tournament info
-                        tournament_elem = card.query_selector('[class*="tournament"], div.tournament, [class*="eventName"]')
-                        if tournament_elem:
-                            tournament_name = tournament_elem.inner_text().strip()
-                        
-                        # Use global tournament name if we found one earlier and card-specific is empty or matches player name
-                        if (not tournament_name or (player_name and tournament_name == player_name)) and global_tournament_name:
-                            tournament_name = global_tournament_name
-                        
-                        # If still no tournament name, try other approaches
-                        if not tournament_name or (player_name and tournament_name == player_name):
-                            # Try a more general search in the card
-                            tournament_js = """
-                            (card) => {
-                                // Look for elements with tournament-like text
-                                const elements = Array.from(card.querySelectorAll('div'));
-                                for (const el of elements) {
-                                    const text = el.innerText;
-                                    // Common tournament words
-                                    if (text && text.length < 50 && 
-                                        (text.includes('Open') || 
-                                        text.includes('Championship') || 
-                                        text.includes('Masters') ||
-                                        text.includes('Cup'))) {
-                                        return text.trim();
-                                    }
-                                }
-                                return null;
+                        card_position = self.page.evaluate("""
+                            (element) => {
+                                const rect = element.getBoundingClientRect();
+                                return rect.top;
                             }
-                            """
-                            try:
-                                card_tournament = self.page.evaluate(tournament_js, card)
-                                if card_tournament:
-                                    tournament_name = card_tournament
-                            except Exception as js_error:
-                                logger.warning(f"Error getting tournament via JS: {js_error}")
-                            
-                        # If still no valid tournament name, use the match date as a fallback
-                        if not tournament_name or (player_name and tournament_name == player_name):
-                            if match_date:
-                                tournament_name = f"Tournament on {match_date}"
-                            else:
-                                tournament_name = "Unknown Tournament"
-                            logger.warning(f"Could not determine tournament name, using fallback: {tournament_name}")
-                    
+                        """, card)
+                        
+                        # Use the lookup function to get the tournament name
+                        tournament_name = get_tournament_for_position(card_position)
+                        logger.info(f"Match card {match_idx+1} at position {card_position} belongs to tournament: {tournament_name}")
                     except Exception as e:
-                        logger.warning(f"Error extracting tournament name: {e}")
-                        tournament_name = "Unknown Tournament"
+                        logger.warning(f"Error determining tournament for match {match_idx+1}: {e}")
+                        
+                        # Fallback to standard tournament extraction
+                        tournament_name = None
+                        try:
+                            # Try card-specific tournament info
+                            tournament_elem = card.query_selector('[class*="tournament"], div.tournament, [class*="eventName"]')
+                            if tournament_elem:
+                                tournament_name = tournament_elem.inner_text().strip()
+                            
+                            # If still no valid tournament name, use the match date as a fallback
+                            if not tournament_name or (player_name and tournament_name == player_name):
+                                if match_date:
+                                    tournament_name = f"Tournament on {match_date}"
+                                else:
+                                    tournament_name = "Unknown Tournament"
+                                logger.warning(f"Could not determine tournament name, using fallback: {tournament_name}")
+                        except Exception as e:
+                            logger.warning(f"Error extracting tournament name: {e}")
+                            tournament_name = "Unknown Tournament"
                     
                     # Determine tournament type based on name
                     tournament_type = "Regular"
@@ -1830,21 +1956,77 @@ class UTRScraper:
                         logger.error(f"Error extracting scores: {e}")
                         cleaned_score = ""                    
 
-                    # Determine winner based on HTML classes first (most reliable method)
+                    # Final improved winner determination logic
                     is_winner = False
+
                     try:
-                        # Look for winner class indicators in the DOM
-                        player_winner_elements = player_team.query_selector_all('.score-item.winner, [class*="winner-display-container"], [class*="score-item winner"]')
-                        opponent_winner_elements = opponent_team.query_selector_all('.score-item.winner, [class*="winner-display-container"], [class*="score-item winner"]')
+                        # Try different selector variations to capture the winning-scores element
+                        winning_scores_selectors = [
+                            # Standard approach with class containing "winning-scores"
+                            '[class*="winner-display-container"] [class*="winning-scores"]',
+                            # Exact class name approach
+                            '.winning-scores',
+                            # Direct child approach
+                            'div.d-flex.flex-column.jcc.winner-display-container > div.winning-scores',
+                            # More general approach
+                            'div[class*="winner-display"] div[class*="winning"]'
+                        ]
                         
-                        if player_winner_elements and len(player_winner_elements) > 0:
+                        player_has_winning = False
+                        opponent_has_winning = False
+                        
+                        # Try each selector until we find a match
+                        for selector in winning_scores_selectors:
+                            player_winning = player_team.query_selector(selector)
+                            opponent_winning = opponent_team.query_selector(selector)
+                            
+                            if player_winning:
+                                player_has_winning = True
+                                logger.info(f"Match {match_idx+1}: Found player winning-scores with selector: {selector}")
+                                break
+                            elif opponent_winning:
+                                opponent_has_winning = True
+                                logger.info(f"Match {match_idx+1}: Found opponent winning-scores with selector: {selector}")
+                                break
+                        
+                        # If none of the selectors worked, try JavaScript as a final approach
+                        if not player_has_winning and not opponent_has_winning:
+                            js_check = """
+                            (element) => {
+                                // Check all possible variations of winning-scores
+                                const winnerContainer = element.querySelector('[class*="winner-display-container"]');
+                                if (!winnerContainer) return false;
+                                
+                                // Look for any child with winning-scores in the class
+                                const winningScores = winnerContainer.querySelector('[class*="winning-scores"]');
+                                if (winningScores) return true;
+                                
+                                // Check for any child with "winning" in the class name
+                                const winningElement = winnerContainer.querySelector('[class*="winning"]');
+                                return winningElement !== null;
+                            }
+                            """
+                            
+                            try:
+                                player_has_winning = self.page.evaluate(js_check, player_team)
+                                opponent_has_winning = self.page.evaluate(js_check, opponent_team)
+                                
+                                if player_has_winning or opponent_has_winning:
+                                    logger.info(f"Match {match_idx+1}: Found winning indicator using JavaScript approach")
+                            except Exception as js_error:
+                                logger.error(f"JavaScript evaluation error: {js_error}")
+                        
+                        # Determine winner based on our findings
+                        if player_has_winning:
                             is_winner = True
-                            logger.info(f"Match {match_idx+1}: Player won (based on winner HTML class)")
-                        elif opponent_winner_elements and len(opponent_winner_elements) > 0:
+                            logger.info(f"Match {match_idx+1}: Player won (found winning-scores element)")
+                        elif opponent_has_winning:
                             is_winner = False
-                            logger.info(f"Match {match_idx+1}: Opponent won (based on winner HTML class)")
+                            logger.info(f"Match {match_idx+1}: Opponent won (found winning-scores element)")
                         else:
-                            # Fallback: Calculate based on set scores
+                            # Fallback to set score analysis if no winning-scores found
+                            logger.warning(f"Match {match_idx+1}: No winning-scores element found, falling back to set score analysis")
+                            
                             player_sets_won = 0
                             opponent_sets_won = 0
                             
@@ -1861,11 +2043,14 @@ class UTRScraper:
                                     elif o_val > p_val:
                                         opponent_sets_won += 1
                             
-                            is_winner = player_sets_won > opponent_sets_won
-                            logger.info(f"Match {match_idx+1}: Determined winner by set count - player won {player_sets_won} sets, opponent won {opponent_sets_won} sets")
-                            
-                            # Skip if we can't determine a winner clearly
-                            if player_sets_won == 0 and opponent_sets_won == 0:
+                            if player_sets_won > opponent_sets_won:
+                                is_winner = True
+                                logger.info(f"Match {match_idx+1}: Player won (based on set count - {player_sets_won} to {opponent_sets_won})")
+                            elif opponent_sets_won > player_sets_won:
+                                is_winner = False
+                                logger.info(f"Match {match_idx+1}: Opponent won (based on set count - {opponent_sets_won} to {player_sets_won})")
+                            else:
+                                # If we still can't determine a winner, skip this match
                                 logger.warning(f"Match {match_idx+1}: Could not determine winner - skipping this match")
                                 continue
                     except Exception as e:
@@ -1925,10 +2110,11 @@ class UTRScraper:
                     df = df.sort_values('date', na_position='last')  # Sort by date, putting NaN dates last
                 
                 # If a specific year was requested, filter for that year
+                year_specific_df = None
                 if year and not df.empty and 'date' in df.columns:
                     year_int = int(year)
-                    df = df[df['date'].dt.year == year_int]
-                    logger.info(f"Filtered matches to year {year}: {len(df)} matches")
+                    year_specific_df = df[df['date'].dt.year == year_int].copy()
+                    logger.info(f"Filtered matches to year {year}: {len(year_specific_df)} matches")
                 
                 # Clean up scores - format them properly
                 if 'score' in df.columns:
@@ -1949,21 +2135,54 @@ class UTRScraper:
                     df['score'] = df['score'].apply(prevent_excel_date_conversion)
                     logger.info("Added Excel text format prefix to all scores to prevent date conversion")
 
-                # Save as CSV
-                csv_file = self.matches_dir / f"player_{player_id}_matches.csv"
-                df.to_csv(csv_file, index=False)
-
-                logger.info(f"Saved match history for player {player_id}: {len(df)} matches")
+                # Save the year-specific file if a year was requested
+                if year and year_specific_df is not None:
+                    year_file = self.matches_dir / f"player_{player_id}_matches_{year}.csv"
+                    year_specific_df.to_csv(year_file, index=False)
+                    logger.info(f"Saved {len(year_specific_df)} matches for player {player_id} in year {year}")
                 
-                logger.info(f"Saved match history for player {player_id}: {len(df)} matches")
-                return df
+                # Now append to the main player file (without overwriting existing data)
+                main_file = self.matches_dir / f"player_{player_id}_matches.csv"
+                
+                # Check if main file exists and read it if it does
+                if main_file.exists():
+                    try:
+                        # Read existing data
+                        existing_df = pd.read_csv(main_file)
+                        if not existing_df.empty:
+                            # Log existing data for debugging
+                            logger.info(f"Found existing file for player {player_id} with {len(existing_df)} matches")
+                            
+                            # Check for year distribution in existing data
+                            if 'date' in existing_df.columns:
+                                existing_df['date'] = pd.to_datetime(existing_df['date'], errors='coerce')
+                                year_counts = existing_df.groupby(existing_df['date'].dt.year).size().to_dict()
+                                logger.info(f"Year distribution in existing file: {year_counts}")
+                            
+                            # Combine with new data
+                            combined_df = pd.concat([existing_df, df], ignore_index=True)
+                            
+                            # Remove duplicates based on match_id
+                            if 'match_id' in combined_df.columns:
+                                before_dedup = len(combined_df)
+                                combined_df = combined_df.drop_duplicates(subset=['match_id'], keep='first')
+                                logger.info(f"Removed {before_dedup - len(combined_df)} duplicate matches")
+                            
+                            df = combined_df
+                            logger.info(f"Combined new and existing data for a total of {len(df)} matches")
+                    except Exception as e:
+                        logger.warning(f"Error reading existing match file: {e}")
+                
+                # Save combined data to main file
+                df.to_csv(main_file, index=False)
+                logger.info(f"Saved {len(df)} total matches to main file for player {player_id}")
+                
+            # Return the correct dataset based on what was requested
+            if year and year_specific_df is not None:
+                logger.info(f"Returning {len(year_specific_df)} matches for year {year}")
+                return year_specific_df
             else:
-                # Create empty file to avoid retrying
-                logger.warning(f"No match history found for player {player_id}")
-                empty_df = pd.DataFrame()
-                matches_file = self.matches_dir / f"player_{player_id}_matches.csv"
-                empty_df.to_csv(matches_file, index=False)
-                return pd.DataFrame()
+                return df
         except Exception as e:
             logger.error(f"Error getting match history for player {player_id}: {e}")
             try:
@@ -2200,7 +2419,7 @@ class UTRScraper:
             self.page.screenshot(path=f"search_error_{name.replace(' ', '_')}.png")
             return None
     
-    def collect_top_players_data(self, gender="men", limit=100, player_limit=None, include_matches=True, include_ratings=True, years=None, utr_threshold=14.0):
+    def collect_top_players_data(self, gender="men", limit=100, player_limit=None, include_matches=True, include_ratings=True, years=None, utr_threshold=1.0, dynamic_years=False):
         """
         Collect comprehensive data for top players and their opponents
         
@@ -2212,10 +2431,12 @@ class UTRScraper:
         include_ratings (bool): Whether to collect rating history
         years (list): Optional list of years to collect match data for (e.g., ["2023", "2022"])
         utr_threshold (float): UTR threshold for collecting match history of opponents
+        dynamic_years (bool): Whether to automatically detect all available years for each player
         
         Returns:
         DataFrame: Top players with IDs and UTR ratings
         """
+
         # Set default years if none provided
         if years is None:
             years = ["2025", "2024", "2023", "2022"]
@@ -2251,6 +2472,14 @@ class UTRScraper:
             try:
                 # Get profile data
                 profile = self.get_player_profile(player_id)
+
+                # If dynamic_years is enabled, try to get all available years for this player
+                player_years = years
+                if dynamic_years:
+                    player_years = self.get_available_years(player_id)
+                    if not player_years:  # Fallback if no years found
+                        player_years = years
+                    logger.info(f"Using years for {name}: {', '.join(player_years)}")
                 
                 # Add random delay between players to avoid rate limiting
                 time.sleep(random.uniform(1.0, 3.0))
@@ -2269,7 +2498,7 @@ class UTRScraper:
                 # Get match history if requested
                 if include_matches:
                     # Process each year
-                    for year in years:
+                    for year in player_years:
                         try:
                             logger.info(f"Getting matches for {name} - Year {year}")
                             matches = self.get_player_match_history(player_id, year=year, limit=100)
@@ -2361,7 +2590,15 @@ class UTRScraper:
                 if opponent_id in high_utr_opponents:
                     logger.info(f"Getting match history for high-UTR opponent: {opponent_name} ({opponent_id})")
                     
-                    for year in years:
+                    # If dynamic_years, try to get all available years for this opponent
+                    opponent_years = years
+                    if dynamic_years:
+                        opponent_years = self.get_available_years(opponent_id)
+                        if not opponent_years:  # Fallback if no years found
+                            opponent_years = years
+                        logger.info(f"Using years for opponent {opponent_name}: {', '.join(opponent_years)}")
+                    
+                    for year in opponent_years:
                         try:
                             logger.info(f"Getting matches for {opponent_name} - Year {year}")
                             opponent_matches = self.get_player_match_history(opponent_id, year=year, limit=50)
@@ -2387,12 +2624,10 @@ class UTRScraper:
                 
                 # Restart browser every 20 opponents to prevent memory issues
                 if opponent_count % 20 == 0:
-                    logger.info(f"Processed {opponent_count} opponents, restarting browser to prevent memory issues")
-                    self.close_browser()
-                    time.sleep(2)
-                    self.start_browser()
-                    self.login()
-                    time.sleep(2)
+                    logger.info(f"Processed {opponent_count} opponents, browser restart needed")
+                    # Don't try to restart here - just break the loop and let the outer context handle it
+                    logger.info(f"Completed processing {opponent_count} opponents - browser will be restarted by parent process")
+                    return top_players
                     
             except Exception as e:
                 logger.error(f"Error processing opponent {opponent_id}: {e}")
@@ -2552,6 +2787,94 @@ class UTRScraper:
         cleaned = re.sub(r'[^0-9\-\(\) ]', ' ', score_text)
         return re.sub(r'\s+', ' ', cleaned).strip()
     
+    def get_available_years(scraper, player_id):
+        """
+        Determine all available years of match data for a player
+        
+        Parameters:
+        scraper: UTRScraper instance
+        player_id: Player's UTR ID
+        
+        Returns:
+        list: All available years in descending order (newest first)
+        """
+        try:
+            print(f"Checking available years for player {player_id}...")
+            
+            # Go to the player's results page
+            profile_url = f"https://app.utrsports.net/profiles/{player_id}?t=2"
+            
+            try:
+                scraper.page.goto(profile_url, timeout=20000)
+            except Exception as e:
+                print(f"Error navigating to player page: {e}")
+                return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback to default years
+            
+            # Wait for the page to load
+            try:
+                scraper.page.wait_for_selector('h1', state="visible", timeout=15000)
+                time.sleep(3)  # Extra wait for content to load
+            except Exception as e:
+                print(f"Error waiting for page content: {e}")
+                return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback to default years
+            
+            # Click on the LATEST dropdown to see available years
+            try:
+                # Look for the LATEST button using the same selectors as in select_year_from_dropdown
+                latest_selectors = [
+                    'h6.text-uppercase.title:has-text("LATEST")',
+                    '.popovermenu-anchor:has-text("LATEST")',
+                    'span:has-text("LATEST")',
+                    'div.popovermenu-anchor span.text-uppercase.title'
+                ]
+                
+                latest_button = None
+                for selector in latest_selectors:
+                    latest_button = scraper.page.query_selector(selector)
+                    if latest_button:
+                        break
+                        
+                if latest_button:
+                    latest_button.click()
+                    time.sleep(2)  # Wait for dropdown to appear
+                    
+                    # Use JavaScript to extract all year options
+                    years_js = """
+                    () => {
+                        const years = [];
+                        const menuItems = document.querySelectorAll('.menu-item, [class*="menu-item"]');
+                        for (const item of menuItems) {
+                            const text = item.textContent.trim();
+                            // Match 4-digit years only
+                            if (/^20\d{2}$/.test(text)) {
+                                years.push(text);
+                            }
+                        }
+                        return years;
+                    }
+                    """
+                    
+                    available_years = scraper.page.evaluate(years_js)
+                    
+                    if available_years and len(available_years) > 0:
+                        print(f"Found {len(available_years)} available years: {', '.join(available_years)}")
+                        return available_years
+                
+                # Click somewhere else to close the dropdown
+                scraper.page.click('h1')
+                
+            except Exception as e:
+                print(f"Error getting available years: {e}")
+            
+            # Default years if we couldn't get available years
+            return ["2025", "2024", "2023", "2022", "2021", "2020"]
+            
+        except Exception as e:
+            print(f"Unexpected error in get_available_years: {e}")
+            traceback.print_exc()
+            return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback years
+
+
     def cross_reference_matches_with_ratings(self, max_days_diff=30):
         """
         Cross-reference match data with rating history to get UTR at match time
@@ -2574,8 +2897,9 @@ class UTRScraper:
         # Extract all unique player IDs (including both players and opponents)
         all_player_ids = set()
         opponent_ids = set()
+        matches_by_player = {}  # To track which matches contain each player
         
-        # First, collect all unique player and opponent IDs
+        # First, collect all unique player IDs and track match importance
         for match_file in match_files:
             try:
                 player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
@@ -2586,10 +2910,27 @@ class UTRScraper:
                     # Read matches to get opponent IDs
                     if os.path.getsize(match_file) > 0:  # Make sure file isn't empty
                         matches_df = pd.read_csv(match_file)
+                        
+                        # Track this player's matches
+                        if player_id not in matches_by_player:
+                            matches_by_player[player_id] = []
+                        
+                        # Add all matches for this player
+                        if not matches_df.empty and 'match_id' in matches_df.columns:
+                            matches_by_player[player_id].extend(matches_df['match_id'].dropna().tolist())
+                        
                         if not matches_df.empty and 'opponent_id' in matches_df.columns:
                             file_opponent_ids = matches_df['opponent_id'].dropna().astype(str).unique()
                             opponent_ids.update(file_opponent_ids)
                             all_player_ids.update(file_opponent_ids)
+                            
+                            # Track matches by opponent as well
+                            for opp_id in file_opponent_ids:
+                                opp_matches = matches_df[matches_df['opponent_id'] == opp_id]
+                                if not opp_matches.empty and 'match_id' in opp_matches.columns:
+                                    if opp_id not in matches_by_player:
+                                        matches_by_player[opp_id] = []
+                                    matches_by_player[opp_id].extend(opp_matches['match_id'].dropna().tolist())
             except Exception as e:
                 logger.error(f"Error processing match file {match_file}: {e}")
         
@@ -2607,22 +2948,53 @@ class UTRScraper:
                 missing_ratings.append(player_id)
         
         if missing_ratings:
-            logger.info(f"Found {len(missing_ratings)} players with missing rating histories, fetching them now")
+            logger.info(f"Found {len(missing_ratings)} players with missing rating histories")
+            
+            # Sort missing ratings by match importance (higher matches count = more important)
+            def get_match_count(player_id):
+                return len(matches_by_player.get(player_id, []))
+            
+            # Sort by match count (descending) so more important players are processed first
+            missing_ratings.sort(key=get_match_count, reverse=True)
+            
             for idx, player_id in enumerate(missing_ratings):
-                logger.info(f"Getting missing rating history for player {idx+1}/{len(missing_ratings)}: {player_id}")
+                # Determine importance for retry strategy
+                match_count = get_match_count(player_id)
+                is_important = match_count > 2
+                max_retries = 5 if is_important else 3
+                
+                logger.info(f"Getting missing rating history for {'important ' if is_important else ''}player {idx+1}/{len(missing_ratings)}: {player_id} (matches: {match_count})")
                 
                 try:
                     # Get player profile first
                     self.get_player_profile(player_id)
-                    # Then get rating history
-                    self.get_player_rating_history(player_id)
+                    # Then get rating history with appropriate retries
+                    ratings = self.get_player_rating_history(player_id, max_retries=max_retries)
+                    
+                    if not ratings.empty:
+                        logger.info(f"Successfully retrieved {len(ratings)} ratings for player {player_id}")
+                    else:
+                        logger.warning(f"Failed to get ratings for player {player_id} after multiple attempts")
+                    
                     # Add a random delay to avoid rate limiting
-                    time.sleep(random.uniform(1.0, 2.0))
+                    time.sleep(random.uniform(2.0, 4.0))
                 except Exception as e:
                     logger.error(f"Failed to get rating history for {player_id}: {e}")
                     # Create empty file to avoid retrying this player
                     empty_df = pd.DataFrame(columns=['date', 'utr'])
                     empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
+                    
+                    # Restart browser every 10 players to avoid memory issues
+                    if idx % 10 == 9:
+                        try:
+                            logger.info(f"Restarting browser after processing {idx+1} players...")
+                            self.close_browser()
+                            time.sleep(3)
+                            self.start_browser()
+                            self.login()
+                            time.sleep(3)
+                        except Exception as browser_error:
+                            logger.error(f"Error restarting browser: {browser_error}")
         
         # Create a cache to store player ratings
         player_ratings_cache = {}
@@ -2719,6 +3091,25 @@ class UTRScraper:
                     return past_ratings.loc[closest_rating_idx, 'utr'], days_diff
             
             return None, None
+        
+        # Function to create standardized match IDs
+        def get_standardized_match_id(row):
+            """
+            Create a standardized match ID by ordering player IDs
+            so the same match will have the same ID regardless of perspective
+            """
+            if pd.isna(row['date']) or pd.isna(row['player_id']) or pd.isna(row['opponent_id']):
+                return None
+                
+            date_str = str(row['date']).split()[0]  # Get just the date part
+            player_id = str(row['player_id'])
+            opponent_id = str(row['opponent_id'])
+            
+            # Sort the IDs so the smaller ID always comes first
+            player_ids = sorted([player_id, opponent_id])
+            
+            # Create standardized match ID
+            return f"{date_str}_{player_ids[0]}_{player_ids[1]}"
         
         # Process each match file to enhance with historical UTRs
         all_enhanced_matches = []
@@ -2818,7 +3209,7 @@ class UTRScraper:
                 matches_df.to_csv(match_file, index=False)
                 
                 logger.info(f"Processed {len(matches_df)} matches for player {player_id}")
-                
+                    
             except Exception as e:
                 logger.error(f"Error processing matches from {match_file}: {e}")
         
@@ -2827,49 +3218,44 @@ class UTRScraper:
             try:
                 combined_df = pd.concat(all_enhanced_matches, ignore_index=True)
                 
-                # Remove duplicate matches based on match_id
-                if 'match_id' in combined_df.columns:
-                    original_count = len(combined_df)
-                    combined_df.drop_duplicates(subset=['match_id'], keep='first', inplace=True)
-                    dupe_count = original_count - len(combined_df)
-                    if dupe_count > 0:
-                        logger.info(f"Removed {dupe_count} duplicate matches")
-                
-                # Filter to only include matches with both UTRs available
-                valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
-                
-                # Handle matches with unrated players
-                # Create a new column if it doesn't exist
-                if 'unrated_player' not in combined_df.columns:
-                    combined_df['unrated_player'] = False
-                    
-                # Find unrated matches - safely
-                unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy() if 'unrated_player' in combined_df.columns else pd.DataFrame()
+                # Add standardized match ID
+                combined_df['standardized_match_id'] = combined_df.apply(get_standardized_match_id, axis=1)
                 
                 # Save all enhanced matches
                 combined_file = self.data_dir / "all_enhanced_matches.csv"
                 combined_df.to_csv(combined_file, index=False)
                 
+                # For the valid_matches output, we want to eliminate duplicates entirely
+                # and only keep one version of each match
+                valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
+                
+                # Use the standardized match ID to drop duplicates, keeping the first occurrence
+                if 'standardized_match_id' in valid_matches_df.columns:
+                    original_count = len(valid_matches_df)
+                    valid_matches_df.drop_duplicates(subset=['standardized_match_id'], keep='first', inplace=True)
+                    dupe_count = original_count - len(valid_matches_df)
+                    if dupe_count > 0:
+                        logger.info(f"Removed {dupe_count} duplicate matches from final valid matches output")
+                
                 # Save only valid matches with complete UTR data
                 valid_file = self.data_dir / "valid_matches_for_model.csv"
                 valid_matches_df.to_csv(valid_file, index=False)
                 
-                # Save matches with unrated players
-                if not unrated_matches_df.empty:
-                    unrated_file = self.data_dir / "unrated_player_matches.csv"
-                    unrated_matches_df.to_csv(unrated_file, index=False)
-                    logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
+                # Save matches with unrated players - FIX: Check if column exists first
+                if 'unrated_player' in combined_df.columns:
+                    unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy()
+                    if not unrated_matches_df.empty:
+                        unrated_file = self.data_dir / "unrated_player_matches.csv"
+                        unrated_matches_df.to_csv(unrated_file, index=False)
+                        logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
                 
                 logger.info(f"Saved {len(combined_df)} enhanced matches to {combined_file}")
                 logger.info(f"Saved {len(valid_matches_df)} valid matches with complete UTR data to {valid_file}")
                 logger.info(f"Valid matches: {valid_match_count}, Skipped matches: {skipped_match_count}")
-
-                # Add this line to confirm successful cross-reference before returning
-                logger.info(f"Final cross-reference successful, returning {len(valid_matches_df)} valid matches")
+                
                 return valid_matches_df
             except Exception as e:
-                # More detailed error logging
-                logger.error(f"Error combining matches: {str(e)}")
+                logger.error(f"Error combining matches: {e}")
                 # Log the stack trace for better debugging
                 import traceback
                 logger.error(f"Stack trace: {traceback.format_exc()}")
