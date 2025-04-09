@@ -1,0 +1,9 @@
+requests
+pandas
+numpy
+python-dotenv
+playwright
+torch
+matplotlib
+scikit-learn
+seaborn
