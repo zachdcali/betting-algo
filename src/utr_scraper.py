@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
-# src/utr_scraper.py
-
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+# Replace the Playwright import at the top of utr_scraper.py
+from playwright.async_api import async_playwright, Playwright, TimeoutError as PlaywrightTimeoutError
+import asyncio
+# Keep other imports as they are
 import pandas as pd
 import time
 import json
@@ -27,26 +27,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class UTRScraper:
-    """
-    Scraper for UTR tennis data, match histories, and player profiles
-    Requires login credentials for UTR.
-    """
-    
     def __init__(self, email, password, headless=True, data_dir=None):
-        """
-        Initialize the UTR scraper
-        
-        Parameters:
-        email (str): UTR account email
-        password (str): UTR account password
-        headless (bool): Whether to run browser in headless mode
-        data_dir (str): Directory to store data (default: project_root/data)
-        """
         self.email = email
         self.password = password
         self.headless = headless
         
-        # Set up data directories
         if data_dir is None:
             base_dir = Path(__file__).parent.parent
             data_dir = base_dir / "data"
@@ -56,101 +41,151 @@ class UTRScraper:
         self.matches_dir = self.data_dir / "matches"
         self.ratings_dir = self.data_dir / "ratings"
         
-        # Create directories if they don't exist
         for directory in [self.data_dir, self.players_dir, self.matches_dir, self.ratings_dir]:
             directory.mkdir(parents=True, exist_ok=True)
             
+        self.playwright = None
         self.browser = None
+        self.context = None
         self.page = None
         self.logged_in = False
     
-    def __enter__(self):
-        """Context manager entry"""
-        self.start_browser()
+    async def __aenter__(self):
+        await self.start_browser()
         return self
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.close_browser()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close_browser()
     
-    def start_browser(self):
-        """Initialize the browser"""
-        playwright = sync_playwright().start()
-        self.browser = playwright.chromium.launch(headless=self.headless)
-        self.context = self.browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
-        )
-        self.page = self.context.new_page()
+    async def start_browser(self):
+        try:
+            if self.browser is not None or self.playwright is not None:
+                logger.info("Browser already initialized, closing existing instance first")
+                await self.close_browser()
+                
+            logger.info("Starting new browser instance")
+            self.playwright = await async_playwright().start()
+            if not self.playwright:
+                raise RuntimeError("Failed to initialize Playwright")
+                
+            self.browser = await self.playwright.chromium.launch(headless=self.headless)
+            if not self.browser:
+                raise RuntimeError("Failed to launch browser")
+                
+            self.context = await self.browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
+            if not self.context:
+                raise RuntimeError("Failed to create browser context")
+                
+            self.page = await self.context.new_page()
+            if not self.page:
+                raise RuntimeError("Failed to create new page")
+                
+            self.page.set_default_timeout(30000)  # Synchronous call, no await
+            logger.info("Browser initialized successfully")
+            return self
+        except Exception as e:
+            logger.error(f"Error initializing browser: {e}")
+            # Cleanup code...
+            raise
+    
+    async def close_browser(self):
+        """Close browser and clean up resources with proper error handling"""
+        logger.info("Closing browser and cleaning up resources")
         
-        # Add random delays to appear more human-like
-        self.page.set_default_timeout(30000)  # 30 seconds default timeout
-        return self
-    
-    def close_browser(self):
-        """Close the browser"""
-        if self.browser:
-            self.browser.close()
-            self.browser = None
+        # Clean up in reverse order of creation
+        if self.page:
+            try:
+                await self.page.close()
+                logger.info("Closed page")
+            except Exception as e:
+                logger.warning(f"Error closing page: {e}")
             self.page = None
-            self.logged_in = False
+            
+        if self.context:
+            try:
+                await self.context.close()
+                logger.info("Closed browser context")
+            except Exception as e:
+                logger.warning(f"Error closing browser context: {e}")
+            self.context = None
+            
+        if self.browser:
+            try:
+                await self.browser.close()
+                logger.info("Closed browser")
+            except Exception as e:
+                logger.warning(f"Error closing browser: {e}")
+            self.browser = None
+            
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+                logger.info("Stopped playwright")
+            except Exception as e:
+                logger.warning(f"Error stopping playwright: {e}")
+            self.playwright = None
+            
+        self.logged_in = False
+        logger.info("Browser resources cleaned up")
     
-    def login(self):
+    async def login(self):
         """Log in to UTR website"""
         if self.logged_in:
             return True
             
         try:
             logger.info("Logging in to UTR...")
-            self.page.goto("https://app.utrsports.net/login")
+            await self.page.goto("https://app.utrsports.net/login")
             
             # Wait a bit for the page to fully load
-            time.sleep(3)
+            await asyncio.sleep(3)
             
             # Take a screenshot of the login page to verify its structure
-            self.page.screenshot(path="login_page.png")
+            await self.page.screenshot(path="login_page.png")
             logger.info("Login page loaded, checking for login form...")
             
             # Check for and dismiss cookie consent if present
             try:
-                if self.page.query_selector('button[data-testid="onetrust-accept-btn-handler"]'):
+                cookie_button = await self.page.query_selector('button[data-testid="onetrust-accept-btn-handler"]')
+                if cookie_button:
                     logger.info("Accepting cookies...")
-                    self.page.click('button[data-testid="onetrust-accept-btn-handler"]')
-                    time.sleep(1)
+                    await cookie_button.click()
+                    await asyncio.sleep(1)
             except Exception as e:
                 logger.warning(f"No cookie banner found or error dismissing it: {e}")
             
             # Wait for the email input using ID selector
             logger.info("Waiting for email input field...")
-            self.page.wait_for_selector('#emailInput', state="visible", timeout=30000)
+            await self.page.wait_for_selector('#emailInput', state="visible", timeout=30000)
             
             # Fill in login credentials using IDs
             logger.info("Filling email field...")
-            self.page.fill('#emailInput', self.email)
+            await self.page.fill('#emailInput', self.email)
             
             logger.info("Filling password field...")
-            self.page.fill('#passwordInput', self.password)
+            await self.page.fill('#passwordInput', self.password)
             
             logger.info("Clicking sign in button...")
             # Use a more specific selector for the sign in button
-            # Try multiple alternative selectors
             try:
                 # Try using the text content
-                self.page.click('button:has-text("SIGN IN")')
+                await self.page.click('button:has-text("SIGN IN")')
             except Exception as e:
                 logger.warning(f"Could not click button by text, trying alternate selector: {e}")
                 try:
                     # Try using a button that's a direct child of the form
-                    self.page.click('form > button[type="submit"]')
+                    await self.page.click('form > button[type="submit"]')
                 except Exception as e2:
                     logger.warning(f"Could not click button with alternate selector, trying another: {e2}")
                     # Try a more generic selector
-                    self.page.click('button[type="submit"]:not([data-location="Menu"])')
+                    await self.page.click('button[type="submit"]:not([data-location="Menu"])')
             
             # Wait for login to complete - wait for URL change or navbar to appear
             logger.info("Waiting for successful login...")
-            # Wait for URL to change from login page
-            self.page.wait_for_url(lambda url: "login" not in url, timeout=30000)
+            await self.page.wait_for_url(lambda url: "login" not in url, timeout=30000)
             
             self.logged_in = True
             logger.info("Successfully logged in to UTR")
@@ -158,17 +193,17 @@ class UTRScraper:
             
         except PlaywrightTimeoutError as e:
             logger.error(f"Login failed: Timeout waiting for page to load: {e}")
-            self.page.screenshot(path="login_error.png")
+            await self.page.screenshot(path="login_error.png")
             
             # Log current URL and page content for debugging
             logger.error(f"Current URL: {self.page.url}")
             with open("login_error_page.html", "w") as f:
-                f.write(self.page.content())
+                f.write(await self.page.content())
                 
             return False
         except Exception as e:
             logger.error(f"Login failed: {e}")
-            self.page.screenshot(path="login_error.png")
+            await self.page.screenshot(path="login_error.png")
             return False
     
     def handle_superscript(self, raw_score):
@@ -194,7 +229,7 @@ class UTRScraper:
         # No superscript found, return the original number
         return main_digit if main_digit else raw_score
 
-    def search_player(self, name, wait_time=3):
+    async def search_player(self, name, wait_time=3):
         """
         Search for a player by name
         
@@ -209,24 +244,30 @@ class UTRScraper:
             logger.info(f"Searching for player: {name}")
             
             # Fix the domain from .com to .net
-            self.page.goto("https://app.utrsports.net/search")
+            await self.page.goto("https://app.utrsports.net/search")
             
             # Click on the search input and fill
-            self.page.wait_for_selector('input[type="search"]', state="visible")
-            self.page.fill('input[type="search"]', name)
+            await self.page.wait_for_selector('input[type="search"]', state="visible")
+            await self.page.fill('input[type="search"]', name)
             
             # Wait for search results
-            time.sleep(wait_time)
+            await asyncio.sleep(wait_time)
             
             # Extract player data from search results
             players = []
-            player_elements = self.page.query_selector_all('a[href*="/profiles/"]')
+            player_elements = await self.page.query_selector_all('a[href*="/profiles/"]')
             
             for element in player_elements:
                 try:
-                    player_name = element.query_selector("div > div:nth-child(1)").inner_text().strip()
-                    player_utr = element.query_selector("div > div:nth-child(2)").inner_text().strip()
-                    href = element.get_attribute("href")
+                    player_name_elem = await element.query_selector("div > div:nth-child(1)")
+                    player_name = await player_name_elem.inner_text() if player_name_elem else ""
+                    player_name = player_name.strip()
+                    
+                    player_utr_elem = await element.query_selector("div > div:nth-child(2)")
+                    player_utr = await player_utr_elem.inner_text() if player_utr_elem else ""
+                    player_utr = player_utr.strip()
+                    
+                    href = await element.get_attribute("href")
                     player_id = re.search(r"/profiles/(\d+)", href).group(1) if href else None
                     
                     # Extract just the UTR rating number
@@ -248,10 +289,10 @@ class UTRScraper:
             
         except Exception as e:
             logger.error(f"Error searching for player: {e}")
-            self.page.screenshot(path=f"search_error_{name.replace(' ', '_')}.png")
+            await self.page.screenshot(path=f"search_error_{name.replace(' ', '_')}.png")
             return []
     
-    def get_player_profile(self, player_id):
+    async def get_player_profile(self, player_id):
         """
         Get a player's profile information
         
@@ -267,33 +308,31 @@ class UTRScraper:
             # Go directly to the profile page
             profile_url = f"https://app.utrsports.net/profiles/{player_id}"
             try:
-                self.page.goto(profile_url, timeout=20000)  # Reduced timeout
+                await self.page.goto(profile_url, timeout=20000)  # Reduced timeout
             except PlaywrightTimeoutError as e:
                 logger.error(f"Timeout getting profile for player {player_id}: {e}")
                 # Try to take a screenshot of the error
                 try:
-                    self.page.screenshot(path=f"profileerror{player_id}.png")
+                    await self.page.screenshot(path=f"profileerror{player_id}.png")
                 except Exception as screenshot_error:
                     logger.warning(f"Additionally failed to take error screenshot: {screenshot_error}")
                 return None
             
             # Wait for the page to load with reduced timeout
             try:
-                self.page.wait_for_selector('h1', state="visible", timeout=20000)
+                await self.page.wait_for_selector('h1', state="visible", timeout=20000)
             except PlaywrightTimeoutError:
                 logger.warning(f"Timeout waiting for profile page content for player {player_id}")
-                time.sleep(3)  # Extra wait for content to load
+                await asyncio.sleep(3)  # Extra wait for content to load
             
             # Call our helper function to select singles
-            self.select_verified_singles()
+            await self.select_verified_singles()
             
             # Get basic player info
             try:
-                player_name = self.page.query_selector('h1')
-                if player_name:
-                    player_name = player_name.inner_text().strip()
-                else:
-                    player_name = f"Unknown Player {player_id}"
+                player_name_elem = await self.page.query_selector('h1')
+                player_name = await player_name_elem.inner_text() if player_name_elem else f"Unknown Player {player_id}"
+                player_name = player_name.strip()
                 
                 # Look for UTR using multiple selectors - more precise and targeting exact elements
                 current_utr = None
@@ -301,17 +340,18 @@ class UTRScraper:
                     'div[class*="ratingDisplayV5__value"] [title]',  # Target the title attribute which has the exact UTR
                     'div[class*="value"][title]',
                     'div[title*="."]', # UTR values have decimal points
-                    'div[class*="value"][noseelect]',
+                    'div[class*="value"][noselect]',
                     'div[class*="ratingDisplayV5__value"]'
                 ]
                 
                 for selector in utr_selectors:
-                    utr_elems = self.page.query_selector_all(selector)
+                    utr_elems = await self.page.query_selector_all(selector)
                     for utr_elem in utr_elems:
                         # Try to get from title attribute first
-                        utr_value = utr_elem.get_attribute('title')
+                        utr_value = await utr_elem.get_attribute('title')
                         if not utr_value:
-                            utr_value = utr_elem.inner_text().strip()
+                            utr_value = await utr_elem.inner_text()
+                        utr_value = utr_value.strip()
                         
                         if utr_value and "." in utr_value:  # Make sure it looks like a UTR
                             try:
@@ -342,7 +382,7 @@ class UTRScraper:
                     }
                     """
                     try:
-                        utr_result = self.page.evaluate(js_utr)
+                        utr_result = await self.page.evaluate(js_utr)
                         if utr_result:
                             current_utr = float(utr_result)
                             logger.info(f"Found UTR using JavaScript: {current_utr}")
@@ -367,9 +407,10 @@ class UTRScraper:
                 ]
                 
                 for selector in reliability_selectors:
-                    reliability_elems = self.page.query_selector_all(selector)
+                    reliability_elems = await self.page.query_selector_all(selector)
                     for rel_elem in reliability_elems:
-                        reliability_text = rel_elem.inner_text().strip()
+                        reliability_text = await rel_elem.inner_text()
+                        reliability_text = reliability_text.strip()
                         
                         # Check for percentage
                         reliability_match = re.search(r'(\d+)%', reliability_text)
@@ -415,7 +456,7 @@ class UTRScraper:
                     }
                     """
                     try:
-                        rel_result = self.page.evaluate(js_reliability)
+                        rel_result = await self.page.evaluate(js_reliability)
                         if rel_result and isinstance(rel_result, int):
                             reliability = rel_result
                         elif rel_result and isinstance(rel_result, str) and "From " in rel_result:
@@ -462,16 +503,16 @@ class UTRScraper:
                 
                 logger.info(f"Saved profile for player {player_name} ({player_id})")
                 return profile_data
-                
+            
             except Exception as e:
                 logger.error(f"Error getting profile for player {player_id}: {e}")
                 return None
-                
+        
         except Exception as e:
             logger.error(f"Error getting profile for player {player_id}: {e}")
             return None
     
-    def get_player_rating_history(self, player_id, max_retries=3):
+    async def get_player_rating_history(self, player_id, max_retries=3):
         """
         Get a player's UTR rating history using direct URL navigation
         
@@ -506,13 +547,13 @@ class UTRScraper:
                 
                 # Add timeout handling here - prevent the entire script from failing
                 try:
-                    self.page.goto(stats_url, timeout=30000)  # Increased timeout for better reliability
+                    await self.page.goto(stats_url, timeout=30000)  # Increased timeout for better reliability
                 except PlaywrightTimeoutError as e:
                     logger.warning(f"Timeout navigating to stats page for player {player_id} (attempt {retry+1}): {e}")
                     # If not the last retry, try again
                     if retry < max_retries - 1:
                         logger.info(f"Retrying after timeout ({retry+1}/{max_retries})...")
-                        time.sleep(random.uniform(3.0, 6.0))  # Longer delay after timeouts
+                        await asyncio.sleep(random.uniform(3.0, 6.0))  # Longer delay after timeouts
                         continue
                     else:
                         # Create an empty DataFrame and save it to avoid retrying this player
@@ -523,24 +564,24 @@ class UTRScraper:
                 
                 # Wait for the page to load - using a more generic selector with sufficient timeout
                 try:
-                    self.page.wait_for_selector('h1, .header, [class*="header"]', state="visible", timeout=20000)
+                    await self.page.wait_for_selector('h1, .header, [class*="header"]', state="visible", timeout=20000)
                 except PlaywrightTimeoutError:
                     logger.warning(f"Timeout waiting for page content for player {player_id} (attempt {retry+1})")
                     # Try to proceed anyway, in case some content is available
                 
-                time.sleep(4)  # Increased wait to ensure page is fully loaded
+                await asyncio.sleep(4)  # Increased wait to ensure page is fully loaded
                 
                 # Take a screenshot for debugging - with error handling
                 try:
-                    self.page.screenshot(path=f"stats_page_{player_id}.png")
+                    await self.page.screenshot(path=f"stats_page_{player_id}.png")
                 except Exception as e:
                     logger.warning(f"Failed to take screenshot: {e}")
                 
                 # Use our helper function to select singles
-                self.select_verified_singles()
+                await self.select_verified_singles()
                 
                 # Check for premium content blocker with multiple selectors
-                premium_blocker = self.page.query_selector('div:has-text("Subscribe to UTR Pro"), div:has-text("Upgrade to UTR Pro")')
+                premium_blocker = await self.page.query_selector('div:has-text("Subscribe to UTR Pro"), div:has-text("Upgrade to UTR Pro")')
                 if premium_blocker:
                     logger.warning(f"Rating history for player {player_id} requires premium subscription")
                     
@@ -549,7 +590,7 @@ class UTRScraper:
                         logger.info(f"Attempting JavaScript extraction on retry {retry+1}")
                         
                         # Try to extract UTR history from the raw HTML
-                        html_content = self.page.content()
+                        html_content = await self.page.content()
                         
                         # Look for patterns like "date":"2023-05-15","rating":15.23
                         date_rating_matches = re.findall(r'"date":"(\d{4}-\d{2}-\d{2})","rating":([\d.]+)', html_content)
@@ -571,7 +612,7 @@ class UTRScraper:
                         
                         # If HTML extraction failed, retry with next attempt
                         logger.info(f"JavaScript extraction failed, continuing to retry {retry+2}")
-                        time.sleep(random.uniform(3.0, 5.0))
+                        await asyncio.sleep(random.uniform(3.0, 5.0))
                         continue
                     else:
                         # Final attempt failed - create an empty DataFrame with a note
@@ -591,15 +632,15 @@ class UTRScraper:
                     ]
                     
                     for selector in show_all_selectors:
-                        show_all = self.page.query_selector(selector)
+                        show_all = await self.page.query_selector(selector)
                         if show_all:
                             logger.info(f"Found 'Show all' button using selector: {selector}")
-                            show_all.click()
+                            await show_all.click()
                             # Wait for additional history to load
-                            time.sleep(4)
+                            await asyncio.sleep(4)
                             # Take another screenshot after clicking Show All
                             try:
-                                self.page.screenshot(path=f"stats_page_after_show_all_{player_id}.png")
+                                await self.page.screenshot(path=f"stats_page_after_show_all_{player_id}.png")
                             except Exception as e:
                                 logger.warning(f"Failed to take screenshot after Show All: {e}")
                             break
@@ -619,7 +660,7 @@ class UTRScraper:
                     
                 history_items = []
                 for selector in history_selectors:
-                    items = self.page.query_selector_all(selector)
+                    items = await self.page.query_selector_all(selector)
                     if items and len(items) > 0:
                         logger.info(f"Found {len(items)} rating history items using selector: {selector}")
                         history_items = items
@@ -629,7 +670,7 @@ class UTRScraper:
                 if not history_items:
                     logger.info("Trying alternative approach to extract rating history")
                     # Get all date-like text on the page
-                    date_elements = self.page.query_selector_all('div:text-matches("\\d{4}-\\d{2}-\\d{2}")')
+                    date_elements = await self.page.query_selector_all('div:text-matches("\\d{4}-\\d{2}-\\d{2}")')
                     if date_elements:
                         logger.info(f"Found {len(date_elements)} date elements on the page")
                         
@@ -637,10 +678,11 @@ class UTRScraper:
                         rating_history = []
                         for date_elem in date_elements:
                             try:
-                                date_str = date_elem.inner_text().strip()
+                                date_str = await date_elem.inner_text()
+                                date_str = date_str.strip()
                                 # Look for a nearby number that could be a UTR rating
-                                parent = date_elem.evaluate_handle('node => node.parentElement')
-                                parent_text = parent.inner_text()
+                                parent = await date_elem.evaluate_handle('node => node.parentElement')
+                                parent_text = await parent.inner_text()
                                 
                                 # Use regex to find a number like "15.23" in the parent element's text
                                 utr_match = re.search(r'([\d.]{2,5})', parent_text)
@@ -683,14 +725,15 @@ class UTRScraper:
                         # Try to find date using selectors
                         date_str = None
                         for date_selector in date_selectors:
-                            date_element = item.query_selector(date_selector)
+                            date_element = await item.query_selector(date_selector)
                             if date_element:
-                                date_str = date_element.inner_text().strip()
+                                date_str = await date_element.inner_text()
+                                date_str = date_str.strip()
                                 break
                         
                         # If date not found, try to extract it directly from the item text
                         if not date_str:
-                            item_text = item.inner_text()
+                            item_text = await item.inner_text()
                             date_match = re.search(r'(\d{4}-\d{2}-\d{2})', item_text)
                             if date_match:
                                 date_str = date_match.group(1)
@@ -698,14 +741,15 @@ class UTRScraper:
                         # Try to find rating using selectors
                         rating_str = None
                         for rating_selector in rating_selectors:
-                            rating_element = item.query_selector(rating_selector)
+                            rating_element = await item.query_selector(rating_selector)
                             if rating_element:
-                                rating_str = rating_element.inner_text().strip()
+                                rating_str = await rating_element.inner_text()
+                                rating_str = rating_str.strip()
                                 break
                         
                         # If rating not found, try to extract it directly from the item text
                         if not rating_str and date_str:
-                            item_text = item.inner_text()
+                            item_text = await item.inner_text()
                             # Look for a number after the date
                             rating_match = re.search(r'([\d.]{2,5})', item_text.replace(date_str, '', 1))
                             if rating_match:
@@ -742,7 +786,7 @@ class UTRScraper:
                     return df
                 else:
                     # One last attempt - try to extract UTR history from the raw HTML
-                    html_content = self.page.content()
+                    html_content = await self.page.content()
                     
                     # Look for patterns like "date":"2023-05-15","rating":15.23
                     date_rating_matches = re.findall(r'"date":"(\d{4}-\d{2}-\d{2})","rating":([\d.]+)', html_content)
@@ -765,7 +809,7 @@ class UTRScraper:
                     # If this isn't the last retry, try again
                     if retry < max_retries - 1:
                         logger.warning(f"No rating history found for player {player_id} on attempt {retry+1}, retrying...")
-                        time.sleep(random.uniform(3.0, 6.0))
+                        await asyncio.sleep(random.uniform(3.0, 6.0))
                         continue
                     else:
                         # Create empty file to avoid retrying this player
@@ -778,24 +822,24 @@ class UTRScraper:
                 logger.error(f"Error getting rating history for player {player_id} (attempt {retry+1}): {e}")
                 try:
                     # Added proper error handling around the screenshot operation
-                    self.page.screenshot(path=f"rating_history_error_{player_id}_{retry+1}.png")
+                    await self.page.screenshot(path=f"rating_history_error_{player_id}_{retry+1}.png")
                 except Exception as screenshot_error:
                     logger.error(f"Additionally failed to take error screenshot: {screenshot_error}")
                 
                 # If not the last retry, try again after resetting browser
                 if retry < max_retries - 1:
                     logger.info(f"Retrying after error ({retry+1}/{max_retries})...")
-                    time.sleep(random.uniform(3.0, 6.0))
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
                     
                     # Restart browser on major errors
                     try:
-                        self.close_browser()
-                        time.sleep(2)
-                        self.start_browser()
-                        self.login()
+                        await self.close_browser()
+                        await asyncio.sleep(2)
+                        await self.start_browser()
+                        await self.login()
                     except Exception as browser_error:
                         logger.error(f"Error restarting browser: {browser_error}")
-                        
+                    
                     continue
                 else:
                     # Create an empty file to prevent retrying this player
@@ -804,7 +848,7 @@ class UTRScraper:
                     
                     return pd.DataFrame()
         
-    def select_year_from_dropdown(self, year):
+    async def select_year_from_dropdown(self, year):
         """
         Select a specific year from the dropdown
         
@@ -818,7 +862,7 @@ class UTRScraper:
             logger.info(f"Attempting to select year {year} from dropdown")
             
             # Take a screenshot before clicking anything
-            self.page.screenshot(path="before_dropdown.png")
+            await self.page.screenshot(path="before_dropdown.png")
             
             # Look specifically for the LATEST button using more precise selectors
             # First try to find the LATEST text element
@@ -831,7 +875,7 @@ class UTRScraper:
             
             latest_button = None
             for selector in latest_selectors:
-                latest_button = self.page.query_selector(selector)
+                latest_button = await self.page.query_selector(selector)
                 if latest_button:
                     logger.info(f"Found LATEST button using selector: {selector}")
                     break
@@ -850,19 +894,19 @@ class UTRScraper:
                     return null;
                 }
                 """
-                latest_button = self.page.evaluate_handle(latest_js)
+                latest_button = await self.page.evaluate_handle(latest_js)
                 
             if not latest_button:
                 logger.warning("Could not find LATEST dropdown button")
                 return False
                 
             # Click the LATEST button
-            latest_button.click()
+            await latest_button.click()
             logger.info("Clicked LATEST dropdown button")
-            time.sleep(2)  # Wait for dropdown to appear
+            await asyncio.sleep(2)  # Wait for dropdown to appear
             
             # Take a screenshot after dropdown should be visible
-            self.page.screenshot(path="dropdown_opened.png")
+            await self.page.screenshot(path="dropdown_opened.png")
             
             # Try to locate the year item
             year_selectors = [
@@ -875,7 +919,7 @@ class UTRScraper:
             year_item = None
             for selector in year_selectors:
                 try:
-                    year_item = self.page.query_selector(selector)
+                    year_item = await self.page.query_selector(selector)
                     if year_item:
                         logger.info(f"Found year {year} using selector: {selector}")
                         break
@@ -903,7 +947,7 @@ class UTRScraper:
                 }}
                 """
                 try:
-                    year_item = self.page.evaluate_handle(year_js)
+                    year_item = await self.page.evaluate_handle(year_js)
                     # Check if the JavaScript returned a non-null value that's actually an element
                     if not year_item.as_element():
                         logger.info(f"Year {year} not found in dropdown - player likely has no matches for this year")
@@ -918,23 +962,23 @@ class UTRScraper:
                 return "year_not_found"
                 
             # Click the year
-            year_item.click()
+            await year_item.click()
             logger.info(f"Clicked year {year}")
             
             # Wait for new data to load
-            time.sleep(5)
+            await asyncio.sleep(5)
             
             # Take screenshot after selection
-            self.page.screenshot(path=f"after_{year}_selection.png")
+            await self.page.screenshot(path=f"after_{year}_selection.png")
             
             return True
             
         except Exception as e:
             logger.error(f"Error selecting year: {e}")
-            self.page.screenshot(path=f"year_selection_error_{year}.png")
+            await self.page.screenshot(path=f"year_selection_error_{year}.png")
             return False
         
-    def select_singles_from_dropdown(self):
+    async def select_singles_from_dropdown(self):
         """
         Select singles from dropdown menu
         
@@ -945,13 +989,13 @@ class UTRScraper:
             logger.info("Attempting to select Singles from dropdown")
             
             # Check if match cards are already visible - indicates we're on the correct view
-            match_cards = self.page.query_selector_all('.utr-card.score-card, div[class*="eventItem"], div[class*="scorecard"]')
+            match_cards = await self.page.query_selector_all('.utr-card.score-card, div[class*="eventItem"], div[class*="scorecard"]')
             if match_cards and len(match_cards) > 0:
                 logger.info("Match cards already visible, already on Singles view")
                 return True
                 
             # First check if we're already viewing singles by text
-            current_view = self.page.query_selector('h6.text-uppercase.title:has-text("SINGLES")')
+            current_view = await self.page.query_selector('h6.text-uppercase.title:has-text("SINGLES")')
             if current_view:
                 # If we found the Singles title and there's content, we're likely already there
                 logger.info("Already on Singles view, skipping navigation")
@@ -959,7 +1003,7 @@ class UTRScraper:
             
             # Take a screenshot before clicking anything
             try:
-                self.page.screenshot(path="before_singles_dropdown.png")
+                await self.page.screenshot(path="before_singles_dropdown.png")
             except Exception as e:
                 logger.warning(f"Failed to take before screenshot: {e}")
             
@@ -974,7 +1018,7 @@ class UTRScraper:
             
             singles_button = None
             for selector in singles_button_selectors:
-                singles_button = self.page.query_selector(selector)
+                singles_button = await self.page.query_selector(selector)
                 if singles_button:
                     logger.info(f"Found SINGLES button using selector: {selector}")
                     break
@@ -994,20 +1038,20 @@ class UTRScraper:
                     return null;
                 }
                 """
-                singles_button = self.page.evaluate_handle(singles_js)
+                singles_button = await self.page.evaluate_handle(singles_js)
                     
             if not singles_button:
                 logger.warning("Could not find SINGLES dropdown button")
                 return False
                     
             # Click the SINGLES button
-            singles_button.click()
+            await singles_button.click()
             logger.info("Clicked SINGLES dropdown button")
-            time.sleep(2)  # Wait for dropdown to appear
+            await asyncio.sleep(2)  # Wait for dropdown to appear
             
             # Take a screenshot after dropdown should be visible
             try:
-                self.page.screenshot(path="singles_dropdown_opened.png")
+                await self.page.screenshot(path="singles_dropdown_opened.png")
             except Exception as e:
                 logger.warning(f"Failed to take dropdown screenshot: {e}")
             
@@ -1023,7 +1067,7 @@ class UTRScraper:
             singles_item = None
             for selector in singles_selectors:
                 try:
-                    singles_item = self.page.query_selector(selector)
+                    singles_item = await self.page.query_selector(selector)
                     if singles_item:
                         logger.info(f"Found Singles using selector: {selector}")
                         break
@@ -1053,22 +1097,22 @@ class UTRScraper:
                     return null;
                 }
                 """
-                singles_item = self.page.evaluate_handle(singles_js)
+                singles_item = await self.page.evaluate_handle(singles_js)
             
             if not singles_item:
                 logger.warning(f"Could not find Singles option in dropdown")
                 return False
                     
             # Click the Singles option
-            singles_item.click()
+            await singles_item.click()
             logger.info(f"Clicked Singles option")
             
             # Wait for new data to load
-            time.sleep(3)
+            await asyncio.sleep(3)
             
             # Take screenshot after selection
             try:
-                self.page.screenshot(path=f"after_singles_selection.png")
+                await self.page.screenshot(path=f"after_singles_selection.png")
             except Exception as e:
                 logger.warning(f"Failed to take after screenshot: {e}")
             
@@ -1077,13 +1121,12 @@ class UTRScraper:
         except Exception as e:
             logger.error(f"Error selecting Singles: {e}")
             try:
-                self.page.screenshot(path=f"singles_selection_error.png")
+                await self.page.screenshot(path=f"singles_selection_error.png")
             except Exception as screenshot_error:
                 logger.error(f"Also failed to take error screenshot: {screenshot_error}")
             return False
 
-    # For the verified singles on the profile page
-    def select_verified_singles(self):
+    async def select_verified_singles(self):
         """
         Select verified singles on profile/stats pages
         
@@ -1095,14 +1138,14 @@ class UTRScraper:
             
             # First check - maybe we're already on singles view
             # Check if singles UTR is visible already
-            utr_visible = self.page.query_selector('div[class*="singles-utr"], div[title*="16.41"], div[class*="verified14"]')
+            utr_visible = await self.page.query_selector('div[class*="singles-utr"], div[title*="16.41"], div[class*="verified14"]')
             if utr_visible:
                 logger.info("Already on Verified Singles view")
                 return True
                 
             # Take a screenshot before clicking
             try:
-                self.page.screenshot(path="before_verified_singles.png")
+                await self.page.screenshot(path="before_verified_singles.png")
             except Exception as e:
                 logger.warning(f"Failed to take before screenshot: {e}")
             
@@ -1121,7 +1164,7 @@ class UTRScraper:
             
             verified_singles_elem = None
             for selector in verified_singles_selectors:
-                verified_singles_elem = self.page.query_selector(selector)
+                verified_singles_elem = await self.page.query_selector(selector)
                 if verified_singles_elem:
                     logger.info(f"Found Verified singles using selector: {selector}")
                     break
@@ -1149,7 +1192,7 @@ class UTRScraper:
                 }
                 """
                 try:
-                    verified_singles_elem = self.page.evaluate_handle(verified_singles_js)
+                    verified_singles_elem = await self.page.evaluate_handle(verified_singles_js)
                 except Exception as js_error:
                     logger.warning(f"JavaScript approach failed: {js_error}")
             
@@ -1160,20 +1203,20 @@ class UTRScraper:
             
             # Click the Verified singles element
             try:
-                verified_singles_elem.click()
+                await verified_singles_elem.click()
                 logger.info("Selected Singles view")
-                time.sleep(2)
+                await asyncio.sleep(2)
             except Exception as click_error:
                 logger.warning(f"Error clicking singles element: {click_error}")
                 # Check if we're already on singles view
-                if self.page.query_selector('div[class*="singles-utr"], div[class*="verified14"]'):
+                if await self.page.query_selector('div[class*="singles-utr"], div[class*="verified14"]'):
                     logger.info("Already on Verified Singles view despite click error")
                     return True
                 return False
             
             # Take screenshot after selection
             try:
-                self.page.screenshot(path="after_verified_singles.png")
+                await self.page.screenshot(path="after_verified_singles.png")
             except Exception as e:
                 logger.warning(f"Failed to take after screenshot: {e}")
                 
@@ -1182,12 +1225,12 @@ class UTRScraper:
         except Exception as e:
             logger.error(f"Error selecting Verified singles: {e}")
             try:
-                self.page.screenshot(path="verified_singles_error.png")
+                await self.page.screenshot(path="verified_singles_error.png")
             except Exception as screenshot_error:
                 logger.error(f"Also failed to take error screenshot: {screenshot_error}")
             return False
     
-    def get_player_match_history(self, player_id, year=None, limit=200):
+    async def get_player_match_history(self, player_id, year=None, limit=200):
         """
         Get a player's match history using direct URL navigation
         
@@ -1206,34 +1249,34 @@ class UTRScraper:
             profile_url = f"https://app.utrsports.net/profiles/{player_id}?t=2"
             
             try:
-                self.page.goto(profile_url, timeout=20000)  # Reduced timeout
+                await self.page.goto(profile_url, timeout=20000)  # Reduced timeout
             except PlaywrightTimeoutError as e:
                 logger.warning(f"Timeout navigating to match history page for player {player_id}: {e}")
                 return pd.DataFrame()
             
             # Wait for the page to load with reduced timeout
             try:
-                self.page.wait_for_selector('h1', state="visible", timeout=15000)  # Reduced timeout
+                await self.page.wait_for_selector('h1', state="visible", timeout=15000)  # Reduced timeout
             except PlaywrightTimeoutError:
                 logger.warning(f"Timeout waiting for page content for player {player_id}")
                 # Try to proceed anyway
             
-            time.sleep(3)  # Extra wait for content to load
+            await asyncio.sleep(3)  # Extra wait for content to load
             
             # Take a screenshot for debugging
             try:
-                self.page.screenshot(path=f"match_history_page_{player_id}.png")
+                await self.page.screenshot(path=f"match_history_page_{player_id}.png")
             except Exception as e:
                 logger.warning(f"Failed to take screenshot: {e}")
                 
             # Ensure we're looking at singles matches using our dropdown helper
-            self.select_singles_from_dropdown()
+            await self.select_singles_from_dropdown()
             
             # If a specific year is requested, try to select it from the dropdown
             if year:
                 logger.info(f"Selecting year: {year}")
                 try:
-                    year_selected = self.select_year_from_dropdown(year)
+                    year_selected = await self.select_year_from_dropdown(year)
                     if year_selected == "year_not_found":
                         # Create empty dataframe for this year and return it
                         empty_df = pd.DataFrame()
@@ -1243,7 +1286,7 @@ class UTRScraper:
                         return empty_df
                     elif not year_selected:
                         # Check if any year dropdown is available at all
-                        year_dropdown = self.page.query_selector('div:has-text("LATEST")')
+                        year_dropdown = await self.page.query_selector('div:has-text("LATEST")')
                         if not year_dropdown:
                             logger.warning(f"No year dropdown found, player may not have matches for any year")
                             return pd.DataFrame()  # Return empty if no dropdown at all
@@ -1267,7 +1310,7 @@ class UTRScraper:
                 
                 match_cards = []
                 for selector in match_card_selectors:
-                    cards = self.page.query_selector_all(selector)
+                    cards = await self.page.query_selector_all(selector)
                     if cards and len(cards) > 0:
                         match_cards = cards
                         logger.info(f"Found {len(cards)} match cards using selector: {selector}")
@@ -1294,9 +1337,9 @@ class UTRScraper:
                     }
                     """
                     
-                    cards_handle = self.page.evaluate_handle(js_cards)
+                    cards_handle = await self.page.evaluate_handle(js_cards)
                     if cards_handle:
-                        cards_array = self.page.evaluate("cards => Array.from(cards)", cards_handle)
+                        cards_array = await self.page.evaluate("cards => Array.from(cards)", cards_handle)
                         match_cards = cards_array
                         logger.info(f"Found {len(match_cards)} match cards using JavaScript approach")
                 
@@ -1318,98 +1361,116 @@ class UTRScraper:
             player_name = None
             try:
                 # Get the player name from the page header
-                player_name_elem = self.page.query_selector('h1')
+                player_name_elem = await self.page.query_selector('h1')
                 if player_name_elem:
-                    player_name = player_name_elem.inner_text().strip()
+                    player_name = await player_name_elem.inner_text()
+                    player_name = player_name.strip()
             except Exception as e:
                 logger.warning(f"Error getting player name from page: {e}")
             
-            # Find all tournament sections on the page
-            tournament_sections = []
-
+            # Find all event headers (not match containers)
+            event_headers = []
             try:
-                # Look for tournament sections (the containers that contain the tournament name)
-                tournament_section_selectors = [
-                    'div[class*="eventItem__eventItem"]',
-                    'div.eventItem__eventItem__2xpsd',
-                    'div[class*="eventItem"]'
-                ]
-                
-                for selector in tournament_section_selectors:
-                    sections = self.page.query_selector_all(selector)
-                    if sections and len(sections) > 0:
-                        logger.info(f"Found {len(sections)} tournament sections using selector: {selector}")
-                        
-                        # Process each tournament section
-                        for idx, section in enumerate(sections):
-                            try:
-                                # Get tournament name from the section
-                                name_selectors = [
-                                    'span[class*="eventName"]',
-                                    'span.eventItem__eventName__6hntZ',
-                                    'div[class*="eventName"]'
-                                ]
-                                
-                                tournament_name = None
-                                for name_selector in name_selectors:
-                                    name_elem = section.query_selector(name_selector)
-                                    if name_elem:
-                                        tournament_name = name_elem.inner_text().strip()
-                                        logger.info(f"Found tournament name: {tournament_name}")
-                                        break
-                                
-                                if not tournament_name:
-                                    logger.warning(f"Could not find tournament name in section {idx+1}")
-                                    continue
-                                
-                                # Get the position of this section in the DOM
-                                y_position = self.page.evaluate("""
-                                    (element) => {
-                                        const rect = element.getBoundingClientRect();
-                                        return rect.top;
-                                    }
-                                """, section)
-                                
-                                tournament_sections.append({
-                                    "name": tournament_name,
-                                    "position": y_position,
-                                    "index": idx
-                                })
-                                
-                                logger.info(f"Tournament section {idx+1}: {tournament_name} at position {y_position}")
-                            except Exception as e:
-                                logger.warning(f"Error processing tournament section {idx+1}: {e}")
-                        
-                        # We found sections with this selector, no need to try others
-                        break
-                
-                # Sort sections by position
-                if tournament_sections:
-                    tournament_sections.sort(key=lambda x: x["position"])
-                    logger.info(f"Total tournament sections found: {len(tournament_sections)}")
-            except Exception as e:
-                logger.error(f"Error finding tournament sections: {e}")
+                # Use the correct selector for event headers based on the DOM
+                event_header_selector = 'div.eventItem__eventHeaderContainer__3pg9m'
+                headers = await self.page.query_selector_all(event_header_selector)
+                if headers:
+                    logger.info(f"Found {len(headers)} event headers using selector: {event_header_selector}")
+                else:
+                    logger.warning(f"No event headers found with selector: {event_header_selector}")
 
-            # Add a tournament lookup function using DOM position
-            def get_tournament_for_position(y_position):
-                """Find which tournament a match at position y_position belongs to"""
-                matching_tournament = "Unknown Tournament"
+                if headers:
+                    for idx, header in enumerate(headers):
+                        try:
+                            # Extract the main event name (e.g., "USTA JTT - Southern - North Carolina - District Championship 2016")
+                            event_name_elem = await header.query_selector('div.eventItem__eventName__6hntZ > span')
+                            event_name = await event_name_elem.inner_text() if event_name_elem else ""
+                            event_name = event_name.strip()
+                            if event_name:
+                                logger.info(f"Found main event name for event header {idx+1}: {event_name}")
+                            else:
+                                logger.warning(f"No main event name found for event header {idx+1}, trying draw name")
+
+                            # Extract the draw name (e.g., "LAKE SZILAGYI vs LAKE BIPPUS") for additional context or fallback
+                            draw_name_elem = await header.query_selector('div.eventItem__drawName__29qpC')
+                            draw_name = await draw_name_elem.inner_text() if draw_name_elem else ""
+                            draw_name = draw_name.strip()
+                            # Remove the middle dot character if present
+                            draw_name = re.sub(r'^\s*•\s*', '', draw_name)
+                            draw_name = draw_name.strip()
+                            if draw_name:
+                                logger.info(f"Found draw name for event header {idx+1}: {draw_name}")
+                            else:
+                                logger.warning(f"No draw name found for event header {idx+1}")
+
+                            # If main event name is not available, fall back to the draw name
+                            if not event_name and draw_name:
+                                event_name = draw_name
+                                logger.info(f"Using draw name as event name for event header {idx+1}: {event_name}")
+
+                            # Handle empty or invalid event names
+                            if not event_name or event_name.isspace():
+                                event_name = "Unknown Tournament"
+                                logger.info(f"Event header {idx+1} has no valid event or draw name - labeled as 'Unknown Tournament'")
+
+                            # Clean the event name (remove only times and dates, preserve all other terms)
+                            event_name = re.sub(r'\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)', '', event_name)  # Remove times
+                            event_name = re.sub(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\w+\s+\d{1,2}', '', event_name)  # Remove dates
+                            event_name = event_name.strip()
+                            logger.info(f"Processed event name: {event_name}")
+
+                            # Get the position of this event header in the DOM
+                            y_position = await self.page.evaluate("""
+                                (element) => {
+                                    const rect = element.getBoundingClientRect();
+                                    return rect.top;
+                                }
+                            """, header)
+
+                            # Store both the event name and draw name in the event_headers list
+                            event_headers.append({
+                                "name": event_name,
+                                "draw": draw_name if draw_name else "Unknown Draw",  # Default to "Unknown Draw" if empty
+                                "position": y_position,
+                                "index": idx
+                            })
+
+                            logger.info(f"Event header {idx+1}: {event_name} (Draw: {draw_name if draw_name else 'Unknown Draw'}) at position {y_position}")
+                        except Exception as e:
+                            logger.warning(f"Error processing event header {idx+1}: {e}")
+
+                    # Sort event headers by position
+                    event_headers.sort(key=lambda x: x["position"])
+                    logger.info(f"Total event headers found: {len(event_headers)}")
+                else:
+                    logger.warning("No event headers found, using fallback")
+                    event_headers = [{"name": "Unknown Tournament", "draw": "Unknown Draw", "position": -float('inf'), "index": 0}]
+
+            except Exception as e:
+                logger.error(f"Error finding event headers: {e}")
+                event_headers = [{"name": "Unknown Tournament", "draw": "Unknown Draw", "position": -float('inf'), "index": 0}]
+
+            # Add a function to find the event header for a given position
+            def get_event_for_position(y_position):
+                """Find which event and draw a match at position y_position belongs to"""
+                matching_event = "Unknown Tournament"
+                matching_draw = "Unknown Draw"
                 
-                if not tournament_sections:
-                    return matching_tournament
+                if not event_headers:
+                    return matching_event, matching_draw
                 
-                # Find the last tournament section that's above this position
+                # Find the last event header that's above this position
                 best_match = None
-                for section in tournament_sections:
-                    section_pos = section["position"]
-                    if section_pos <= y_position:
-                        if best_match is None or section_pos > best_match["position"]:
-                            best_match = section
+                for header in event_headers:
+                    header_pos = header["position"]
+                    if header_pos <= y_position:
+                        if best_match is None or header_pos > best_match["position"]:
+                            best_match = header
                 
                 if best_match:
-                    return best_match["name"]
+                    return best_match["name"], best_match["draw"]
                 
-                return matching_tournament
+                return matching_event, matching_draw
             
             matches = []
             
@@ -1419,13 +1480,13 @@ class UTRScraper:
                     # Check if the match is retired, but don't skip it
                     retired = False
                     try:
-                        match_text = card.inner_text()
+                        match_text = await card.inner_text()
                         if "Retired" in match_text or "retired" in match_text.lower():
                             retired = True
                             logger.info(f"Match {match_idx+1} contains 'Retired' - marking as retired match")
                     except Exception as e:
                         logger.error(f"Error checking for retired status: {e}")
-                    
+
                     # Extract match details (date, round, tournament name) from the card header
                     header_text = ""
                     try:
@@ -1440,9 +1501,10 @@ class UTRScraper:
                         ]
                         
                         for selector in header_selectors:
-                            header_elem = card.query_selector(selector)
+                            header_elem = await card.query_selector(selector)
                             if header_elem:
-                                extracted_text = header_elem.inner_text().strip()
+                                extracted_text = await header_elem.inner_text()
+                                extracted_text = extracted_text.strip()
                                 logger.info(f"Found header with selector '{selector}': '{extracted_text}'")
                                 # If we found a header with pipe separators, use it and break
                                 if '|' in extracted_text:
@@ -1473,7 +1535,7 @@ class UTRScraper:
                                     return null;
                                 }
                                 """
-                                js_header = self.page.evaluate(header_js, card)
+                                js_header = await self.page.evaluate(header_js, card)
                                 if js_header:
                                     header_text = js_header
                                     logger.info(f"Found header with JavaScript: '{header_text}'")
@@ -1482,9 +1544,10 @@ class UTRScraper:
                             
                             # If still no header text, use the original selector
                             if not header_text:
-                                header_elem = card.query_selector('.scorecard__header__2iDdF, [class*="header"], div.date')
+                                header_elem = await card.query_selector('.scorecard__header__2iDdF, [class*="header"], div.date')
                                 if header_elem:
-                                    header_text = header_elem.inner_text().strip()
+                                    header_text = await header_elem.inner_text()
+                                    header_text = header_text.strip()
                                     logger.info(f"Using fallback header: '{header_text}'")
                     except Exception as e:
                         logger.warning(f"Error extracting header from match {match_idx+1}: {e}")
@@ -1553,41 +1616,60 @@ class UTRScraper:
                                 date_obj = datetime.strptime(f"{month} {day} {year_val}", "%b %d %Y")
                                 match_date = date_obj.strftime("%Y-%m-%d")
                                 logger.info(f"Extracted date from regex: {match_date}")
-                            except Exception as e:
-                                logger.warning(f"Error parsing date: {e}")
+                            except:
                                 match_date = f"{month} {day}"
 
                     # Try to extract round information
                     try:
-                        # First look for specific round elements
-                        round_elem = card.query_selector('.round, [class*="round"], [class*="phase"]')
-                        if round_elem:
-                            match_round = round_elem.inner_text().strip()
-                            logger.info(f"Found round from element: {match_round}")
-                        
-                        # If not found, try to extract from header text
-                        if not match_round and header_text:
-                            round_match = re.search(r'(Round of \d+|Final|Semi-?final|Quarter-?final)', header_text, re.IGNORECASE)
-                            if round_match:
-                                match_round = round_match.group(1)
-                                logger.info(f"Found round from header: {match_round}")
+                        # Use the round from the header if available
+                        if match_round:
+                            # Clean up the round value (remove " • Singles" if present)
+                            match_round = re.sub(r'\s*•\s*Singles', '', match_round, flags=re.IGNORECASE)
+                            if match_round.lower() == "singles":
+                                match_round = "Unknown Round"
+                            logger.info(f"Using round from header: {match_round}")
+                        else:
+                            # Fallback to element if header didn't provide a round
+                            round_elem = await card.query_selector('.round, [class*="round"], [class*="phase"]')
+                            if round_elem:
+                                match_round = await round_elem.inner_text()
+                                match_round = match_round.strip()
+                                # Clean up the round value (remove " • Singles" if present)
+                                match_round = re.sub(r'\s*•\s*Singles', '', match_round, flags=re.IGNORECASE)
+                                if match_round.lower() == "singles":
+                                    match_round = "Unknown Round"
+                                logger.info(f"Found round from element: {match_round}")
                             
-                        # Try to parse round from tournament info if present
-                        if not match_round:
-                            tournament_info = card.inner_text()
-                            round_match = re.search(r'(Round of \d+|Final|Semi-?final|Quarter-?final)', tournament_info, re.IGNORECASE)
-                            if round_match:
-                                match_round = round_match.group(1)
-                                logger.info(f"Found round from tournament info: {match_round}")
+                            # If still not found, try to extract from header text
+                            if not match_round and header_text:
+                                round_match = re.search(r'(Round of \d+|Final|Semi-?final|Quarter-?final|Qualifier)', header_text, re.IGNORECASE)
+                                if round_match:
+                                    match_round = round_match.group(1)
+                                    logger.info(f"Found round from header: {match_round}")
+                                
+                            # Try to parse round from tournament info if present
+                            if not match_round:
+                                tournament_info = await card.inner_text()
+                                round_match = re.search(r'(Round of \d+|Final|Semi-?final|Quarter-?final|Qualifier)', tournament_info, re.IGNORECASE)
+                                if round_match:
+                                    match_round = round_match.group(1)
+                                    logger.info(f"Found round from tournament info: {match_round}")
+                                
+                            # If still not found, set to "Unknown Round"
+                            if not match_round:
+                                match_round = "Unknown Round"
+                                logger.info(f"No round information found, defaulting to: {match_round}")
                     except Exception as e:
                         logger.warning(f"Error extracting round info: {e}")
+                        match_round = "Unknown Round"
 
                     # If header parsing failed, try to extract date from element
                     if not match_date:
                         try:
-                            date_elem = card.query_selector('div.date, [class*="date"]')
+                            date_elem = await card.query_selector('div.date, [class*="date"]')
                             if date_elem:
-                                date_text = date_elem.inner_text().strip()
+                                date_text = await date_elem.inner_text()
+                                date_text = date_text.strip()
                                 # Extract date using regex
                                 date_match = re.search(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})(,?\s+\d{4})?', date_text)
                                 if date_match:
@@ -1603,65 +1685,46 @@ class UTRScraper:
                                         logger.info(f"Using raw date text: {match_date}")
                         except Exception as e:
                             logger.warning(f"Error extracting date from element: {e}")
-                    
-                    # NEW CODE: Determine which tournament this match belongs to
-                    # Get the position of this card on the page
+
+                    # Determine which event this match belongs to
+                    event_name = "Unknown Tournament"  # Default value
+                    draw_name = "Unknown Draw"  # Default value
                     try:
-                        card_position = self.page.evaluate("""
+                        match_y_position = await self.page.evaluate("""
                             (element) => {
                                 const rect = element.getBoundingClientRect();
                                 return rect.top;
                             }
                         """, card)
-                        
-                        # Use the lookup function to get the tournament name
-                        tournament_name = get_tournament_for_position(card_position)
-                        logger.info(f"Match card {match_idx+1} at position {card_position} belongs to tournament: {tournament_name}")
+                        event_name, draw_name = get_event_for_position(match_y_position)
+                        logger.info(f"Match card {match_idx+1} at position {match_y_position} belongs to event: {event_name} (Draw: {draw_name})")
                     except Exception as e:
-                        logger.warning(f"Error determining tournament for match {match_idx+1}: {e}")
-                        
-                        # Fallback to standard tournament extraction
-                        tournament_name = None
-                        try:
-                            # Try card-specific tournament info
-                            tournament_elem = card.query_selector('[class*="tournament"], div.tournament, [class*="eventName"]')
-                            if tournament_elem:
-                                tournament_name = tournament_elem.inner_text().strip()
-                            
-                            # If still no valid tournament name, use the match date as a fallback
-                            if not tournament_name or (player_name and tournament_name == player_name):
-                                if match_date:
-                                    tournament_name = f"Tournament on {match_date}"
-                                else:
-                                    tournament_name = "Unknown Tournament"
-                                logger.warning(f"Could not determine tournament name, using fallback: {tournament_name}")
-                        except Exception as e:
-                            logger.warning(f"Error extracting tournament name: {e}")
-                            tournament_name = "Unknown Tournament"
-                    
+                        logger.warning(f"Error determining event for match {match_idx+1}: {e}")
+                        event_name = "Unknown Tournament"
+                        draw_name = "Unknown Draw"
+
                     # Determine tournament type based on name
                     tournament_type = "Regular"
-                    
                     # Check for exhibition tournaments
                     exhibition_terms = ['exhibition', 'laver cup', 'show match', 'charity']
                     for term in exhibition_terms:
-                        if term.lower() in tournament_name.lower():
+                        if term.lower() in event_name.lower():
                             tournament_type = "Exhibition"
                             break
-                    
+
                     # Determine if exhibition match
                     is_exhibition = tournament_type == "Exhibition"
                     if is_exhibition:
                         logger.info(f"Match {match_idx+1} is an exhibition match")
-                    
+
                     # Look for player and opponent elements in the card
-                    teams = card.query_selector_all('.team, .team.aic, [class*="team"], div.players')
+                    teams = await card.query_selector_all('.team, .team.aic, [class*="team"], div.players')
                     
                     if not teams or len(teams) < 2:
                         # Try more generic approach to find player elements
                         try:
                             # Find all names in the card
-                            name_elems = card.query_selector_all('[class*="name"], .player-name, div.name')
+                            name_elems = await card.query_selector_all('[class*="name"], .player-name, div.name')
                             if len(name_elems) >= 2:
                                 # Create two team elements from the names
                                 player_team = name_elems[0]
@@ -1680,7 +1743,7 @@ class UTRScraper:
                     
                     for team in teams:
                         try:
-                            player_link = team.query_selector(f'a[href*="{player_id}"]')
+                            player_link = await team.query_selector(f'a[href*="{player_id}"]')
                             if player_link:
                                 player_team = team
                             else:
@@ -1700,12 +1763,14 @@ class UTRScraper:
                     # Extract player info
                     extracted_player_name = None
                     try:
-                        player_name_elem = player_team.query_selector('.player-name, [class*="player-name"], [class*="name"], div.name')
+                        player_name_elem = await player_team.query_selector('.player-name, [class*="player-name"], [class*="name"], div.name')
                         if player_name_elem:
-                            extracted_player_name = player_name_elem.inner_text().strip()
+                            extracted_player_name = await player_name_elem.inner_text()
+                            extracted_player_name = extracted_player_name.strip()
                         else:
                             # Try whole team text if no name element found
-                            extracted_player_name = player_team.inner_text().strip().split('\n')[0]
+                            extracted_player_name = await player_team.inner_text()
+                            extracted_player_name = extracted_player_name.strip().split('\n')[0]
                             
                         # If we still don't have a player name, use the global name
                         if not extracted_player_name and player_name:
@@ -1716,9 +1781,10 @@ class UTRScraper:
                     
                     player_utr = None
                     try:
-                        player_utr_elem = player_team.query_selector('.utr, [class*="utr"], [class*="rating"]')
+                        player_utr_elem = await player_team.query_selector('.utr, [class*="utr"], [class*="rating"]')
                         if player_utr_elem:
-                            utr_text = player_utr_elem.inner_text().strip()
+                            utr_text = await player_utr_elem.inner_text()
+                            utr_text = utr_text.strip()
                             # Handle "UR" case
                             if utr_text == "UR":
                                 player_utr = "UR"
@@ -1732,9 +1798,9 @@ class UTRScraper:
                     # Extract opponent info
                     opponent_id = None
                     try:
-                        opponent_link_elem = opponent_team.query_selector('a[href*="profiles"]')
+                        opponent_link_elem = await opponent_team.query_selector('a[href*="profiles"]')
                         if opponent_link_elem:
-                            href = opponent_link_elem.get_attribute('href')
+                            href = await opponent_link_elem.get_attribute('href')
                             id_match = re.search(r'/profiles/(\d+)', href)
                             if id_match:
                                 opponent_id = id_match.group(1)
@@ -1743,21 +1809,24 @@ class UTRScraper:
                     
                     opponent_name = None
                     try:
-                        opponent_name_elem = opponent_team.query_selector('.player-name, [class*="player-name"], [class*="name"], div.name')
+                        opponent_name_elem = await opponent_team.query_selector('.player-name, [class*="player-name"], [class*="name"], div.name')
                         if opponent_name_elem:
-                            opponent_name = opponent_name_elem.inner_text().strip()
+                            opponent_name = await opponent_name_elem.inner_text()
+                            opponent_name = opponent_name.strip()
                         else:
                             # Try whole team text if no name element found
-                            opponent_name = opponent_team.inner_text().strip().split('\n')[0]
+                            opponent_name = await opponent_team.inner_text()
+                            opponent_name = opponent_name.strip().split('\n')[0]
                     except Exception as e:
                         logger.warning(f"Error extracting opponent name: {e}")
                         opponent_name = "Unknown"
                     
                     opponent_utr = None
                     try:
-                        opponent_utr_elem = opponent_team.query_selector('.utr, [class*="utr"], [class*="rating"]')
+                        opponent_utr_elem = await opponent_team.query_selector('.utr, [class*="utr"], [class*="rating"]')
                         if opponent_utr_elem:
-                            utr_text = opponent_utr_elem.inner_text().strip()
+                            utr_text = await opponent_utr_elem.inner_text()
+                            utr_text = utr_text.strip()
                             # Handle "UR" case
                             if utr_text == "UR":
                                 opponent_utr = "UR"
@@ -1776,8 +1845,8 @@ class UTRScraper:
 
                     try:
                         # Find score elements
-                        player_score_elems = player_team.query_selector_all('.score-item, [class*="score-item"]')
-                        opponent_score_elems = opponent_team.query_selector_all('.score-item, [class*="score-item"]')
+                        player_score_elems = await player_team.query_selector_all('.score-item, [class*="score-item"]')
+                        opponent_score_elems = await opponent_team.query_selector_all('.score-item, [class*="score-item"]')
                         
                         logger.info(f"Found {len(player_score_elems)} player score elements and {len(opponent_score_elems)} opponent score elements")
                         
@@ -1785,13 +1854,15 @@ class UTRScraper:
                         for i in range(min(len(player_score_elems), len(opponent_score_elems))):
                             try:
                                 # Get player score
-                                p_raw = player_score_elems[i].inner_text().strip().replace('\n', '')
+                                p_raw = await player_score_elems[i].inner_text()
+                                p_raw = p_raw.strip().replace('\n', '')
                                 logger.debug(f"Raw player score text: '{p_raw}'")
                                 p_score = self.handle_superscript(p_raw)
                                 logger.debug(f"Processed player score: '{p_score}'")
                                 
                                 # Get opponent score
-                                o_raw = opponent_score_elems[i].inner_text().strip().replace('\n', '')
+                                o_raw = await opponent_score_elems[i].inner_text()
+                                o_raw = o_raw.strip().replace('\n', '')
                                 logger.debug(f"Raw opponent score text: '{o_raw}'")
                                 o_score = self.handle_superscript(o_raw)
                                 logger.debug(f"Processed opponent score: '{o_score}'")
@@ -1852,18 +1923,21 @@ class UTRScraper:
                                 # Dump all score element contents for debugging
                                 logger.debug("DEBUG: All player score element contents:")
                                 for i, elem in enumerate(player_score_elems):
-                                    logger.debug(f"  Player score elem {i}: '{elem.inner_text().strip()}'")
+                                    content = await elem.inner_text()
+                                    logger.debug(f"  Player score elem {i}: '{content.strip()}'")
                                 
                                 logger.debug("DEBUG: All opponent score element contents:")
                                 for i, elem in enumerate(opponent_score_elems):
-                                    logger.debug(f"  Opponent score elem {i}: '{elem.inner_text().strip()}'")
+                                    content = await elem.inner_text()
+                                    logger.debug(f"  Opponent score elem {i}: '{content.strip()}'")
                                 
                                 # Extract direct numeric values from score elements
                                 p_direct_scores = []
                                 o_direct_scores = []
                                 
                                 for elem in player_score_elems:
-                                    text = elem.inner_text().strip()
+                                    text = await elem.inner_text()
+                                    text = text.strip()
                                     logger.debug(f"Checking player elem text: '{text}'")
                                     # Only add if it's a numeric value
                                     if re.match(r'^\d+$', text):
@@ -1871,7 +1945,8 @@ class UTRScraper:
                                         logger.debug(f"Added numeric player score: {text}")
                                 
                                 for elem in opponent_score_elems:
-                                    text = elem.inner_text().strip()
+                                    text = await elem.inner_text()
+                                    text = text.strip()
                                     logger.debug(f"Checking opponent elem text: '{text}'")
                                     # Only add if it's a numeric value
                                     if re.match(r'^\d+$', text):
@@ -1902,7 +1977,7 @@ class UTRScraper:
                                 
                                 # Try to extract any score-like pattern from the card text
                                 try:
-                                    card_text = card.inner_text()
+                                    card_text = await card.inner_text()
                                     logger.debug(f"Card text for score extraction: '{card_text[:300]}...'")  # Log first 300 chars
                                     score_patterns = re.findall(r'(\d+)[-/](\d+)', card_text)
                                     logger.debug(f"Found score patterns: {score_patterns}")
@@ -1951,14 +2026,13 @@ class UTRScraper:
                                 for i, month in enumerate(month_abbrs, 1):
                                     cleaned_score = re.sub(f"{month}-", f"{i}-", cleaned_score)
                                 logger.warning(f"Pre-storage conversion: '{original_cleaned}' -> '{cleaned_score}'")
-                        
+                    
                     except Exception as e:
                         logger.error(f"Error extracting scores: {e}")
-                        cleaned_score = ""                    
+                        cleaned_score = ""
 
                     # Final improved winner determination logic
                     is_winner = False
-
                     try:
                         # Try different selector variations to capture the winning-scores element
                         winning_scores_selectors = [
@@ -1977,8 +2051,8 @@ class UTRScraper:
                         
                         # Try each selector until we find a match
                         for selector in winning_scores_selectors:
-                            player_winning = player_team.query_selector(selector)
-                            opponent_winning = opponent_team.query_selector(selector)
+                            player_winning = await player_team.query_selector(selector)
+                            opponent_winning = await opponent_team.query_selector(selector)
                             
                             if player_winning:
                                 player_has_winning = True
@@ -2008,8 +2082,8 @@ class UTRScraper:
                             """
                             
                             try:
-                                player_has_winning = self.page.evaluate(js_check, player_team)
-                                opponent_has_winning = self.page.evaluate(js_check, opponent_team)
+                                player_has_winning = await self.page.evaluate(js_check, player_team)
+                                opponent_has_winning = await self.page.evaluate(js_check, opponent_team)
                                 
                                 if player_has_winning or opponent_has_winning:
                                     logger.info(f"Match {match_idx+1}: Found winning indicator using JavaScript approach")
@@ -2080,14 +2154,15 @@ class UTRScraper:
                         "player_utr_displayed": player_utr,
                         "date": match_date,
                         "time": match_time,
-                        "tournament": tournament_name,
+                        "tournament": event_name,
+                        "draw": draw_name,  # New field for the draw name
                         "tournament_type": tournament_type,
                         "round": match_round,
                         "opponent_name": opponent_name,
                         "opponent_id": opponent_id,
                         "opponent_utr_displayed": opponent_utr,
                         "score": cleaned_score,
-                        "raw_score": raw_score if raw_score else formatted_score,
+                        "raw_score": raw_score if raw_score else cleaned_score,
                         "result": result,
                         "retired": retired,  
                         "is_exhibition": is_exhibition
@@ -2095,11 +2170,11 @@ class UTRScraper:
                     
                     matches.append(match_info)
                     logger.info(f"Processed match {match_idx+1}: {extracted_player_name} vs {opponent_name}")
-                    
+                
                 except Exception as e:
                     logger.error(f"Error processing match {match_idx+1}: {e}")
                     continue
-            
+
             # Create DataFrame and save
             if matches:
                 df = pd.DataFrame(matches)
@@ -2110,7 +2185,7 @@ class UTRScraper:
                     df = df.sort_values('date', na_position='last')  # Sort by date, putting NaN dates last
                 
                 # If a specific year was requested, filter for that year
-                year_specific_df = None
+                year_specific_df = pd.DataFrame()  # Initialize to avoid reference error
                 if year and not df.empty and 'date' in df.columns:
                     year_int = int(year)
                     year_specific_df = df[df['date'].dt.year == year_int].copy()
@@ -2127,8 +2202,6 @@ class UTRScraper:
                             return score
                         
                         # Add a single quote prefix to force Excel to treat as text
-                        # This is a special Excel formatting character that tells Excel to interpret as text
-                        # It won't be visible in the cell but prevents automatic date conversion
                         return "'" + score
                     
                     # Apply the fix to all scores
@@ -2136,7 +2209,7 @@ class UTRScraper:
                     logger.info("Added Excel text format prefix to all scores to prevent date conversion")
 
                 # Save the year-specific file if a year was requested
-                if year and year_specific_df is not None:
+                if year and not year_specific_df.empty:
                     year_file = self.matches_dir / f"player_{player_id}_matches_{year}.csv"
                     year_specific_df.to_csv(year_file, index=False)
                     logger.info(f"Saved {len(year_specific_df)} matches for player {player_id} in year {year}")
@@ -2176,149 +2249,27 @@ class UTRScraper:
                 # Save combined data to main file
                 df.to_csv(main_file, index=False)
                 logger.info(f"Saved {len(df)} total matches to main file for player {player_id}")
-                
+
             # Return the correct dataset based on what was requested
-            if year and year_specific_df is not None:
-                logger.info(f"Returning {len(year_specific_df)} matches for year {year}")
-                return year_specific_df
+            if year:
+                if not year_specific_df.empty:
+                    logger.info(f"Returning {len(year_specific_df)} matches for year {year}")
+                    return year_specific_df
+                else:
+                    logger.info(f"No matches found for year {year}")
+                    return pd.DataFrame()
             else:
                 return df
         except Exception as e:
             logger.error(f"Error getting match history for player {player_id}: {e}")
             try:
-                self.page.screenshot(path=f"match_history_error_{player_id}.png")
+                await self.page.screenshot(path=f"match_history_error_{player_id}.png")
             except Exception as screenshot_error:
                 logger.error(f"Failed to take error screenshot: {screenshot_error}")
             return pd.DataFrame()
+                       
 
-    
-    def get_top_players(self, gender="men", limit=100, max_retries=3):
-        """
-        Get top players from UTR rankings with retry logic
-        
-        Parameters:
-        gender (str): 'men' or 'women'
-        limit (int): Maximum number of players to retrieve
-        max_retries (int): Maximum number of retry attempts
-        
-        Returns:
-        DataFrame: Top players with IDs and UTR ratings
-        """
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Getting top {limit} {gender}'s players (attempt {attempt+1}/{max_retries})")
-                
-                # Navigate to rankings page
-                if gender.lower() == "men":
-                    rankings_url = "https://www.utrsports.net/pages/pro-utr-men-tennis-rankings"
-                else:
-                    rankings_url = "https://www.utrsports.net/pages/pro-utr-women-tennis-rankings"
-                    
-                self.page.goto(rankings_url)
-                
-                # Handle cookie consent if present
-                try:
-                    cookie_button = self.page.query_selector('button[data-testid="onetrust-accept-btn-handler"]')
-                    if cookie_button:
-                        logger.info("Accepting cookies")
-                        cookie_button.click()
-                        time.sleep(1)
-                except Exception as e:
-                    logger.warning(f"Error handling cookie consent: {e}")
-                
-                # Take a screenshot to verify what we're seeing
-                self.page.screenshot(path="rankings_page.png")
-                
-                # Wait for the table to load
-                self.page.wait_for_selector('table', state="visible", timeout=30000)
-                
-                # Extract player data from the table rows
-                players = []
-                
-                # Get all table rows (skip the header row)
-                rows = self.page.query_selector_all('table tbody tr')
-                logger.info(f"Found {len(rows)} player rows")
-                
-                if len(rows) == 0:
-                    logger.warning(f"No player rows found on attempt {attempt+1}, retrying...")
-                    time.sleep(5)  # Wait before retrying
-                    continue  # Try again
-                
-                for i, row in enumerate(rows):
-                    if i >= limit:
-                        break
-                        
-                    try:
-                        # Get cells in this row
-                        cells = row.query_selector_all('td')
-                        
-                        if len(cells) >= 5:
-                            # Extract rank
-                            rank_cell = cells[0]
-                            rank = int(rank_cell.inner_text().strip())
-                            
-                            # Extract player name
-                            name_cell = cells[1]
-                            name_link = name_cell.query_selector('a')
-                            
-                            if name_link:
-                                name = name_link.inner_text().strip()
-                                href = name_link.get_attribute('href')
-                                
-                                # Extract player ID from href
-                                player_id = None
-                                if href:
-                                    id_match = re.search(r"profiles/(\d+)", href)
-                                    if id_match:
-                                        player_id = id_match.group(1)
-                            else:
-                                name = name_cell.inner_text().strip()
-                                player_id = None
-                            
-                            # Extract UTR rating
-                            utr_cell = cells[-1]
-                            utr = float(utr_cell.inner_text().strip())
-                            
-                            players.append({
-                                "rank": rank,
-                                "name": name,
-                                "utr": utr,
-                                "id": player_id,
-                                "gender": gender
-                            })
-                            
-                            logger.info(f"Added player: Rank {rank} - {name} (UTR: {utr})")
-                        
-                    except Exception as e:
-                        logger.error(f"Error extracting player data from row {i}: {e}")
-                        continue
-                
-                # If we successfully extracted players, return the DataFrame
-                if players:
-                    # Create DataFrame
-                    df = pd.DataFrame(players)
-                    
-                    # Save as CSV
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-                    csv_file = self.data_dir / f"{gender}_utr_rankings_{timestamp}.csv"
-                    df.to_csv(csv_file, index=False)
-                    
-                    logger.info(f"Saved {len(players)} {gender}'s players to {csv_file}")
-                    return df
-                else:
-                    logger.warning(f"No players extracted on attempt {attempt+1}, retrying...")
-                    time.sleep(5)  # Wait before retrying
-            
-            except Exception as e:
-                logger.error(f"Error getting top {gender}'s players (attempt {attempt+1}): {e}")
-                self.page.screenshot(path=f"top_players_error_{gender}_{attempt+1}.png")
-                time.sleep(5)  # Wait before retrying
-        
-        # If we reach here, all attempts failed
-        logger.error(f"Failed to get top {gender}'s players after {max_retries} attempts")
-        return pd.DataFrame()
-
-    def search_and_get_player_by_name(self, name):
+    async def search_and_get_player_by_name(self, name):
         """
         Search for a player by name and navigate to their profile
         
@@ -2332,76 +2283,76 @@ class UTRScraper:
             logger.info(f"Searching for player: {name}")
             
             # Go to the app domain home page
-            self.page.goto("https://app.utrsports.net/home")
+            await self.page.goto("https://app.utrsports.net/home")
             
             # Check for and click "CONTINUE" button if present
             try:
                 logger.info("Checking for CONTINUE button...")
-                continue_button = self.page.query_selector('button:has-text("CONTINUE")')
+                continue_button = await self.page.query_selector('button:has-text("CONTINUE")')
                 if continue_button:
                     logger.info("Clicking CONTINUE button")
-                    continue_button.click()
-                    time.sleep(2)
+                    await continue_button.click()
+                    await asyncio.sleep(2)
             except Exception as e:
                 logger.warning(f"Error handling CONTINUE button: {e}")
             
             # Handle cookie consent if present
             try:
-                cookie_button = self.page.query_selector('button[data-testid="onetrust-accept-btn-handler"]')
+                cookie_button = await self.page.query_selector('button[data-testid="onetrust-accept-btn-handler"]')
                 if cookie_button:
                     logger.info("Accepting cookies")
-                    cookie_button.click()
-                    time.sleep(1)
+                    await cookie_button.click()
+                    await asyncio.sleep(1)
             except Exception as e:
                 logger.warning(f"Error handling cookie consent: {e}")
             
             # Take a screenshot to see current state
-            self.page.screenshot(path="home_page.png")
+            await self.page.screenshot(path="home_page.png")
             
             # Click on the search icon/input
             logger.info("Clicking search icon")
-            search_input = self.page.query_selector('input[placeholder="Search"]')
+            search_input = await self.page.query_selector('input[placeholder="Search"]')
             if search_input:
-                search_input.click()
+                await search_input.click()
             else:
                 logger.error("Could not find search input")
                 return None
             
             # Wait for dropdown to appear
-            time.sleep(2)
+            await asyncio.sleep(2)
             
             # Click on "Players" option
-            players_option = self.page.query_selector('div:has-text("Players")')
+            players_option = await self.page.query_selector('div:has-text("Players")')
             if players_option:
                 logger.info("Clicking Players option")
-                players_option.click()
+                await players_option.click()
             else:
                 logger.error("Could not find Players option in dropdown")
                 return None
             
             # Wait for search page to load
-            time.sleep(2)
+            await asyncio.sleep(2)
             
             # Fill player name in search
-            search_input = self.page.query_selector('input[placeholder="Search"]')
+            search_input = await self.page.query_selector('input[placeholder="Search"]')
             if search_input:
                 logger.info(f"Entering player name: {name}")
-                search_input.fill(name)
+                await search_input.fill(name)
             else:
                 logger.error("Could not find search input on search page")
                 return None
             
             # Wait for search results
-            time.sleep(3)
+            await asyncio.sleep(3)
             
             # Click on player in results
-            player_element = self.page.query_selector(f'span:text("{name}")')
+            player_element = await self.page.query_selector(f'span:text("{name}")')
             if player_element:
                 logger.info(f"Found player: {name}")
-                player_element.click()
+                await player_element.click()
                 
                 # Wait for profile to load
-                time.sleep(3)
+                await asyncio.sleep(3)
                 
                 # Extract player ID from URL
                 current_url = self.page.url
@@ -2416,10 +2367,10 @@ class UTRScraper:
             
         except Exception as e:
             logger.error(f"Error searching for player {name}: {e}")
-            self.page.screenshot(path=f"search_error_{name.replace(' ', '_')}.png")
+            await self.page.screenshot(path=f"search_error_{name.replace(' ', '_')}.png")
             return None
     
-    def collect_top_players_data(self, gender="men", limit=100, player_limit=None, include_matches=True, include_ratings=True, years=None, utr_threshold=1.0, dynamic_years=False):
+    async def collect_top_players_data(self, gender="men", limit=100, player_limit=None, include_matches=True, include_ratings=True, years=None, utr_threshold=1.0, dynamic_years=False):
         """
         Collect comprehensive data for top players and their opponents
         
@@ -2436,7 +2387,6 @@ class UTRScraper:
         Returns:
         DataFrame: Top players with IDs and UTR ratings
         """
-
         # Set default years if none provided
         if years is None:
             years = ["2025", "2024", "2023", "2022"]
@@ -2471,29 +2421,29 @@ class UTRScraper:
             
             try:
                 # Get profile data
-                profile = self.get_player_profile(player_id)
+                profile = await self.get_player_profile(player_id)
 
                 # If dynamic_years is enabled, try to get all available years for this player
                 player_years = years
                 if dynamic_years:
-                    player_years = self.get_available_years(player_id)
+                    player_years = await self.get_available_years(player_id)
                     if not player_years:  # Fallback if no years found
                         player_years = years
                     logger.info(f"Using years for {name}: {', '.join(player_years)}")
                 
                 # Add random delay between players to avoid rate limiting
-                time.sleep(random.uniform(1.0, 3.0))
+                await asyncio.sleep(random.uniform(1.0, 3.0))
                 
                 # Get rating history if requested
                 if include_ratings:
                     try:
-                        ratings = self.get_player_rating_history(player_id)
+                        ratings = await self.get_player_rating_history(player_id)
                         logger.info(f"Retrieved {len(ratings)} rating history entries for {name}")
                     except Exception as e:
                         logger.error(f"Error getting rating history for {name}: {e}")
                     
                     # Add random delay
-                    time.sleep(random.uniform(1.0, 2.0))
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
                 
                 # Get match history if requested
                 if include_matches:
@@ -2501,7 +2451,7 @@ class UTRScraper:
                     for year in player_years:
                         try:
                             logger.info(f"Getting matches for {name} - Year {year}")
-                            matches = self.get_player_match_history(player_id, year=year, limit=100)
+                            matches = await self.get_player_match_history(player_id, year=year, limit=100)
                             
                             # Collect opponent IDs from matches
                             if not matches.empty and 'opponent_id' in matches.columns:
@@ -2523,10 +2473,10 @@ class UTRScraper:
                             logger.error(f"Error getting matches for {name} in {year}: {e}")
                         
                         # Add random delay between years
-                        time.sleep(random.uniform(2.0, 3.0))
+                        await asyncio.sleep(random.uniform(2.0, 3.0))
                     
                     # Add random delay between players
-                    time.sleep(random.uniform(2.0, 4.0))
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
             except Exception as e:
                 logger.error(f"Error processing player {name} ({player_id}): {e}")
         
@@ -2551,7 +2501,7 @@ class UTRScraper:
                 logger.info(f"Getting profile for opponent ID: {opponent_id} ({opponent_count+1}/{len(all_opponent_ids)})")
                 
                 try:
-                    opponent_profile = self.get_player_profile(opponent_id)
+                    opponent_profile = await self.get_player_profile(opponent_id)
                     opponent_name = opponent_profile['name'] if opponent_profile else f"Opponent {opponent_id}"
                     opponent_utr = opponent_profile.get('current_utr') if opponent_profile else None
                 except Exception as e:
@@ -2572,12 +2522,12 @@ class UTRScraper:
                         json.dump(blank_profile, f, indent=2)
                 
                 # Add random delay
-                time.sleep(random.uniform(1.0, 2.0))
+                await asyncio.sleep(random.uniform(1.0, 2.0))
                 
                 # Get opponent rating history
                 try:
                     logger.info(f"Getting rating history for opponent: {opponent_name} ({opponent_id})")
-                    opponent_ratings = self.get_player_rating_history(opponent_id)
+                    opponent_ratings = await self.get_player_rating_history(opponent_id)
                     logger.info(f"Retrieved {len(opponent_ratings)} rating history entries for {opponent_name}")
                 except Exception as e:
                     logger.error(f"Error getting rating history for opponent {opponent_name}: {e}")
@@ -2593,7 +2543,7 @@ class UTRScraper:
                     # If dynamic_years, try to get all available years for this opponent
                     opponent_years = years
                     if dynamic_years:
-                        opponent_years = self.get_available_years(opponent_id)
+                        opponent_years = await self.get_available_years(opponent_id)
                         if not opponent_years:  # Fallback if no years found
                             opponent_years = years
                         logger.info(f"Using years for opponent {opponent_name}: {', '.join(opponent_years)}")
@@ -2601,7 +2551,7 @@ class UTRScraper:
                     for year in opponent_years:
                         try:
                             logger.info(f"Getting matches for {opponent_name} - Year {year}")
-                            opponent_matches = self.get_player_match_history(opponent_id, year=year, limit=50)
+                            opponent_matches = await self.get_player_match_history(opponent_id, year=year, limit=50)
                             
                             # Collect second-degree opponents
                             if not opponent_matches.empty and 'opponent_id' in opponent_matches.columns:
@@ -2616,10 +2566,10 @@ class UTRScraper:
                             logger.error(f"Error getting matches for {opponent_name} in {year}: {e}")
                         
                         # Add random delay between years
-                        time.sleep(random.uniform(1.0, 2.0))
+                        await asyncio.sleep(random.uniform(1.0, 2.0))
                 
                 # Add random delay between opponents
-                time.sleep(random.uniform(2.0, 3.0))
+                await asyncio.sleep(random.uniform(2.0, 3.0))
                 opponent_count += 1
                 
                 # Restart browser every 20 opponents to prevent memory issues
@@ -2647,26 +2597,26 @@ class UTRScraper:
                     continue
                 
                 # Get profile and rating history
-                profile = self.get_player_profile(opponent_id)
+                profile = await self.get_player_profile(opponent_id)
                 name = profile['name'] if profile else f"Second-Degree Opponent {opponent_id}"
                 logger.info(f"Getting rating history for second-degree opponent: {name} ({opponent_id})")
                 
-                ratings = self.get_player_rating_history(opponent_id)
+                ratings = await self.get_player_rating_history(opponent_id)
                 logger.info(f"Retrieved {len(ratings)} rating history entries for {name}")
                 
                 second_degree_count += 1
                 
                 # Add delay
-                time.sleep(random.uniform(1.0, 2.0))
+                await asyncio.sleep(random.uniform(1.0, 2.0))
                 
                 # Restart browser periodically
                 if second_degree_count % 20 == 0:
                     logger.info(f"Processed {second_degree_count} second-degree opponents, restarting browser")
-                    self.close_browser()
-                    time.sleep(2)
-                    self.start_browser()
-                    self.login()
-                    time.sleep(2)
+                    await self.close_browser()
+                    await asyncio.sleep(2)
+                    await self.start_browser()
+                    await self.login()
+                    await asyncio.sleep(2)
                     
             except Exception as e:
                 logger.error(f"Error processing second-degree opponent {opponent_id}: {e}")
@@ -2678,7 +2628,7 @@ class UTRScraper:
         # Run cross-reference to match UTRs with match dates
         logger.info("Running cross-reference to match UTRs with match dates")
         try:
-            valid_matches = self.cross_reference_matches_with_ratings()
+            valid_matches = await self.cross_reference_matches_with_ratings()
             logger.info(f"Cross-reference complete with {len(valid_matches)} valid matches")
         except Exception as e:
             logger.error(f"Error during cross-reference: {e}")
@@ -2700,24 +2650,26 @@ class UTRScraper:
         if not score_text:
             return ""
         
-        # Skip non-score texts that might be dates or "Mar-00" type values
         if re.search(r'[A-Za-z]', score_text) and not re.search(r'ret', score_text, re.IGNORECASE):
             return score_text
         
-        # Strip non-score text that might be mixed in
         score_text = re.sub(r'[A-Za-z\.]+', '', score_text)
         
-        # Handle tiebreak pattern like 77-64 (should be 7-6(4)) or 64-77 (should be 6-7(4))
         tb_sets = []
         for set_text in score_text.split():
-            # Look for XX-YY pattern where X and Y are single digits
-            tb_pattern = re.match(r'(\d)(\d)-(\d)(\d)', set_text)
+            tb_pattern = re.match(r'(\d)(\d+)-(\d)(\d+)', set_text)
             if tb_pattern:
-                p1_game, p1_tb, p2_game, p2_tb = tb_pattern.groups()
-                # Check if it's a tiebreak scenario
-                if p1_game == '7' and p2_game == '6':
+                p1_game, p1_tb_digits, p2_game, p2_tb_digits = tb_pattern.groups()
+                p1_game, p2_game = int(p1_game), int(p2_game)
+                p1_tb = int(p1_tb_digits)
+                p2_tb = int(p2_tb_digits)
+                print(f"Matched pattern: p1_game={p1_game}, p2_game={p2_game}, p1_tb={p1_tb}, p2_tb={p2_tb}")
+                
+                if p1_game == 7 and p2_game == 6:
+                    print(f"Tiebreak detected: 7-6, winner's tiebreak={p1_tb}, loser's tiebreak={p2_tb}")
                     tb_sets.append(f"7-6({p2_tb})")
-                elif p1_game == '6' and p2_game == '7':
+                elif p1_game == 6 and p2_game == 7:
+                    print(f"Tiebreak detected: 6-7, winner's tiebreak={p2_tb}, loser's tiebreak={p1_tb}")
                     tb_sets.append(f"6-7({p1_tb})")
                 else:
                     tb_sets.append(f"{p1_game}-{p2_game}")
@@ -2727,41 +2679,44 @@ class UTRScraper:
         if tb_sets:
             return " ".join(tb_sets)
         
-        # If we reach here, use the existing pattern handling
-        # Rest of your existing clean_tennis_score function...
-        # Handle concatenated scores like "6366-7740"
-        concat_match = re.search(r'(\d{4,})[-](\d{4,})', score_text)
+        # Handle concatenated scores like "6366-7740" or "63710-6825"
+        concat_match = re.search(r'(\d+)-(\d+)', score_text)
         if concat_match:
-            # Your existing code for this case...
             p1_raw = concat_match.group(1)
             p2_raw = concat_match.group(2)
-            
-            if len(p1_raw) == len(p2_raw) and len(p1_raw) % 2 == 0:
-                new_sets = []
-                for i in range(0, len(p1_raw), 2):
-                    if i+1 < len(p1_raw):
-                        p1_set = p1_raw[i:i+2]
-                        p2_set = p2_raw[i:i+2]
-                        
-                        # Parse first digit of each as the game score
-                        p1_game = p1_set[0]
-                        p2_game = p2_set[0]
-                        p1_tb = p1_set[1]
-                        p2_tb = p2_set[1]
-                        
-                        # Detect tiebreak based on game scores
-                        if p1_game == '6' and p2_game == '7':
-                            # Second player won tiebreak
-                            new_sets.append(f"6-7({p1_tb})")
-                        elif p1_game == '7' and p2_game == '6':
-                            # First player won tiebreak
-                            new_sets.append(f"7-6({p2_tb})")
-                        else:
-                            # Regular set
-                            new_sets.append(f"{p1_game}-{p2_game}")
-                
-                if new_sets:
-                    return " ".join(new_sets)
+            min_length = min(len(p1_raw), len(p2_raw))
+            new_sets = []
+            i = 0
+            while i < min_length:
+                if i + 1 < min_length:
+                    p1_game = p1_raw[i]
+                    p2_game = p2_raw[i]
+                    # Find the end of the tiebreak digits (next set score or end)
+                    p1_tb_start = i + 1
+                    p2_tb_start = i + 1
+                    p1_tb_end = p1_tb_start
+                    p2_tb_end = p2_tb_start
+                    # Cap tiebreak length to the next set score or min length
+                    while p1_tb_end < len(p1_raw) and p2_tb_end < len(p2_raw) and \
+                        p1_tb_end < min_length and p2_tb_end < min_length and \
+                        p1_raw[p1_tb_end].isdigit() and p2_raw[p2_tb_end].isdigit():
+                        p1_tb_end += 1
+                        p2_tb_end += 1
+                    p1_tb = p1_raw[p1_tb_start:p1_tb_end] if p1_tb_start < p1_tb_end else '0'
+                    p2_tb = p2_raw[p2_tb_start:p2_tb_end] if p2_tb_start < p2_tb_end else '0'
+                    print(f"Concat match: p1_game={p1_game}, p2_game={p2_game}, p1_tb={p1_tb}, p2_tb={p2_tb}")
+                    
+                    if p1_game == '6' and p2_game == '7':
+                        new_sets.append(f"6-7({p1_tb})")
+                    elif p1_game == '7' and p2_game == '6':
+                        new_sets.append(f"7-6({p2_tb})")
+                    else:
+                        new_sets.append(f"{p1_game}-{p2_game}")
+                    i = p1_tb_end
+                else:
+                    break
+            if new_sets:
+                return " ".join(new_sets)
         
         # Look for standard set patterns like "6-4 7-6(5)"
         sets = []
@@ -2787,12 +2742,11 @@ class UTRScraper:
         cleaned = re.sub(r'[^0-9\-\(\) ]', ' ', score_text)
         return re.sub(r'\s+', ' ', cleaned).strip()
     
-    def get_available_years(scraper, player_id):
+    async def get_available_years(self, player_id):
         """
         Determine all available years of match data for a player
         
         Parameters:
-        scraper: UTRScraper instance
         player_id: Player's UTR ID
         
         Returns:
@@ -2805,15 +2759,15 @@ class UTRScraper:
             profile_url = f"https://app.utrsports.net/profiles/{player_id}?t=2"
             
             try:
-                scraper.page.goto(profile_url, timeout=20000)
+                await self.page.goto(profile_url, timeout=20000)
             except Exception as e:
                 print(f"Error navigating to player page: {e}")
                 return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback to default years
             
             # Wait for the page to load
             try:
-                scraper.page.wait_for_selector('h1', state="visible", timeout=15000)
-                time.sleep(3)  # Extra wait for content to load
+                await self.page.wait_for_selector('h1', state="visible", timeout=15000)
+                await asyncio.sleep(3)  # Extra wait for content to load
             except Exception as e:
                 print(f"Error waiting for page content: {e}")
                 return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback to default years
@@ -2830,13 +2784,13 @@ class UTRScraper:
                 
                 latest_button = None
                 for selector in latest_selectors:
-                    latest_button = scraper.page.query_selector(selector)
+                    latest_button = await self.page.query_selector(selector)
                     if latest_button:
                         break
                         
                 if latest_button:
-                    latest_button.click()
-                    time.sleep(2)  # Wait for dropdown to appear
+                    await latest_button.click()
+                    await asyncio.sleep(2)  # Wait for dropdown to appear
                     
                     # Use JavaScript to extract all year options
                     years_js = """
@@ -2854,14 +2808,14 @@ class UTRScraper:
                     }
                     """
                     
-                    available_years = scraper.page.evaluate(years_js)
+                    available_years = await self.page.evaluate(years_js)
                     
                     if available_years and len(available_years) > 0:
                         print(f"Found {len(available_years)} available years: {', '.join(available_years)}")
                         return available_years
                 
                 # Click somewhere else to close the dropdown
-                scraper.page.click('h1')
+                await self.page.click('h1')
                 
             except Exception as e:
                 print(f"Error getting available years: {e}")
@@ -2875,411 +2829,415 @@ class UTRScraper:
             return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback years
 
 
-    def cross_reference_matches_with_ratings(self, max_days_diff=30):
-        """
-        Cross-reference match data with rating history to get UTR at match time
-        
-        Parameters:
-        max_days_diff (int): Maximum number of days between rating date and match date
-        
-        Returns:
-        DataFrame: Enhanced match data with UTR at match time
-        """
-        logger.info(f"Cross-referencing match data with rating history (max {max_days_diff} days difference)")
-        
-        # Wait briefly to ensure all files are fully written
-        time.sleep(2)
-        
-        # Get all match files
-        match_files = list(self.matches_dir.glob("player_*_matches.csv"))
-        logger.info(f"Found {len(match_files)} match files to process")
-        
-        # Extract all unique player IDs (including both players and opponents)
-        all_player_ids = set()
-        opponent_ids = set()
-        matches_by_player = {}  # To track which matches contain each player
-        
-        # First, collect all unique player IDs and track match importance
-        for match_file in match_files:
-            try:
-                player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
-                if player_id_match:
-                    player_id = player_id_match.group(1)
-                    all_player_ids.add(player_id)
+async def cross_reference_matches_with_ratings(self, max_days_diff=30):
+    """
+    Cross-reference match data with rating history to get UTR at match time
+    
+    Parameters:
+    max_days_diff (int): Maximum number of days between rating date and match date
+    
+    Returns:
+    DataFrame: Enhanced match data with UTR at match time
+    """
+    logger.info(f"Cross-referencing match data with rating history (max {max_days_diff} days difference)")
+    
+    # Wait briefly to ensure all files are fully written
+    await asyncio.sleep(2)
+    
+    # Get all match files
+    match_files = list(self.matches_dir.glob("player_*_matches.csv"))
+    logger.info(f"Found {len(match_files)} match files to process")
+    
+    # Extract all unique player IDs (including both players and opponents)
+    all_player_ids = set()
+    opponent_ids = set()
+    matches_by_player = {}  # To track which matches contain each player
+    
+    # First, collect all unique player IDs and track match importance
+    for match_file in match_files:
+        try:
+            player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
+            if player_id_match:
+                player_id = player_id_match.group(1)
+                all_player_ids.add(player_id)
+                
+                # Read matches to get opponent IDs
+                if os.path.getsize(match_file) > 0:  # Make sure file isn't empty
+                    matches_df = pd.read_csv(match_file)
                     
-                    # Read matches to get opponent IDs
-                    if os.path.getsize(match_file) > 0:  # Make sure file isn't empty
-                        matches_df = pd.read_csv(match_file)
+                    # Track this player's matches
+                    if player_id not in matches_by_player:
+                        matches_by_player[player_id] = []
+                    
+                    # Add all matches for this player
+                    if not matches_df.empty and 'match_id' in matches_df.columns:
+                        matches_by_player[player_id].extend(matches_df['match_id'].dropna().tolist())
+                    
+                    if not matches_df.empty and 'opponent_id' in matches_df.columns:
+                        file_opponent_ids = matches_df['opponent_id'].dropna().astype(str).unique()
+                        opponent_ids.update(file_opponent_ids)
+                        all_player_ids.update(file_opponent_ids)
                         
-                        # Track this player's matches
-                        if player_id not in matches_by_player:
-                            matches_by_player[player_id] = []
-                        
-                        # Add all matches for this player
-                        if not matches_df.empty and 'match_id' in matches_df.columns:
-                            matches_by_player[player_id].extend(matches_df['match_id'].dropna().tolist())
-                        
-                        if not matches_df.empty and 'opponent_id' in matches_df.columns:
-                            file_opponent_ids = matches_df['opponent_id'].dropna().astype(str).unique()
-                            opponent_ids.update(file_opponent_ids)
-                            all_player_ids.update(file_opponent_ids)
-                            
-                            # Track matches by opponent as well
-                            for opp_id in file_opponent_ids:
-                                opp_matches = matches_df[matches_df['opponent_id'] == opp_id]
-                                if not opp_matches.empty and 'match_id' in opp_matches.columns:
-                                    if opp_id not in matches_by_player:
-                                        matches_by_player[opp_id] = []
-                                    matches_by_player[opp_id].extend(opp_matches['match_id'].dropna().tolist())
+                        # Track matches by opponent as well
+                        for opp_id in file_opponent_ids:
+                            opp_matches = matches_df[matches_df['opponent_id'] == opp_id]
+                            if not opp_matches.empty and 'match_id' in opp_matches.columns:
+                                if opp_id not in matches_by_player:
+                                    matches_by_player[opp_id] = []
+                                matches_by_player[opp_id].extend(opp_matches['match_id'].dropna().tolist())
+        except Exception as e:
+            logger.error(f"Error processing match file {match_file}: {e}")
+    
+    logger.info(f"Found {len(all_player_ids)} unique players to process")
+    logger.info(f"Including {len(opponent_ids)} unique opponents")
+    
+    # Check for missing rating histories and try to get them if needed
+    missing_ratings = []
+    for player_id in all_player_ids:
+        if not player_id or player_id == 'nan':
+            continue
+            
+        rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+        if not rating_file.exists() or os.path.getsize(rating_file) == 0:
+            missing_ratings.append(player_id)
+    
+    if missing_ratings:
+        logger.info(f"Found {len(missing_ratings)} players with missing rating histories")
+        
+        # Sort missing ratings by match importance (higher matches count = more important)
+        def get_match_count(player_id):
+            return len(matches_by_player.get(player_id, []))
+        
+        # Sort by match count (descending) so more important players are processed first
+        missing_ratings.sort(key=get_match_count, reverse=True)
+        
+        for idx, player_id in enumerate(missing_ratings):
+            # Determine importance for retry strategy
+            match_count = get_match_count(player_id)
+            is_important = match_count > 2
+            max_retries = 5 if is_important else 3
+            
+            logger.info(f"Getting missing rating history for {'important ' if is_important else ''}player {idx+1}/{len(missing_ratings)}: {player_id} (matches: {match_count})")
+            
+            try:
+                # Get player profile first
+                await self.get_player_profile(player_id)
+                # Then get rating history with appropriate retries
+                ratings = await self.get_player_rating_history(player_id, max_retries=max_retries)
+                
+                if not ratings.empty:
+                    logger.info(f"Successfully retrieved {len(ratings)} ratings for player {player_id}")
+                else:
+                    logger.warning(f"Failed to get ratings for player {player_id} after multiple attempts")
+                
+                # Add a random delay to avoid rate limiting
+                await asyncio.sleep(random.uniform(2.0, 4.0))
             except Exception as e:
-                logger.error(f"Error processing match file {match_file}: {e}")
-        
-        logger.info(f"Found {len(all_player_ids)} unique players to process")
-        logger.info(f"Including {len(opponent_ids)} unique opponents")
-        
-        # Check for missing rating histories and try to get them if needed
-        missing_ratings = []
-        for player_id in all_player_ids:
-            if not player_id or player_id == 'nan':
-                continue
+                logger.error(f"Failed to get rating history for {player_id}: {e}")
+                # Create empty file to avoid retrying this player
+                empty_df = pd.DataFrame(columns=['date', 'utr'])
+                empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
                 
-            rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
-            if not rating_file.exists() or os.path.getsize(rating_file) == 0:
-                missing_ratings.append(player_id)
-        
-        if missing_ratings:
-            logger.info(f"Found {len(missing_ratings)} players with missing rating histories")
-            
-            # Sort missing ratings by match importance (higher matches count = more important)
-            def get_match_count(player_id):
-                return len(matches_by_player.get(player_id, []))
-            
-            # Sort by match count (descending) so more important players are processed first
-            missing_ratings.sort(key=get_match_count, reverse=True)
-            
-            for idx, player_id in enumerate(missing_ratings):
-                # Determine importance for retry strategy
-                match_count = get_match_count(player_id)
-                is_important = match_count > 2
-                max_retries = 5 if is_important else 3
-                
-                logger.info(f"Getting missing rating history for {'important ' if is_important else ''}player {idx+1}/{len(missing_ratings)}: {player_id} (matches: {match_count})")
-                
-                try:
-                    # Get player profile first
-                    self.get_player_profile(player_id)
-                    # Then get rating history with appropriate retries
-                    ratings = self.get_player_rating_history(player_id, max_retries=max_retries)
-                    
-                    if not ratings.empty:
-                        logger.info(f"Successfully retrieved {len(ratings)} ratings for player {player_id}")
-                    else:
-                        logger.warning(f"Failed to get ratings for player {player_id} after multiple attempts")
-                    
-                    # Add a random delay to avoid rate limiting
-                    time.sleep(random.uniform(2.0, 4.0))
-                except Exception as e:
-                    logger.error(f"Failed to get rating history for {player_id}: {e}")
-                    # Create empty file to avoid retrying this player
-                    empty_df = pd.DataFrame(columns=['date', 'utr'])
-                    empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
-                    
-                    # Restart browser every 10 players to avoid memory issues
-                    if idx % 10 == 9:
-                        try:
-                            logger.info(f"Restarting browser after processing {idx+1} players...")
-                            self.close_browser()
-                            time.sleep(3)
-                            self.start_browser()
-                            self.login()
-                            time.sleep(3)
-                        except Exception as browser_error:
-                            logger.error(f"Error restarting browser: {browser_error}")
-        
-        # Create a cache to store player ratings
-        player_ratings_cache = {}
-        
-        # Load all existing rating histories into cache
-        for rating_file in self.ratings_dir.glob("player_*_ratings.csv"):
-            try:
-                player_id_match = re.search(r"player_(\d+)_ratings", str(rating_file))
-                if player_id_match and os.path.getsize(rating_file) > 0:  # Ensure file isn't empty
-                    player_id = player_id_match.group(1)
-                    
-                    # Only cache if we actually need this player's data
-                    if player_id in all_player_ids:
-                        ratings_df = pd.read_csv(rating_file)
-                        
-                        # Skip empty rating files
-                        if ratings_df.empty:
-                            logger.warning(f"Rating file for player {player_id} exists but is empty")
-                            continue
-                            
-                        # Handle the case where a player might be "UR" (unrated)
-                        if 'utr' in ratings_df.columns:
-                            # Convert "UR" to NaN for proper datetime operations
-                            if ratings_df['utr'].dtype == object:  # Only for string columns
-                                ratings_df.loc[ratings_df['utr'] == "UR", 'utr'] = np.nan
-                            
-                            # Ensure all UTR values are numeric
-                            ratings_df['utr'] = pd.to_numeric(ratings_df['utr'], errors='coerce')
-                        else:
-                            logger.warning(f"Rating file for player {player_id} has no 'utr' column")
-                            continue
-                        
-                        # Convert dates to datetime
-                        if 'date' in ratings_df.columns:
-                            ratings_df['date'] = pd.to_datetime(ratings_df['date'], errors='coerce')
-                            ratings_df = ratings_df.sort_values('date')
-                        else:
-                            logger.warning(f"Rating file for player {player_id} has no 'date' column")
-                            continue
-                            
-                        player_ratings_cache[player_id] = ratings_df
-                        logger.info(f"Cached rating history for player {player_id}: {len(ratings_df)} entries")
-            except Exception as e:
-                logger.error(f"Error loading rating history from {rating_file}: {e}")
-        
-        # Helper function to get player rating at a specific date
-        def get_player_rating_at_date(player_id, match_date):
-            """Find the closest rating before match_date within max_days_diff"""
-            if player_id is None or str(player_id) == 'nan':
-                return None, None
-            
-            player_id = str(player_id)  # Ensure string type
-            
-            # Check if we have ratings for this player
-            if player_id not in player_ratings_cache:
-                logger.warning(f"No rating history available for player {player_id}")
-                return None, None
-            
-            ratings_df = player_ratings_cache[player_id]
-            
-            # Ensure we have date and utr columns
-            if 'date' not in ratings_df.columns or 'utr' not in ratings_df.columns:
-                logger.warning(f"Invalid rating history format for player {player_id}")
-                return None, None
-            
-            # Convert match_date to datetime if it's not already
-            if not isinstance(match_date, pd.Timestamp) and not isinstance(match_date, datetime):
-                try:
-                    match_date = pd.to_datetime(match_date)
-                except:
-                    logger.warning(f"Invalid match date format: {match_date}")
-                    return None, None
-            
-            # Find the closest rating before the match date
-            past_ratings = ratings_df[ratings_df['date'] <= match_date]
-            
-            if past_ratings.empty:
-                return None, None
-            
-            # Make sure we don't select a row with null/NaN UTR
-            past_ratings = past_ratings.dropna(subset=['utr'])
-            
-            if past_ratings.empty:
-                return None, None
-                
-            closest_rating_idx = past_ratings.index[-1]
-            closest_rating_date = past_ratings.loc[closest_rating_idx, 'date']
-            
-            # Calculate days between the rating and the match
-            if pd.notnull(closest_rating_date) and pd.notnull(match_date):
-                days_diff = (match_date - closest_rating_date).days
-                
-                if days_diff <= max_days_diff:
-                    return past_ratings.loc[closest_rating_idx, 'utr'], days_diff
-            
-            return None, None
-        
-        # Function to create standardized match IDs
-        def get_standardized_match_id(row):
-            """
-            Create a standardized match ID by ordering player IDs
-            so the same match will have the same ID regardless of perspective
-            """
-            if pd.isna(row['date']) or pd.isna(row['player_id']) or pd.isna(row['opponent_id']):
-                return None
-                
-            date_str = str(row['date']).split()[0]  # Get just the date part
-            player_id = str(row['player_id'])
-            opponent_id = str(row['opponent_id'])
-            
-            # Sort the IDs so the smaller ID always comes first
-            player_ids = sorted([player_id, opponent_id])
-            
-            # Create standardized match ID
-            return f"{date_str}_{player_ids[0]}_{player_ids[1]}"
-        
-        # Process each match file to enhance with historical UTRs
-        all_enhanced_matches = []
-        valid_match_count = 0
-        skipped_match_count = 0
-        
-        for match_file in match_files:
-            try:
-                # Extract player ID from filename
-                player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
-                if not player_id_match:
-                    logger.warning(f"Could not extract player ID from {match_file}")
-                    continue
-                
+                # Restart browser every 10 players to avoid memory issues
+                if idx % 10 == 9:
+                    try:
+                        logger.info(f"Restarting browser after processing {idx+1} players...")
+                        await self.close_browser()
+                        await asyncio.sleep(3)
+                        await self.start_browser()
+                        await self.login()
+                        await asyncio.sleep(3)
+                    except Exception as browser_error:
+                        logger.error(f"Error restarting browser: {browser_error}")
+    
+    # Create a cache to store player ratings
+    player_ratings_cache = {}
+    
+    # Load all existing rating histories into cache
+    for rating_file in self.ratings_dir.glob("player_*_ratings.csv"):
+        try:
+            player_id_match = re.search(r"player_(\d+)_ratings", str(rating_file))
+            if player_id_match and os.path.getsize(rating_file) > 0:  # Ensure file isn't empty
                 player_id = player_id_match.group(1)
                 
-                # Load match data
-                if os.path.getsize(match_file) == 0:  # Check if file is empty
-                    logger.warning(f"Match file for player {player_id} is empty")
-                    continue
+                # Only cache if we actually need this player's data
+                if player_id in all_player_ids:
+                    ratings_df = pd.read_csv(rating_file)
                     
-                matches_df = pd.read_csv(match_file)
-                
-                if matches_df.empty:
-                    logger.warning(f"No matches found for player {player_id}")
-                    continue
-                
-                # Ensure date column is datetime
-                matches_df['date'] = pd.to_datetime(matches_df['date'], errors='coerce')
-                
-                # Process each match to find UTRs at match time
-                for idx, match in matches_df.iterrows():
-                    match_date = match['date']
-                    
-                    if pd.isna(match_date):
-                        logger.warning(f"Skipping match with no date for player {player_id}")
-                        skipped_match_count += 1
+                    # Skip empty rating files
+                    if ratings_df.empty:
+                        logger.warning(f"Rating file for player {player_id} exists but is empty")
                         continue
-                    
-                    opponent_id = match.get('opponent_id')
-                    if pd.isna(opponent_id):
-                        logger.warning(f"Skipping match with no opponent ID for player {player_id}")
-                        skipped_match_count += 1
-                        continue
-                    
-                    # Get player's UTR rating at match time
-                    player_rating, player_days_diff = get_player_rating_at_date(player_id, match_date)
-                    
-                    # Get opponent's UTR rating at match time
-                    opponent_rating, opponent_days_diff = get_player_rating_at_date(opponent_id, match_date)
-                    
-                    # Handle special cases like "UR" (Unrated) players
-                    player_displayed_utr = match.get('player_utr_displayed')
-                    opponent_displayed_utr = match.get('opponent_utr_displayed')
-                    
-                    # Special handling for "UR" (Unrated) players
-                    if str(player_displayed_utr) == "UR":
-                        player_rating = "UR"
-                        player_days_diff = 0
-                    
-                    if str(opponent_displayed_utr) == "UR":
-                        opponent_rating = "UR"
-                        opponent_days_diff = 0
-                    
-                    # Update match data with historical UTR ratings
-                    if player_rating is not None:
-                        matches_df.at[idx, 'player_utr_at_match'] = player_rating
-                        matches_df.at[idx, 'player_utr_days_diff'] = player_days_diff
                         
-                        if opponent_rating is not None:
-                            matches_df.at[idx, 'opponent_utr_at_match'] = opponent_rating
-                            matches_df.at[idx, 'opponent_utr_days_diff'] = opponent_days_diff
-                            
-                            # Calculate UTR difference if both are numeric
-                            if isinstance(player_rating, (int, float)) and isinstance(opponent_rating, (int, float)):
-                                matches_df.at[idx, 'utr_diff'] = float(player_rating) - float(opponent_rating)
-                                matches_df.at[idx, 'valid_for_model'] = True
-                                valid_match_count += 1
-                                logger.info(f"Valid match: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating}) on {match_date.strftime('%Y-%m-%d')}")
-                            else:
-                                # One of the players is "UR" - mark accordingly
-                                matches_df.at[idx, 'utr_diff'] = None
-                                matches_df.at[idx, 'valid_for_model'] = False
-                                matches_df.at[idx, 'unrated_player'] = True
-                                logger.info(f"Match with unrated player: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating})")
+                    # Handle the case where a player might be "UR" (unrated)
+                    if 'utr' in ratings_df.columns:
+                        # Convert "UR" to NaN for proper datetime operations
+                        if ratings_df['utr'].dtype == object:  # Only for string columns
+                            ratings_df.loc[ratings_df['utr'] == "UR", 'utr'] = np.nan
+                        
+                        # Ensure all UTR values are numeric
+                        ratings_df['utr'] = pd.to_numeric(ratings_df['utr'], errors='coerce')
+                    else:
+                        logger.warning(f"Rating file for player {player_id} has no 'utr' column")
+                        continue
+                    
+                    # Convert dates to datetime
+                    if 'date' in ratings_df.columns:
+                        ratings_df['date'] = pd.to_datetime(ratings_df['date'], errors='coerce')
+                        ratings_df = ratings_df.sort_values('date')
+                    else:
+                        logger.warning(f"Rating file for player {player_id} has no 'date' column")
+                        continue
+                        
+                    player_ratings_cache[player_id] = ratings_df
+                    logger.info(f"Cached rating history for player {player_id}: {len(ratings_df)} entries")
+        except Exception as e:
+            logger.error(f"Error loading rating history from {rating_file}: {e}")
+    
+    # Helper function to get player rating at a specific date
+    def get_player_rating_at_date(player_id, match_date):
+        """Find the closest rating before match_date within max_days_diff"""
+        if player_id is None or str(player_id) == 'nan':
+            return None, None
+        
+        player_id = str(player_id)  # Ensure string type
+        
+        # Check if we have ratings for this player
+        if player_id not in player_ratings_cache:
+            logger.warning(f"No rating history available for player {player_id}")
+            return None, None
+        
+        ratings_df = player_ratings_cache[player_id]
+        
+        # Ensure we have date and utr columns
+        if 'date' not in ratings_df.columns or 'utr' not in ratings_df.columns:
+            logger.warning(f"Invalid rating history format for player {player_id}")
+            return None, None
+        
+        # Convert match_date to datetime if it's not already
+        if not isinstance(match_date, pd.Timestamp) and not isinstance(match_date, datetime):
+            try:
+                match_date = pd.to_datetime(match_date)
+            except:
+                logger.warning(f"Invalid match date format: {match_date}")
+                return None, None
+        
+        # Find the closest rating before the match date
+        past_ratings = ratings_df[ratings_df['date'] <= match_date]
+        
+        if past_ratings.empty:
+            return None, None
+        
+        # Make sure we don't select a row with null/NaN UTR
+        past_ratings = past_ratings.dropna(subset=['utr'])
+        
+        if past_ratings.empty:
+            return None, None
+            
+        closest_rating_idx = past_ratings.index[-1]
+        closest_rating_date = past_ratings.loc[closest_rating_idx, 'date']
+        
+        # Calculate days between the rating and the match
+        if pd.notnull(closest_rating_date) and pd.notnull(match_date):
+            days_diff = (match_date - closest_rating_date).days
+            
+            if days_diff <= max_days_diff:
+                return past_ratings.loc[closest_rating_idx, 'utr'], days_diff
+        
+        return None, None
+    
+    # Function to create standardized match IDs
+    def get_standardized_match_id(row):
+        """
+        Create a standardized match ID by ordering player IDs
+        so the same match will have the same ID regardless of perspective
+        """
+        if pd.isna(row['date']) or pd.isna(row['player_id']) or pd.isna(row['opponent_id']):
+            return None
+            
+        date_str = str(row['date']).split()[0]  # Get just the date part
+        player_id = str(row['player_id'])
+        opponent_id = str(row['opponent_id'])
+        
+        # Sort the IDs so the smaller ID always comes first
+        player_ids = sorted([player_id, opponent_id])
+        
+        # Create standardized match ID
+        return f"{date_str}_{player_ids[0]}_{player_ids[1]}"
+    
+    # Process each match file to enhance with historical UTRs
+    all_enhanced_matches = []
+    valid_match_count = 0
+    skipped_match_count = 0
+    
+    for match_file in match_files:
+        try:
+            # Extract player ID from filename
+            player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
+            if not player_id_match:
+                logger.warning(f"Could not extract player ID from {match_file}")
+                continue
+            
+            player_id = player_id_match.group(1)
+            
+            # Load match data
+            if os.path.getsize(match_file) == 0:  # Check if file is empty
+                logger.warning(f"Match file for player {player_id} is empty")
+                continue
+                
+            matches_df = pd.read_csv(match_file)
+            
+            if matches_df.empty:
+                logger.warning(f"No matches found for player {player_id}")
+                continue
+            
+            # Ensure date column is datetime
+            matches_df['date'] = pd.to_datetime(matches_df['date'], errors='coerce')
+            
+            # Process each match to find UTRs at match time
+            for idx, match in matches_df.iterrows():
+                match_date = match['date']
+                
+                if pd.isna(match_date):
+                    logger.warning(f"Skipping match with no date for player {player_id}")
+                    skipped_match_count += 1
+                    continue
+                
+                opponent_id = match.get('opponent_id')
+                if pd.isna(opponent_id):
+                    logger.warning(f"Skipping match with no opponent ID for player {player_id}")
+                    skipped_match_count += 1
+                    continue
+                
+                # Get player's UTR rating at match time
+                player_rating, player_days_diff = get_player_rating_at_date(player_id, match_date)
+                
+                # Get opponent's UTR rating at match time
+                opponent_rating, opponent_days_diff = get_player_rating_at_date(opponent_id, match_date)
+                
+                # Handle special cases like "UR" (Unrated) players
+                player_displayed_utr = match.get('player_utr_displayed')
+                opponent_displayed_utr = match.get('opponent_utr_displayed')
+                
+                # Special handling for "UR" (Unrated) players
+                if str(player_displayed_utr) == "UR":
+                    player_rating = "UR"
+                    player_days_diff = 0
+                
+                if str(opponent_displayed_utr) == "UR":
+                    opponent_rating = "UR"
+                    opponent_days_diff = 0
+                
+                # Update match data with historical UTR ratings
+                if player_rating is not None:
+                    matches_df.at[idx, 'player_utr_at_match'] = player_rating
+                    matches_df.at[idx, 'player_utr_days_diff'] = player_days_diff
+                    
+                    if opponent_rating is not None:
+                        matches_df.at[idx, 'opponent_utr_at_match'] = opponent_rating
+                        matches_df.at[idx, 'opponent_utr_days_diff'] = opponent_days_diff
+                        
+                        # Calculate UTR difference if both are numeric
+                        if isinstance(player_rating, (int, float)) and isinstance(opponent_rating, (int, float)):
+                            matches_df.at[idx, 'utr_diff'] = float(player_rating) - float(opponent_rating)
+                            matches_df.at[idx, 'valid_for_model'] = True
+                            valid_match_count += 1
+                            logger.info(f"Valid match: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating}) on {match_date.strftime('%Y-%m-%d')}")
                         else:
+                            # One of the players is "UR" - mark accordingly
+                            matches_df.at[idx, 'utr_diff'] = None
                             matches_df.at[idx, 'valid_for_model'] = False
-                            skipped_match_count += 1
-                            logger.debug(f"No valid UTR for opponent {match['opponent_name']} (ID: {opponent_id}) within {max_days_diff} days of match")
+                            matches_df.at[idx, 'unrated_player'] = True
+                            logger.info(f"Match with unrated player: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating})")
                     else:
                         matches_df.at[idx, 'valid_for_model'] = False
                         skipped_match_count += 1
-                        logger.debug(f"No valid UTR for player {match['player_name']} within {max_days_diff} days of match")
+                        logger.debug(f"No valid UTR for opponent {match['opponent_name']} (ID: {opponent_id}) within {max_days_diff} days of match")
+                else:
+                    matches_df.at[idx, 'valid_for_model'] = False
+                    skipped_match_count += 1
+                    logger.debug(f"No valid UTR for player {match['player_name']} within {max_days_diff} days of match")
+            
+            # Add to collection and save back to file
+            all_enhanced_matches.append(matches_df)
+            matches_df.to_csv(match_file, index=False)
+            
+            logger.info(f"Processed {len(matches_df)} matches for player {player_id}")
                 
-                # Add to collection and save back to file
-                all_enhanced_matches.append(matches_df)
-                matches_df.to_csv(match_file, index=False)
-                
-                logger.info(f"Processed {len(matches_df)} matches for player {player_id}")
-                    
-            except Exception as e:
-                logger.error(f"Error processing matches from {match_file}: {e}")
-        
-        # Combine all enhanced matches
-        if all_enhanced_matches:
-            try:
-                combined_df = pd.concat(all_enhanced_matches, ignore_index=True)
-                
-                # Add standardized match ID
-                combined_df['standardized_match_id'] = combined_df.apply(get_standardized_match_id, axis=1)
-                
-                # Save all enhanced matches
-                combined_file = self.data_dir / "all_enhanced_matches.csv"
-                combined_df.to_csv(combined_file, index=False)
-                
-                # For the valid_matches output, we want to eliminate duplicates entirely
-                # and only keep one version of each match
-                valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
-                
-                # Use the standardized match ID to drop duplicates, keeping the first occurrence
-                if 'standardized_match_id' in valid_matches_df.columns:
-                    original_count = len(valid_matches_df)
-                    valid_matches_df.drop_duplicates(subset=['standardized_match_id'], keep='first', inplace=True)
-                    dupe_count = original_count - len(valid_matches_df)
-                    if dupe_count > 0:
-                        logger.info(f"Removed {dupe_count} duplicate matches from final valid matches output")
-                
-                # Save only valid matches with complete UTR data
-                valid_file = self.data_dir / "valid_matches_for_model.csv"
-                valid_matches_df.to_csv(valid_file, index=False)
-                
-                # Save matches with unrated players - FIX: Check if column exists first
-                if 'unrated_player' in combined_df.columns:
-                    unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy()
-                    if not unrated_matches_df.empty:
-                        unrated_file = self.data_dir / "unrated_player_matches.csv"
-                        unrated_matches_df.to_csv(unrated_file, index=False)
-                        logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
-                
-                logger.info(f"Saved {len(combined_df)} enhanced matches to {combined_file}")
-                logger.info(f"Saved {len(valid_matches_df)} valid matches with complete UTR data to {valid_file}")
-                logger.info(f"Valid matches: {valid_match_count}, Skipped matches: {skipped_match_count}")
-                
-                return valid_matches_df
-            except Exception as e:
-                logger.error(f"Error combining matches: {e}")
-                # Log the stack trace for better debugging
-                import traceback
-                logger.error(f"Stack trace: {traceback.format_exc()}")
-                return pd.DataFrame()
-        else:
-            logger.warning("No enhanced matches to combine")
+        except Exception as e:
+            logger.error(f"Error processing matches from {match_file}: {e}")
+    
+    # Combine all enhanced matches
+    if all_enhanced_matches:
+        try:
+            combined_df = pd.concat(all_enhanced_matches, ignore_index=True)
+            
+            # Add standardized match ID
+            combined_df['standardized_match_id'] = combined_df.apply(get_standardized_match_id, axis=1)
+            
+            # Save all enhanced matches
+            combined_file = self.data_dir / "all_enhanced_matches.csv"
+            combined_df.to_csv(combined_file, index=False)
+            
+            # For the valid_matches output, we want to eliminate duplicates entirely
+            # and only keep one version of each match
+            valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
+            
+            # Use the standardized match ID to drop duplicates, keeping the first occurrence
+            if 'standardized_match_id' in valid_matches_df.columns:
+                original_count = len(valid_matches_df)
+                valid_matches_df.drop_duplicates(subset=['standardized_match_id'], keep='first', inplace=True)
+                dupe_count = original_count - len(valid_matches_df)
+                if dupe_count > 0:
+                    logger.info(f"Removed {dupe_count} duplicate matches from final valid matches output")
+            
+            # Save only valid matches with complete UTR data
+            valid_file = self.data_dir / "valid_matches_for_model.csv"
+            valid_matches_df.to_csv(valid_file, index=False)
+            
+            # Save matches with unrated players - FIX: Check if column exists first
+            if 'unrated_player' in combined_df.columns:
+                unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy()
+                if not unrated_matches_df.empty:
+                    unrated_file = self.data_dir / "unrated_player_matches.csv"
+                    unrated_matches_df.to_csv(unrated_fileindex=False)
+                    logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
+            
+            logger.info(f"Saved {len(combined_df)} enhanced matches to {combined_file}")
+            logger.info(f"Saved {len(valid_matches_df)} valid matches with complete UTR data to {valid_file}")
+            logger.info(f"Valid matches: {valid_match_count}, Skipped matches: {skipped_match_count}")
+            
+            return valid_matches_df
+        except Exception as e:
+            logger.error(f"Error combining matches: {e}")
+            # Log the stack trace for better debugging
+            import traceback
+            logger.error(f"Stack trace: {traceback.format_exc()}")
             return pd.DataFrame()
+    else:
+        logger.warning("No enhanced matches to combine")
+        return pd.DataFrame()
 
 # Example usage
 if __name__ == "__main__":
     email = "zachdodson12@gmail.com"
     password = "Thailand@123"
     
-    with UTRScraper(email=email, password=password, headless=False) as scraper:
-        if scraper.login():
+    async def main():
+        async with UTRScraper(email=email, password=password, headless=False) as scraper:
+            if not await scraper.login():
+                logger.error("Failed to log in to UTR website")
+                return
+            
             logger.info("Starting comprehensive test with Jannik Sinner")
             
             # 1. Get Sinner's profile
             player_id = "247320"  # Jannik Sinner's ID
-            profile = scraper.get_player_profile(player_id)
+            profile = await scraper.get_player_profile(player_id)
             logger.info(f"Got profile for {profile['name']}")
             
             # 2. Get Sinner's rating history
-            ratings = scraper.get_player_rating_history(player_id)
+            ratings = await scraper.get_player_rating_history(player_id)
             logger.info(f"Got {len(ratings)} rating history entries for Sinner")
             
             # 3. Get Sinner's match history for each year
@@ -3288,7 +3246,7 @@ if __name__ == "__main__":
             
             for year in years:
                 logger.info(f"Getting matches for year {year}")
-                matches = scraper.get_player_match_history(player_id, year=year, limit=200)
+                matches = await scraper.get_player_match_history(player_id, year=year, limit=200)
                 
                 if not matches.empty and 'opponent_id' in matches.columns:
                     # Collect opponent IDs
@@ -3308,13 +3266,13 @@ if __name__ == "__main__":
                 logger.info(f"Processing opponent {idx+1}/{len(all_opponent_ids)}: ID {opponent_id}")
                 
                 # Get opponent profile
-                opponent_profile = scraper.get_player_profile(opponent_id)
+                opponent_profile = await scraper.get_player_profile(opponent_id)
                 if opponent_profile:
                     opponent_name = opponent_profile['name']
                     logger.info(f"Got profile for {opponent_name}")
                     
                     # Get opponent rating history
-                    opponent_ratings = scraper.get_player_rating_history(opponent_id)
+                    opponent_ratings = await scraper.get_player_rating_history(opponent_id)
                     logger.info(f"Got {len(opponent_ratings)} rating history entries for {opponent_name}")
                     
                     # Get match history for all opponents, for all years
@@ -3323,20 +3281,20 @@ if __name__ == "__main__":
                     # Get all years of matches for opponents too
                     for year in years:
                         logger.info(f"Getting {year} matches for {opponent_name}")
-                        opponent_matches = scraper.get_player_match_history(opponent_id, year=year, limit=200)
+                        opponent_matches = await scraper.get_player_match_history(opponent_id, year=year, limit=200)
                         logger.info(f"Got {len(opponent_matches)} matches for {opponent_name} in {year}")
                         
                         # Add random delay between years
-                        time.sleep(random.uniform(1.0, 2.0))
+                        await asyncio.sleep(random.uniform(1.0, 2.0))
                 else:
                     logger.warning(f"Could not get profile for opponent ID {opponent_id}")
                 
                 # Add delay between opponents
-                time.sleep(random.uniform(1.0, 2.0))
+                await asyncio.sleep(random.uniform(1.0, 2.0))
             
             # 5. Run cross-reference to match UTRs with match dates
             logger.info("Running cross-reference to match UTRs with match dates")
-            valid_matches = scraper.cross_reference_matches_with_ratings(max_days_diff=30)
+            valid_matches = await scraper.cross_reference_matches_with_ratings(max_days_diff=30)
             
             logger.info(f"Cross-reference complete. Valid matches with UTR data: {len(valid_matches)}")
             
@@ -3349,3 +3307,5 @@ if __name__ == "__main__":
                     logger.info(f"UTR Difference: {match['utr_diff']}, Match Date: {match['date']}")
                     logger.info(f"Score: {match['score']}")
                     logger.info("---")
+
+    asyncio.run(main())
