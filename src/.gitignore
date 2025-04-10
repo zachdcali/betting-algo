@@ -1,0 +1,30 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS specific files
+.DS_Store
+
+# Virtual Environment
+venv/
+.venv/
+
+# Debug logs
+*.log
+
+# UTR scraper screenshots and temp files
+*.png
+match_history_*
+stats_page_*
+*_selection.png
+*_error.png
+*_dropdown.png
+*_page.png
+login_*
+
+# Local data 
+fresh_env/
+
+# HTML files
+*.html
