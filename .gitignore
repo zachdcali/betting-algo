@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Large data files
+/data-files/valid_matches_for_model.csv
+/data-files/processed_atp_data.csv
+/data-files/master_jeffsackmann_combined_deduplicated_20250423_1653.csv
+/data/JeffSackmann/*.csv
+/data/Old Data/*.csv
+/data/*.csv
+/data/matches/
+/data/players/
+/data/ratings/
+/data/utr_data/
+/data/odds_data/
+/data/test/
+/data/verification/
+/data/verification_charts/
+
+# Screenshots
+/screenshots/
+
+# Temporary files
+/tmp/
