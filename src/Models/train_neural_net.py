@@ -136,27 +136,36 @@ test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
 train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
 
-# Define the neural network model with a single hidden layer
+# Define the neural network model with two hidden layers (32 and 16 neurons)
 class TennisPredictor(nn.Module):
     def __init__(self, input_size):
         super(TennisPredictor, self).__init__()
-        # Single hidden layer with 64 neurons
+        # First hidden layer with 32 neurons
         self.layer1 = nn.Linear(input_size, 32)
         self.batch_norm1 = nn.BatchNorm1d(32)
         self.dropout1 = nn.Dropout(0.4)
         
+        # Second hidden layer with 16 neurons
+        self.layer2 = nn.Linear(32, 16)
+        self.batch_norm2 = nn.BatchNorm1d(16)
+        self.dropout2 = nn.Dropout(0.3)
+        
         # Output layer
-        self.layer2 = nn.Linear(32, 1)
+        self.layer3 = nn.Linear(16, 1)
         self.leaky_relu = nn.LeakyReLU(0.1)  # LeakyReLU activation
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # Hidden layer
+        # First hidden layer
         x = self.leaky_relu(self.batch_norm1(self.layer1(x)))
         x = self.dropout1(x)
         
+        # Second hidden layer
+        x = self.leaky_relu(self.batch_norm2(self.layer2(x)))
+        x = self.dropout2(x)
+        
         # Output layer
-        x = self.sigmoid(self.layer2(x))
+        x = self.sigmoid(self.layer3(x))
         return x
 
 # Create model
@@ -169,7 +178,8 @@ print(f"Total model parameters: {total_params}")
 print(f"Trainable parameters: {trainable_params}")
 print(f"Model architecture:")
 print(f"  Input layer: {X_train.shape[1]} features")
-print(f"  Hidden layer: 32 neurons with BatchNorm and Dropout(0.4)")
+print(f"  Hidden layer 1: 32 neurons with BatchNorm and Dropout(0.4)")
+print(f"  Hidden layer 2: 16 neurons with BatchNorm and Dropout(0.3)")
 print(f"  Output layer: 1 neuron with Sigmoid activation")
 
 criterion = nn.BCELoss()
@@ -191,7 +201,8 @@ def print_model_summary():
     print(f"Testing Samples: {X_test.shape[0]}")
     print("\nArchitecture:")
     print(f"- Input Layer: {X_train.shape[1]} features")
-    print(f"- Hidden Layer: 64 neurons with BatchNorm and Dropout(0.3)")
+    print(f"- Hidden Layer 1: 32 neurons with BatchNorm and Dropout(0.4)")
+    print(f"- Hidden Layer 2: 16 neurons with BatchNorm and Dropout(0.3)")
     print(f"- Output Layer: 1 neuron with Sigmoid activation")
     
     print("\nTraining Parameters:")
@@ -237,7 +248,8 @@ def print_model_summary():
         f.write(f"Testing Samples: {X_test.shape[0]}\n")
         f.write("\nArchitecture:\n")
         f.write(f"- Input Layer: {X_train.shape[1]} features\n")
-        f.write(f"- Hidden Layer: 64 neurons with BatchNorm and Dropout(0.3)\n")
+        f.write(f"- Hidden Layer 1: 32 neurons with BatchNorm and Dropout(0.4)\n")
+        f.write(f"- Hidden Layer 2: 16 neurons with BatchNorm and Dropout(0.3)\n")
         f.write(f"- Output Layer: 1 neuron with Sigmoid activation\n")
         
         f.write("\nTraining Parameters:\n")
