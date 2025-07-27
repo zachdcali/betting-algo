@@ -20,10 +20,10 @@ The system has established baseline models using comprehensive tennis match data
 | **Random Forest** | **66.83%** | **+2.15pp** | **0.736** |
 | ATP Ranking Baseline | 64.68% | - | - |
 
-### Performance by Tournament Level
+### Performance by Tournament Level (XGBoost)
 
-| Tournament Level | Model Accuracy | ATP Baseline | Improvement | Sample Size |
-|------------------|----------------|--------------|-------------|-------------|
+| Tournament Level | XGBoost Accuracy | ATP Baseline | Improvement | Sample Size |
+|------------------|------------------|--------------|-------------|-------------|
 | **ITF Futures** | 73.9% | 66.7% | **+7.2pp** | 28,822 matches |
 | **ATP-Level** | 68.4% | 62.7% | **+5.7pp** | 8,133 matches |
 | **Challengers** | 67.4% | 62.4% | **+5.0pp** | 18,488 matches |
