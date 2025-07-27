@@ -1,13 +1,13 @@
-# Professional Tennis Match Prediction System
+# Tennis Match Prediction System
 
-A comprehensive machine learning system for predicting professional tennis match outcomes using advanced temporal feature engineering and multiple model architectures.
+A machine learning system for predicting professional tennis match outcomes using temporal feature engineering and multiple model architectures.
 
 ## Project Overview
 
-This project applies state-of-the-art machine learning techniques to tennis match prediction, achieving significant improvements over ATP ranking baselines through sophisticated temporal feature engineering and proper validation methodologies.
+This project applies machine learning techniques to tennis match prediction, achieving measurable improvements over ATP ranking baselines through temporal feature engineering and proper validation methodologies.
 
 ### Current Status
-The system has established strong baseline models using comprehensive tennis match data (1990-2024). Current data collection efforts focus on integrating Universal Tennis Rating (UTR) data, which preliminary analysis suggests provides ~1% accuracy improvement over ATP rankings for match prediction.
+The system has established baseline models using comprehensive tennis match data (1990-2024). Current data collection efforts focus on integrating Universal Tennis Rating (UTR) data, which preliminary analysis suggests provides ~1% accuracy improvement over ATP rankings specifically for ATP-level matches (the most competitive tier).
 
 ## Key Results
 
@@ -22,13 +22,17 @@ The system has established strong baseline models using comprehensive tennis mat
 
 ### Performance by Tournament Level
 
-- **ITF Futures**: +7.2pp improvement (73.9% accuracy)
-- **ATP-Level**: +5.7pp improvement (68.4% accuracy)  
-- **Challengers**: +5.0pp improvement (67.4% accuracy)
+| Tournament Level | Model Accuracy | ATP Baseline | Improvement | Sample Size |
+|------------------|----------------|--------------|-------------|-------------|
+| **ITF Futures** | 73.9% | 66.7% | **+7.2pp** | 28,822 matches |
+| **ATP-Level** | 68.4% | 62.7% | **+5.7pp** | 8,133 matches |
+| **Challengers** | 67.4% | 62.4% | **+5.0pp** | 18,488 matches |
+
+*Results show larger prediction edges at lower tournament levels, with ATP-level matches representing the most competitive prediction environment.*
 
 ## Features
 
-### Advanced Temporal Engineering
+### Temporal Engineering
 - Ranking momentum tracking (14d, 30d, 90d windows)
 - Surface-specific adaptation (recent performance on current surface)
 - Head-to-head records with surface and tournament level weighting
