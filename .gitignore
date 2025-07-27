@@ -1,17 +1,58 @@
-# Byte-compiled / optimized / DLL files
+# ===============================================
+# PROFESSIONAL ML TENNIS PREDICTION PROJECT
+# ===============================================
+
+# Data files - NEVER commit actual datasets
+data/
+data-files/
+*.csv
+*.xlsx
+*.json
+results/*/predictions.csv
+results/*/raw_data/
+
+# Credentials and sensitive information
+.env
+**/credentials.txt
+**/config.ini
+utr_credentials.py
+.credentials/
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Distribution / packaging
-dist/
+*.so
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 *.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
 # Virtual environments
-.venv/
+.env
+.venv
+env/
 venv/
 ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
 
 # IDE specific files
 .idea/
@@ -21,29 +62,40 @@ ENV/
 
 # OS specific files
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Log files
+# Docker
+.dockerignore
+
+# Model outputs (keep structure, not prediction data)
+results/*/predictions.csv
+results/*/feature_importance.csv
+results/*/metrics.csv
+results/*/*.png
+
+# Logs
 *.log
-
-# Large data files
-/data-files/valid_matches_for_model.csv
-/data-files/processed_atp_data.csv
-/data-files/master_jeffsackmann_combined_deduplicated_20250423_1653.csv
-/data/JeffSackmann/*.csv
-/data/Old Data/*.csv
-/data/*.csv
-/data/matches/
-/data/players/
-/data/ratings/
-/data/utr_data/
-/data/odds_data/
-/data/test/
-/data/verification/
-/data/verification_charts/
-
-# Screenshots
-/screenshots/
+logs/
 
 # Temporary files
-/tmp/
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Screenshots and images (except documentation)
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/*.png
+!docs/*.jpg
+!README_images/
+
+# Backup files
+*.bak
+*.backup
