@@ -20,15 +20,15 @@ The system has established baseline models using comprehensive tennis match data
 | **Random Forest** | **66.83%** | **+2.15pp** | **0.736** |
 | ATP Ranking Baseline | 64.68% | - | - |
 
-### Performance by Tournament Level (XGBoost)
+### Performance by Tournament Level
 
-| Tournament Level | XGBoost Accuracy | ATP Baseline | Improvement | Sample Size |
-|------------------|------------------|--------------|-------------|-------------|
-| **ITF Futures** | 73.9% | 66.7% | **+7.2pp** | 28,822 matches |
-| **ATP-Level** | 68.4% | 62.7% | **+5.7pp** | 8,133 matches |
-| **Challengers** | 67.4% | 62.4% | **+5.0pp** | 18,488 matches |
+| Tournament Level | XGBoost | Neural Network | Random Forest | ATP Baseline | Sample Size |
+|------------------|---------|----------------|---------------|--------------|-------------|
+| **ITF Futures** | **73.9%** (+7.2pp) | **74.1%** (+7.4pp) | **69.0%** (+2.3pp) | 66.7% | 28,822 matches |
+| **ATP-Level** | **68.4%** (+5.7pp) | **67.7%** (+5.1pp) | **64.1%** (+1.4pp) | 62.7% | 8,133 matches |
+| **Challengers** | **67.4%** (+5.0pp) | **66.6%** (+4.2pp) | **64.7%** (+2.3pp) | 62.4% | 18,488 matches |
 
-*Results show larger prediction edges at lower tournament levels, with ATP-level matches representing the most competitive prediction environment.*
+*All models show larger prediction edges at lower tournament levels, with ATP-level matches representing the most competitive prediction environment.*
 
 ## Features
 
