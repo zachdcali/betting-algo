@@ -134,4 +134,4 @@ The system expects processed tennis match data with the following structure:
 
 ---
 
-*This project represents a professional-grade machine learning system suitable for production deployment in sports analytics environments.*
+*This project demonstrates a complete machine learning system suitable for production deployment in sports analytics environments.*
