@@ -77,6 +77,12 @@ results/*/feature_importance.csv
 results/*/metrics.csv
 results/*/*.png
 
+# Trained model weights and scalers (keep local for security)
+*.pth
+*.pkl
+results/*/*.pth
+results/*/*.pkl
+
 # Logs
 *.log
 logs/
