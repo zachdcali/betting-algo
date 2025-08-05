@@ -23,7 +23,7 @@ print("=" * 60)
 MIN_YEAR = 1990  # Starting from 1990 for better data quality - can be adjusted as needed
 
 # Check if ML-ready dataset exists, if not create it
-ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "professional_tennis", "ml_ready_all_years.csv")
+ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_LEAK_FREE.csv")
 if not os.path.exists(ml_ready_path):
     print("ML-ready dataset not found. Creating it...")
     from preprocess import preprocess_data_for_ml
