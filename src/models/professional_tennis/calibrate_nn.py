@@ -86,6 +86,10 @@ def calibrate_model(model_version):
         model_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'neural_network_model.pth')
         scaler_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'scaler.pkl')
         print(" Using 143-feature model (original)")
+    elif model_version == 'symmetric':
+        model_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'neural_network_symmetric_features.pth')
+        scaler_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'scaler_symmetric_features.pkl')
+        print(" Using 98-feature model (symmetric)")
     else:
         model_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'neural_network_model_improved_features_early_stopping.pth')
         scaler_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'results', 'professional_tennis', 'Neural_Network', 'scaler_improved_features_early_stopping.pkl')
@@ -120,7 +124,39 @@ def calibrate_model(model_version):
     feature_cols = numeric_cols
     
     # Apply same feature selection as training
-    if model_version == 'new':
+    if model_version == 'symmetric':
+        # Apply symmetric feature removal (same as train_nn_98.py)
+        low_importance_features = [
+            # Country pairs (remove both P1 and P2 versions for symmetry)
+            'P1_Country_FRA', 'P2_Country_FRA',
+            'P1_Country_RUS', 'P2_Country_RUS', 
+            'P1_Country_ARG', 'P2_Country_ARG',
+            'P1_Country_GER', 'P2_Country_GER',
+            'P1_Country_GBR', 'P2_Country_GBR',
+            'P1_Country_SRB', 'P2_Country_SRB',
+            'P1_Country_AUS', 'P2_Country_AUS',
+            'P1_Country_ESP', 'P2_Country_ESP',
+            'P1_Country_SUI', 'P2_Country_SUI',
+            'P1_Country_Other', 'P2_Country_Other',
+            # Performance pairs (remove both for symmetry)
+            'P1_BigMatch_WinRate', 'P2_BigMatch_WinRate',
+            'P1_Peak_Age', 'P2_Peak_Age',
+            'P1_Semifinals_WinRate', 'P2_Semifinals_WinRate', 
+            'P1_Days_Since_Last', 'P2_Days_Since_Last',
+            'P1_Hand_A', 'P2_Hand_A',
+            'P1_Rank_Change_30d', 'P2_Rank_Change_30d',
+            'P2_Rank_Change_90d',  # Only P2 version existed in original list
+            # Head-to-head features (inherently asymmetric, remove all)
+            'H2H_P1_Wins', 'H2H_P1_WinRate', 'H2H_Recent_P1_Advantage',
+            # Tournament/match features (non-paired, remove as-is)
+            'Level_C', 'Clay_Season', 'Rank_Ratio', 'Round_Q3',
+            # Handedness matchups (symmetric pairs)
+            'Handedness_Matchup_LL', 'Handedness_Matchup_RR',
+            # Zero importance features (non-paired)
+            'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2'
+        ]
+        feature_cols = [col for col in feature_cols if col not in low_importance_features]
+    elif model_version == 'new':
         low_importance_features = [
             'P2_Country_FRA', 'P2_Rank_Change_90d', 'P2_BigMatch_WinRate', 'P1_BigMatch_WinRate',
             'H2H_P1_Wins', 'P1_Country_Other', 'H2H_P1_WinRate', 'P2_Peak_Age', 'P1_Peak_Age',
@@ -133,7 +169,7 @@ def calibrate_model(model_version):
             'Level_S', 'Round_BR', 'Peak_Age_P2'
         ]
         feature_cols = [col for col in feature_cols if col not in low_importance_features]
-    print(f" Features: {len(feature_cols)} ({'143-feature' if model_version == 'old' else '109-feature'} model)")
+    print(f" Features: {len(feature_cols)} ({'143-feature' if model_version == 'old' else '98-feature'} model)")
     
     # Train/test split (same as training)
     train_df = ml_df[ml_df['tourney_date'] < '2023-01-01'].copy()
@@ -283,7 +319,7 @@ def calibrate_model(model_version):
     if model_version == 'old':
         calibrated_path = os.path.join(output_dir, 'neural_network_calibrated_143_features.pkl')
     else:
-        calibrated_path = os.path.join(output_dir, 'neural_network_calibrated_109_features.pkl')
+        calibrated_path = os.path.join(output_dir, 'neural_network_calibrated_98_features.pkl')
     with open(calibrated_path, 'wb') as f:
         pickle.dump(calibrated_clf, f)
     print(f" Calibrated model saved to: {calibrated_path}")
@@ -323,26 +359,26 @@ def calibrate_model(model_version):
     }
 
 def main():
-    """Run calibration for both models and provide comparison"""
+    """Run calibration for all three models and provide comparison"""
     print("=" * 80)
-    print("NEURAL NETWORK CALIBRATION - BOTH MODELS COMPARISON")
+    print("NEURAL NETWORK CALIBRATION - ALL MODELS COMPARISON")
     print("=" * 80)
     
-    # Calibrate both models
+    # Calibrate both models (143-feature and 98-feature)
     results = {}
-    for version in ['old', 'new']:
+    for version in ['old', 'symmetric']:
         print(f"\n{'='*20} {version.upper()} MODEL {'='*20}")
         results[version] = calibrate_model(version)
         print("\n")
     
     # Final comparison
     print("=" * 80)
-    print("FINAL COMPARISON: OLD (143) vs NEW (109) FEATURES")
+    print("FINAL COMPARISON: 143-FEATURE vs 98-FEATURE MODELS")
     print("=" * 80)
     old_results = results['old']
-    new_results = results['new']
+    new_results = results['symmetric']
     print("\nRAW MODEL COMPARISON:")
-    print(f"{'Metric':<15} {'Old (143)':<12} {'New (109)':<12} {'Difference':<12}")
+    print(f"{'Metric':<15} {'143-Feature':<12} {'98-Feature':<12} {'Difference':<12}")
     print("-" * 55)
     print(f"{'Accuracy':<15} {old_results['raw_metrics']['accuracy']:<12.4f} {new_results['raw_metrics']['accuracy']:<12.4f} {new_results['raw_metrics']['accuracy'] - old_results['raw_metrics']['accuracy']:<12.4f}")
     print(f"{'AUC-ROC':<15} {old_results['raw_metrics']['auc']:<12.4f} {new_results['raw_metrics']['auc']:<12.4f} {new_results['raw_metrics']['auc'] - old_results['raw_metrics']['auc']:<12.4f}")
@@ -350,7 +386,7 @@ def main():
     print(f"{'Brier Score':<15} {old_results['raw_metrics']['brier']:<12.4f} {new_results['raw_metrics']['brier']:<12.4f} {new_results['raw_metrics']['brier'] - old_results['raw_metrics']['brier']:<12.4f}")
     print(f"{'ECE':<15} {old_results['raw_metrics']['ece']:<12.4f} {new_results['raw_metrics']['ece']:<12.4f} {new_results['raw_metrics']['ece'] - old_results['raw_metrics']['ece']:<12.4f}")
     print("\nCALIBRATED MODEL COMPARISON:")
-    print(f"{'Metric':<15} {'Old (143)':<12} {'New (109)':<12} {'Difference':<12}")
+    print(f"{'Metric':<15} {'143-Feature':<12} {'98-Feature':<12} {'Difference':<12}")
     print("-" * 55)
     print(f"{'Accuracy':<15} {old_results['calibrated_metrics']['accuracy']:<12.4f} {new_results['calibrated_metrics']['accuracy']:<12.4f} {new_results['calibrated_metrics']['accuracy'] - old_results['calibrated_metrics']['accuracy']:<12.4f}")
     print(f"{'AUC-ROC':<15} {old_results['calibrated_metrics']['auc']:<12.4f} {new_results['calibrated_metrics']['auc']:<12.4f} {new_results['calibrated_metrics']['auc'] - old_results['calibrated_metrics']['auc']:<12.4f}")
@@ -362,16 +398,16 @@ def main():
     print("-" * 65)
     old_roi = abs(old_results['improvement']['log_loss'] / old_results['raw_metrics']['log_loss']) * 100
     new_roi = abs(new_results['improvement']['log_loss'] / new_results['raw_metrics']['log_loss']) * 100
-    print(f"{'Old (143)':<15} {old_results['improvement']['log_loss']:<12.4f} {old_results['improvement']['brier']:<12.4f} {old_results['improvement']['ece']:<12.4f} {old_roi:<12.1f}%")
-    print(f"{'New (109)':<15} {new_results['improvement']['log_loss']:<12.4f} {new_results['improvement']['brier']:<12.4f} {new_results['improvement']['ece']:<12.4f} {new_roi:<12.1f}%")
+    print(f"{'143-Feature':<15} {old_results['improvement']['log_loss']:<12.4f} {old_results['improvement']['brier']:<12.4f} {old_results['improvement']['ece']:<12.4f} {old_roi:<12.1f}%")
+    print(f"{'98-Feature':<15} {new_results['improvement']['log_loss']:<12.4f} {new_results['improvement']['brier']:<12.4f} {new_results['improvement']['ece']:<12.4f} {new_roi:<12.1f}%")
     print("\n" + "=" * 80)
     print("CALIBRATION COMPLETE - BOTH MODELS READY FOR BETTING!")
     print("=" * 80)
     print("Files created:")
-    print("- neural_network_calibrated_143_features.pkl (old model)")
-    print("- neural_network_calibrated_109_features.pkl (new model)")
+    print("- neural_network_calibrated_143_features.pkl (143-feature model)")
+    print("- neural_network_calibrated_98_features.pkl (98-feature model)")
     print("- calibration_metrics_old_model.csv")
-    print("- calibration_metrics_new_model.csv")
+    print("- calibration_metrics_symmetric_model.csv")
 
 if __name__ == "__main__":
     main()
