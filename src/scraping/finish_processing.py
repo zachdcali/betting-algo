@@ -10,54 +10,87 @@ from datetime import datetime
 import asyncio
 import random
 import time
+import argparse
 from multiprocessing import Pool
-from utr_scraper import UTRScraper, logger
+from utr_scraper_cloud import UTRScraper, logger
 
-def process_opponent_worker(args):
+def process_opponent_batch_worker(args):
     """
-    Worker function for multiprocessing to process a single opponent.
+    Worker function for multiprocessing to process a batch of opponents.
     Runs async code in its own event loop.
     """
-    opponent_id, email, password, data_dir_str, years, dynamic_years = args
-    data_dir = Path(data_dir_str)  # Convert string back to Path object
-
-    async def inner():
-        scraper = UTRScraper(email=email, password=password, headless=True, data_dir=data_dir)
-        try:
-            await scraper.start_browser()
-            login_success = await scraper.login()
-            if not login_success:
-                logger.error(f"Process ID {os.getpid()}: Failed to login for opponent {opponent_id}")
-                return None, None
-
-            second_ids, processed_id = await process_opponent_simple(opponent_id, scraper, years, dynamic_years)
-            return second_ids, processed_id
-        except Exception as e:
-            logger.error(f"Process ID {os.getpid()}: Error processing opponent {opponent_id}: {e}")
-            return None, None
-        finally:
-            await scraper.close_browser()
-
-    return asyncio.run(inner())
-
-def process_second_degree_opponent_worker(args):
-    """Worker function for multiprocessing to process a second-degree opponent."""
-    opponent_id, email, password, data_dir_str = args
+    opponent_ids, email, password, data_dir_str, years, dynamic_years = args
     data_dir = Path(data_dir_str)
 
     async def inner():
+        # Stagger login based on process ID to avoid overwhelming the server
+        worker_delay = (os.getpid() % 8) * 5  # 0-35 second delay spread
+        await asyncio.sleep(worker_delay)
+        
         scraper = UTRScraper(email=email, password=password, headless=True, data_dir=data_dir)
+        results = []
         try:
             await scraper.start_browser()
             login_success = await scraper.login()
             if not login_success:
-                logger.error(f"Process ID {os.getpid()}: Failed to login for second-degree opponent {opponent_id}")
-                return
-            await process_second_degree_opponent_simple(opponent_id, scraper)
-        except Exception as e:
-            logger.error(f"Process ID {os.getpid()}: Error processing second-degree opponent {opponent_id}: {e}")
+                logger.error(f"Process ID {os.getpid()}: Failed to login for batch of {len(opponent_ids)} opponents")
+                return results
+
+            for opponent_id in opponent_ids:
+                try:
+                    second_ids, processed_id = await process_opponent_simple(opponent_id, scraper, years, dynamic_years)
+                    if second_ids is not None and processed_id is not None:
+                        results.append((second_ids, processed_id))
+                except Exception as e:
+                    logger.error(f"Process ID {os.getpid()}: Error processing opponent {opponent_id}: {e}")
+                    # Restart browser on error
+                    await scraper.close_browser()
+                    await scraper.start_browser()
+                    login_success = await scraper.login()
+                    if not login_success:
+                        logger.error(f"Process ID {os.getpid()}: Failed to re-login after error")
+                        break
         finally:
             await scraper.close_browser()
+        return results
+
+    return asyncio.run(inner())
+
+def process_second_degree_opponent_batch_worker(args):
+    """Worker function for multiprocessing to process a batch of second-degree opponents."""
+    opponent_ids, email, password, data_dir_str = args
+    data_dir = Path(data_dir_str)
+
+    async def inner():
+        # Stagger login based on process ID to avoid overwhelming the server
+        worker_delay = (os.getpid() % 8) * 5  # 0-35 second delay spread
+        await asyncio.sleep(worker_delay)
+        
+        scraper = UTRScraper(email=email, password=password, headless=True, data_dir=data_dir)
+        processed_ids = []
+        try:
+            await scraper.start_browser()
+            login_success = await scraper.login()
+            if not login_success:
+                logger.error(f"Process ID {os.getpid()}: Failed to login for batch of {len(opponent_ids)} second-degree opponents")
+                return processed_ids
+
+            for opponent_id in opponent_ids:
+                try:
+                    await process_second_degree_opponent_simple(opponent_id, scraper)
+                    processed_ids.append(opponent_id)
+                except Exception as e:
+                    logger.error(f"Process ID {os.getpid()}: Error processing second-degree opponent {opponent_id}: {e}")
+                    # Restart browser on error
+                    await scraper.close_browser()
+                    await scraper.start_browser()
+                    login_success = await scraper.login()
+                    if not login_success:
+                        logger.error(f"Process ID {os.getpid()}: Failed to re-login after error")
+                        break
+        finally:
+            await scraper.close_browser()
+        return processed_ids
 
     return asyncio.run(inner())
 
@@ -98,7 +131,7 @@ def process_top_player_worker(args):
 
     return asyncio.run(inner())
 
-def collect_top_players_data(data_dir, email, password, years=None, dynamic_years=True):
+def collect_top_players_data(data_dir, email, password, years=None, dynamic_years=True, num_processes=4):
     """Collect data for top players in parallel using multiprocessing."""
     top_player_ids = set()
     ranking_files = list(data_dir.glob("*_utr_rankings_*.csv"))
@@ -113,8 +146,6 @@ def collect_top_players_data(data_dir, email, password, years=None, dynamic_year
     if not top_player_ids:
         print("No top players found to process")
         return False, set()
-
-    num_processes = 8
     print(f"Starting parallel processing of top players with {num_processes} processes...")
 
     second_degree_opponents = set()
@@ -137,7 +168,7 @@ def collect_top_players_data(data_dir, email, password, years=None, dynamic_year
     print(f"Completed processing {len(processed_players)} top players with {len(second_degree_opponents)} second-degree opponents found")
     return True, second_degree_opponents
 
-def collect_missing_opponent_data(data_dir, email, password, years=None, dynamic_years=True):
+def collect_missing_opponent_data(data_dir, email, password, years=None, dynamic_years=True, num_processes=4):
     """Collect data for missing opponents in parallel using multiprocessing."""
     top_player_ids = set()
     ranking_files = list(data_dir.glob("*_utr_rankings_*.csv"))
@@ -167,8 +198,12 @@ def collect_missing_opponent_data(data_dir, email, password, years=None, dynamic
     if not missing_matches:
         return True, set()
 
-    num_processes = 8
+    # Split missing matches into batches
+    BATCH_SIZE = 50
+    missing_batches = [list(missing_matches)[i:i + BATCH_SIZE] for i in range(0, len(missing_matches), BATCH_SIZE)]
+
     print(f"Starting parallel processing with {num_processes} processes...")
+    print(f"Processing {len(missing_batches)} batches of up to {BATCH_SIZE} opponents each")
 
     second_degree_opponents = set()
     processed_opponents = set()
@@ -177,15 +212,16 @@ def collect_missing_opponent_data(data_dir, email, password, years=None, dynamic
     opponents_processed = 0
 
     with Pool(processes=num_processes) as pool:
-        worker_args = [(oid, email, password, str(data_dir), years, dynamic_years) for oid in missing_matches]
-        for second_ids, processed_id in pool.imap_unordered(process_opponent_worker, worker_args):
-            if second_ids is not None and processed_id is not None:
+        worker_args = [(batch, email, password, str(data_dir), years, dynamic_years) for batch in missing_batches]
+        for batch_results in pool.imap_unordered(process_opponent_batch_worker, worker_args):
+            for second_ids, processed_id in batch_results:
                 second_degree_opponents.update(second_ids)
                 processed_opponents.add(processed_id)
             
-            opponents_processed += 1
+            opponents_processed += len(batch_results)
             progress_percent = (opponents_processed / total_opponents) * 100
-            print(f"Progress: {opponents_processed}/{total_opponents} opponents processed ({progress_percent:.2f}% complete)")
+            batches_done = (opponents_processed // BATCH_SIZE) + (1 if opponents_processed % BATCH_SIZE else 0)
+            print(f"Progress: {batches_done}/{len(missing_batches)} batches processed ({progress_percent:.2f}% complete) - {opponents_processed} opponents done")
 
     print(f"Completed processing {len(processed_opponents)} opponents with {len(second_degree_opponents)} second-degree opponents found")
     return True, second_degree_opponents
@@ -269,7 +305,7 @@ async def process_opponent_simple(opponent_id, scraper, years, dynamic_years):
         logger.error(f"Process ID {os.getpid()}: Error processing opponent {opponent_id}: {e}")
         return None, None
 
-def collect_second_degree_opponents(data_dir, email, password, second_degree_opponents, processed_players):
+def collect_second_degree_opponents(data_dir, email, password, second_degree_opponents, players_to_exclude, num_processes=4):
     """Collect ratings for second-degree opponents in parallel using multiprocessing."""
     if not second_degree_opponents:
         print("No second-degree opponents to process")
@@ -277,7 +313,7 @@ def collect_second_degree_opponents(data_dir, email, password, second_degree_opp
     
     second_tasks = []
     for opponent_id in second_degree_opponents:
-        if opponent_id in processed_players:
+        if opponent_id in players_to_exclude:
             continue
         rating_file = data_dir / "ratings" / f"player_{opponent_id}_ratings.csv"
         if rating_file.exists():
@@ -289,20 +325,24 @@ def collect_second_degree_opponents(data_dir, email, password, second_degree_opp
     if not second_tasks:
         return True
 
-    num_processes = 8
+    # Split into batches of 50 opponents each
+    BATCH_SIZE = 50
+    batches = [second_tasks[i:i + BATCH_SIZE] for i in range(0, len(second_tasks), BATCH_SIZE)]
+    
     print(f"Starting parallel processing with {num_processes} processes for second-degree opponents...")
+    print(f"Processing {len(batches)} batches of up to {BATCH_SIZE} opponents each")
 
-    total_second_opponents = len(second_tasks)
-    second_opponents_processed = 0
+    batches_processed = 0
 
     with Pool(processes=num_processes) as pool:
-        worker_args = [(oid, email, password, str(data_dir)) for oid in second_tasks]
-        for _ in pool.imap_unordered(process_second_degree_opponent_worker, worker_args):
-            second_opponents_processed += 1
-            progress_percent = (second_opponents_processed / total_second_opponents) * 100
-            print(f"Progress: {second_opponents_processed}/{total_second_opponents} second-degree opponents processed ({progress_percent:.2f}% complete)")
+        worker_args = [(batch, email, password, str(data_dir)) for batch in batches]
+        for batch_processed_ids in pool.imap_unordered(process_second_degree_opponent_batch_worker, worker_args):
+            batches_processed += 1
+            progress_percent = (batches_processed / len(batches)) * 100
+            opponents_done = min(batches_processed * BATCH_SIZE, len(second_tasks))
+            print(f"Progress: {batches_processed}/{len(batches)} batches processed ({progress_percent:.2f}% complete) - {opponents_done} opponents done")
 
-    print(f"Completed processing {second_opponents_processed} second-degree opponents")
+    print(f"Completed processing {len(batches)} batches covering {len(second_tasks)} second-degree opponents")
     return True
 
 async def process_second_degree_opponent_simple(opponent_id, scraper):
@@ -387,11 +427,12 @@ async def run_cross_reference(data_dir, email, password):
     print("Failed to complete cross-reference after maximum attempts")
     return False
 
-async def complete_processing():
+async def complete_processing(num_processes=4):
     """Main async function to orchestrate the entire processing pipeline."""
     print(f"Starting completion process at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+    print(f"Using {num_processes} parallel processes")
     
-    base_dir = Path(__file__).parent.parent
+    base_dir = Path(__file__).parent.parent.parent  # Go to project root
     data_dir = base_dir / "data"
     
     for directory in [data_dir / "players", data_dir / "matches", data_dir / "ratings"]:
@@ -402,22 +443,83 @@ async def complete_processing():
     years = ["2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018"]
     
     print("\nCollecting data for top players...")
-    success, second_degree_opponents = collect_top_players_data(data_dir, email, password, years, True)
+    success, second_degree_opponents = collect_top_players_data(data_dir, email, password, years, True, num_processes)
     if not success:
         print("Failed to collect top players data. Exiting.")
         return False
     
     print("\nChecking opponent data...")
-    success, more_second_degree_opponents = collect_missing_opponent_data(data_dir, email, password, years, True)
+    success, more_second_degree_opponents = collect_missing_opponent_data(data_dir, email, password, years, True, num_processes)
     if not success:
         print("Failed to collect opponent data. Exiting.")
         return False
     
     second_degree_opponents.update(more_second_degree_opponents)
     
+    # Also collect second-degree opponents from ALL existing first-degree opponent match files
+    print("\nCollecting second-degree opponents from all first-degree opponent match files...")
+    top_player_ids_temp = set()
+    ranking_files = list(data_dir.glob("*_utr_rankings_*.csv"))
+    if ranking_files:
+        ranking_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        latest_ranking = ranking_files[0]
+        rankings_df = pd.read_csv(latest_ranking)
+        if 'id' in rankings_df.columns:
+            top_player_ids_temp = set(rankings_df['id'].dropna().astype(str))
+    
+    # Get ALL first-degree opponents (from existing match files)
+    all_first_degree_opponents = set()
+    matches_dir = data_dir / "matches"
+    for player_id in top_player_ids_temp:
+        match_file = matches_dir / f"player_{player_id}_matches.csv"
+        if match_file.exists():
+            df = pd.read_csv(match_file)
+            if 'opponent_id' in df.columns:
+                file_opponent_ids = df['opponent_id'].dropna().astype(str).unique()
+                all_first_degree_opponents.update(file_opponent_ids)
+    
+    # Now get second-degree opponents from ALL first-degree opponent match files
+    print(f"Scanning {len(all_first_degree_opponents)} first-degree opponent match files for second-degree opponents...")
+    for opponent_id in all_first_degree_opponents:
+        match_file = matches_dir / f"player_{opponent_id}_matches.csv"
+        if match_file.exists():
+            try:
+                df = pd.read_csv(match_file)
+                if 'opponent_id' in df.columns:
+                    file_second_ids = df['opponent_id'].dropna().astype(str).unique()
+                    second_degree_opponents.update(file_second_ids)
+            except Exception as e:
+                print(f"Warning: Error reading {match_file}: {e}")
+    
+    print(f"Total second-degree opponents found: {len(second_degree_opponents)}")
+    
     print("\nChecking second-degree opponent data...")
-    processed_players = {player_file.stem.split('_')[1] for player_file in (data_dir / "players").glob("player_*.json")}
-    success = collect_second_degree_opponents(data_dir, email, password, second_degree_opponents, processed_players)
+    # Get top players to exclude from second-degree opponents
+    top_player_ids = set()
+    ranking_files = list(data_dir.glob("*_utr_rankings_*.csv"))
+    if ranking_files:
+        ranking_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        latest_ranking = ranking_files[0]
+        rankings_df = pd.read_csv(latest_ranking)
+        if 'id' in rankings_df.columns:
+            top_player_ids = set(rankings_df['id'].dropna().astype(str))
+    
+    # Get first-degree opponents to exclude from second-degree opponents  
+    first_degree_opponents = set()
+    matches_dir = data_dir / "matches"
+    for player_id in top_player_ids:
+        match_file = matches_dir / f"player_{player_id}_matches.csv"
+        if match_file.exists():
+            df = pd.read_csv(match_file)
+            if 'opponent_id' in df.columns:
+                file_opponent_ids = df['opponent_id'].dropna().astype(str).unique()
+                first_degree_opponents.update(file_opponent_ids)
+    
+    # Second-degree opponents should exclude top players AND first-degree opponents
+    players_to_exclude = top_player_ids.union(first_degree_opponents)
+    print(f"Excluding {len(top_player_ids)} top players and {len(first_degree_opponents)} first-degree opponents")
+    
+    success = collect_second_degree_opponents(data_dir, email, password, second_degree_opponents, players_to_exclude, num_processes)
     if not success:
         print("Failed to collect second-degree opponent data. Exiting.")
         return False
@@ -429,5 +531,9 @@ async def complete_processing():
     return cross_ref_success
 
 if __name__ == "__main__":
-    success = asyncio.run(complete_processing())
+    parser = argparse.ArgumentParser(description="Complete UTR data processing with parallel processing")
+    parser.add_argument("--processes", type=int, default=4, help="Number of parallel processes to use (default: 4)")
+    args = parser.parse_args()
+    
+    success = asyncio.run(complete_processing(num_processes=args.processes))
     sys.exit(0 if success else 1)

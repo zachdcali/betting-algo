@@ -3327,395 +3327,394 @@ class UTRScraper:
             traceback.print_exc()
             return ["2025", "2024", "2023", "2022", "2021", "2020"]  # Fallback years
 
-
-async def cross_reference_matches_with_ratings(self, max_days_diff=30):
-    """
-    Cross-reference match data with rating history to get UTR at match time
-    
-    Parameters:
-    max_days_diff (int): Maximum number of days between rating date and match date
-    
-    Returns:
-    DataFrame: Enhanced match data with UTR at match time
-    """
-    logger.info(f"Cross-referencing match data with rating history (max {max_days_diff} days difference)")
-    
-    # Wait briefly to ensure all files are fully written
-    await asyncio.sleep(2)
-    
-    # Get all match files
-    match_files = list(self.matches_dir.glob("player_*_matches.csv"))
-    logger.info(f"Found {len(match_files)} match files to process")
-    
-    # Extract all unique player IDs (including both players and opponents)
-    all_player_ids = set()
-    opponent_ids = set()
-    matches_by_player = {}  # To track which matches contain each player
-    
-    # First, collect all unique player IDs and track match importance
-    for match_file in match_files:
-        try:
-            player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
-            if player_id_match:
-                player_id = player_id_match.group(1)
-                all_player_ids.add(player_id)
-                
-                # Read matches to get opponent IDs
-                if os.path.getsize(match_file) > 0:  # Make sure file isn't empty
-                    matches_df = pd.read_csv(match_file)
-                    
-                    # Track this player's matches
-                    if player_id not in matches_by_player:
-                        matches_by_player[player_id] = []
-                    
-                    # Add all matches for this player
-                    if not matches_df.empty and 'match_id' in matches_df.columns:
-                        matches_by_player[player_id].extend(matches_df['match_id'].dropna().tolist())
-                    
-                    if not matches_df.empty and 'opponent_id' in matches_df.columns:
-                        file_opponent_ids = matches_df['opponent_id'].dropna().astype(str).unique()
-                        opponent_ids.update(file_opponent_ids)
-                        all_player_ids.update(file_opponent_ids)
-                        
-                        # Track matches by opponent as well
-                        for opp_id in file_opponent_ids:
-                            opp_matches = matches_df[matches_df['opponent_id'] == opp_id]
-                            if not opp_matches.empty and 'match_id' in opp_matches.columns:
-                                if opp_id not in matches_by_player:
-                                    matches_by_player[opp_id] = []
-                                matches_by_player[opp_id].extend(opp_matches['match_id'].dropna().tolist())
-        except Exception as e:
-            logger.error(f"Error processing match file {match_file}: {e}")
-    
-    logger.info(f"Found {len(all_player_ids)} unique players to process")
-    logger.info(f"Including {len(opponent_ids)} unique opponents")
-    
-    # Check for missing rating histories and try to get them if needed
-    missing_ratings = []
-    for player_id in all_player_ids:
-        if not player_id or player_id == 'nan':
-            continue
-            
-        rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
-        if not rating_file.exists() or os.path.getsize(rating_file) == 0:
-            missing_ratings.append(player_id)
-    
-    if missing_ratings:
-        logger.info(f"Found {len(missing_ratings)} players with missing rating histories")
+    async def cross_reference_matches_with_ratings(self, max_days_diff=30):
+        """
+        Cross-reference match data with rating history to get UTR at match time
         
-        # Sort missing ratings by match importance (higher matches count = more important)
-        def get_match_count(player_id):
-            return len(matches_by_player.get(player_id, []))
+        Parameters:
+        max_days_diff (int): Maximum number of days between rating date and match date
         
-        # Sort by match count (descending) so more important players are processed first
-        missing_ratings.sort(key=get_match_count, reverse=True)
+        Returns:
+        DataFrame: Enhanced match data with UTR at match time
+        """
+        logger.info(f"Cross-referencing match data with rating history (max {max_days_diff} days difference)")
         
-        for idx, player_id in enumerate(missing_ratings):
-            # Determine importance for retry strategy
-            match_count = get_match_count(player_id)
-            is_important = match_count > 2
-            max_retries = 5 if is_important else 3
-            
-            logger.info(f"Getting missing rating history for {'important ' if is_important else ''}player {idx+1}/{len(missing_ratings)}: {player_id} (matches: {match_count})")
-            
+        # Wait briefly to ensure all files are fully written
+        await asyncio.sleep(2)
+        
+        # Get all match files
+        match_files = list(self.matches_dir.glob("player_*_matches.csv"))
+        logger.info(f"Found {len(match_files)} match files to process")
+        
+        # Extract all unique player IDs (including both players and opponents)
+        all_player_ids = set()
+        opponent_ids = set()
+        matches_by_player = {}  # To track which matches contain each player
+        
+        # First, collect all unique player IDs and track match importance
+        for match_file in match_files:
             try:
-                # Get player profile first
-                await self.get_player_profile(player_id)
-                # Then get rating history with appropriate retries
-                ratings = await self.get_player_rating_history(player_id, max_retries=max_retries)
-                
-                if not ratings.empty:
-                    logger.info(f"Successfully retrieved {len(ratings)} ratings for player {player_id}")
-                else:
-                    logger.warning(f"Failed to get ratings for player {player_id} after multiple attempts")
-                
-                # Add a random delay to avoid rate limiting
-                await asyncio.sleep(random.uniform(2.0, 4.0))
+                player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
+                if player_id_match:
+                    player_id = player_id_match.group(1)
+                    all_player_ids.add(player_id)
+                    
+                    # Read matches to get opponent IDs
+                    if os.path.getsize(match_file) > 0:  # Make sure file isn't empty
+                        matches_df = pd.read_csv(match_file)
+                        
+                        # Track this player's matches
+                        if player_id not in matches_by_player:
+                            matches_by_player[player_id] = []
+                        
+                        # Add all matches for this player
+                        if not matches_df.empty and 'match_id' in matches_df.columns:
+                            matches_by_player[player_id].extend(matches_df['match_id'].dropna().tolist())
+                        
+                        if not matches_df.empty and 'opponent_id' in matches_df.columns:
+                            file_opponent_ids = matches_df['opponent_id'].dropna().astype(str).unique()
+                            opponent_ids.update(file_opponent_ids)
+                            all_player_ids.update(file_opponent_ids)
+                            
+                            # Track matches by opponent as well
+                            for opp_id in file_opponent_ids:
+                                opp_matches = matches_df[matches_df['opponent_id'] == opp_id]
+                                if not opp_matches.empty and 'match_id' in opp_matches.columns:
+                                    if opp_id not in matches_by_player:
+                                        matches_by_player[opp_id] = []
+                                    matches_by_player[opp_id].extend(opp_matches['match_id'].dropna().tolist())
             except Exception as e:
-                logger.error(f"Failed to get rating history for {player_id}: {e}")
-                # Create empty file to avoid retrying this player
-                empty_df = pd.DataFrame(columns=['date', 'utr'])
-                empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
+                logger.error(f"Error processing match file {match_file}: {e}")
+        
+        logger.info(f"Found {len(all_player_ids)} unique players to process")
+        logger.info(f"Including {len(opponent_ids)} unique opponents")
+        
+        # Check for missing rating histories and try to get them if needed
+        missing_ratings = []
+        for player_id in all_player_ids:
+            if not player_id or player_id == 'nan':
+                continue
                 
-                # Restart browser every 10 players to avoid memory issues
-                if idx % 10 == 9:
-                    try:
-                        logger.info(f"Restarting browser after processing {idx+1} players...")
-                        await self.close_browser()
-                        await asyncio.sleep(3)
-                        await self.start_browser()
-                        await self.login()
-                        await asyncio.sleep(3)
-                    except Exception as browser_error:
-                        logger.error(f"Error restarting browser: {browser_error}")
-    
-    # Create a cache to store player ratings
-    player_ratings_cache = {}
-    
-    # Load all existing rating histories into cache
-    for rating_file in self.ratings_dir.glob("player_*_ratings.csv"):
-        try:
-            player_id_match = re.search(r"player_(\d+)_ratings", str(rating_file))
-            if player_id_match and os.path.getsize(rating_file) > 0:  # Ensure file isn't empty
+            rating_file = self.ratings_dir / f"player_{player_id}_ratings.csv"
+            if not rating_file.exists() or os.path.getsize(rating_file) == 0:
+                missing_ratings.append(player_id)
+        
+        if missing_ratings:
+            logger.info(f"Found {len(missing_ratings)} players with missing rating histories")
+            
+            # Sort missing ratings by match importance (higher matches count = more important)
+            def get_match_count(player_id):
+                return len(matches_by_player.get(player_id, []))
+            
+            # Sort by match count (descending) so more important players are processed first
+            missing_ratings.sort(key=get_match_count, reverse=True)
+            
+            for idx, player_id in enumerate(missing_ratings):
+                # Determine importance for retry strategy
+                match_count = get_match_count(player_id)
+                is_important = match_count > 2
+                max_retries = 5 if is_important else 3
+                
+                logger.info(f"Getting missing rating history for {'important ' if is_important else ''}player {idx+1}/{len(missing_ratings)}: {player_id} (matches: {match_count})")
+                
+                try:
+                    # Get player profile first
+                    await self.get_player_profile(player_id)
+                    # Then get rating history with appropriate retries
+                    ratings = await self.get_player_rating_history(player_id, max_retries=max_retries)
+                    
+                    if not ratings.empty:
+                        logger.info(f"Successfully retrieved {len(ratings)} ratings for player {player_id}")
+                    else:
+                        logger.warning(f"Failed to get ratings for player {player_id} after multiple attempts")
+                    
+                    # Add a random delay to avoid rate limiting
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
+                except Exception as e:
+                    logger.error(f"Failed to get rating history for {player_id}: {e}")
+                    # Create empty file to avoid retrying this player
+                    empty_df = pd.DataFrame(columns=['date', 'utr'])
+                    empty_df.to_csv(self.ratings_dir / f"player_{player_id}_ratings.csv", index=False)
+                    
+                    # Restart browser every 10 players to avoid memory issues
+                    if idx % 10 == 9:
+                        try:
+                            logger.info(f"Restarting browser after processing {idx+1} players...")
+                            await self.close_browser()
+                            await asyncio.sleep(3)
+                            await self.start_browser()
+                            await self.login()
+                            await asyncio.sleep(3)
+                        except Exception as browser_error:
+                            logger.error(f"Error restarting browser: {browser_error}")
+        
+        # Create a cache to store player ratings
+        player_ratings_cache = {}
+        
+        # Load all existing rating histories into cache
+        for rating_file in self.ratings_dir.glob("player_*_ratings.csv"):
+            try:
+                player_id_match = re.search(r"player_(\d+)_ratings", str(rating_file))
+                if player_id_match and os.path.getsize(rating_file) > 0:  # Ensure file isn't empty
+                    player_id = player_id_match.group(1)
+                    
+                    # Only cache if we actually need this player's data
+                    if player_id in all_player_ids:
+                        ratings_df = pd.read_csv(rating_file)
+                        
+                        # Skip empty rating files
+                        if ratings_df.empty:
+                            logger.warning(f"Rating file for player {player_id} exists but is empty")
+                            continue
+                            
+                        # Handle the case where a player might be "UR" (unrated)
+                        if 'utr' in ratings_df.columns:
+                            # Convert "UR" to NaN for proper datetime operations
+                            if ratings_df['utr'].dtype == object:  # Only for string columns
+                                ratings_df.loc[ratings_df['utr'] == "UR", 'utr'] = np.nan
+                            
+                            # Ensure all UTR values are numeric
+                            ratings_df['utr'] = pd.to_numeric(ratings_df['utr'], errors='coerce')
+                        else:
+                            logger.warning(f"Rating file for player {player_id} has no 'utr' column")
+                            continue
+                        
+                        # Convert dates to datetime
+                        if 'date' in ratings_df.columns:
+                            ratings_df['date'] = pd.to_datetime(ratings_df['date'], errors='coerce')
+                            ratings_df = ratings_df.sort_values('date')
+                        else:
+                            logger.warning(f"Rating file for player {player_id} has no 'date' column")
+                            continue
+                            
+                        player_ratings_cache[player_id] = ratings_df
+                        logger.info(f"Cached rating history for player {player_id}: {len(ratings_df)} entries")
+            except Exception as e:
+                logger.error(f"Error loading rating history from {rating_file}: {e}")
+        
+        # Helper function to get player rating at a specific date
+        def get_player_rating_at_date(player_id, match_date):
+            """Find the closest rating before match_date within max_days_diff"""
+            if player_id is None or str(player_id) == 'nan':
+                return None, None
+            
+            player_id = str(player_id)  # Ensure string type
+            
+            # Check if we have ratings for this player
+            if player_id not in player_ratings_cache:
+                logger.warning(f"No rating history available for player {player_id}")
+                return None, None
+            
+            ratings_df = player_ratings_cache[player_id]
+            
+            # Ensure we have date and utr columns
+            if 'date' not in ratings_df.columns or 'utr' not in ratings_df.columns:
+                logger.warning(f"Invalid rating history format for player {player_id}")
+                return None, None
+            
+            # Convert match_date to datetime if it's not already
+            if not isinstance(match_date, pd.Timestamp) and not isinstance(match_date, datetime):
+                try:
+                    match_date = pd.to_datetime(match_date)
+                except:
+                    logger.warning(f"Invalid match date format: {match_date}")
+                    return None, None
+            
+            # Find the closest rating before the match date
+            past_ratings = ratings_df[ratings_df['date'] <= match_date]
+            
+            if past_ratings.empty:
+                return None, None
+            
+            # Make sure we don't select a row with null/NaN UTR
+            past_ratings = past_ratings.dropna(subset=['utr'])
+            
+            if past_ratings.empty:
+                return None, None
+                
+            closest_rating_idx = past_ratings.index[-1]
+            closest_rating_date = past_ratings.loc[closest_rating_idx, 'date']
+            
+            # Calculate days between the rating and the match
+            if pd.notnull(closest_rating_date) and pd.notnull(match_date):
+                days_diff = (match_date - closest_rating_date).days
+                
+                if days_diff <= max_days_diff:
+                    return past_ratings.loc[closest_rating_idx, 'utr'], days_diff
+            
+            return None, None
+        
+        # Function to create standardized match IDs
+        def get_standardized_match_id(row):
+            """
+            Create a standardized match ID by ordering player IDs
+            so the same match will have the same ID regardless of perspective
+            """
+            if pd.isna(row['date']) or pd.isna(row['player_id']) or pd.isna(row['opponent_id']):
+                return None
+                
+            date_str = str(row['date']).split()[0]  # Get just the date part
+            player_id = str(row['player_id'])
+            opponent_id = str(row['opponent_id'])
+            
+            # Sort the IDs so the smaller ID always comes first
+            player_ids = sorted([player_id, opponent_id])
+            
+            # Create standardized match ID
+            return f"{date_str}_{player_ids[0]}_{player_ids[1]}"
+        
+        # Process each match file to enhance with historical UTRs
+        all_enhanced_matches = []
+        valid_match_count = 0
+        skipped_match_count = 0
+        
+        for match_file in match_files:
+            try:
+                # Extract player ID from filename
+                player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
+                if not player_id_match:
+                    logger.warning(f"Could not extract player ID from {match_file}")
+                    continue
+                
                 player_id = player_id_match.group(1)
                 
-                # Only cache if we actually need this player's data
-                if player_id in all_player_ids:
-                    ratings_df = pd.read_csv(rating_file)
+                # Load match data
+                if os.path.getsize(match_file) == 0:  # Check if file is empty
+                    logger.warning(f"Match file for player {player_id} is empty")
+                    continue
                     
-                    # Skip empty rating files
-                    if ratings_df.empty:
-                        logger.warning(f"Rating file for player {player_id} exists but is empty")
-                        continue
-                        
-                    # Handle the case where a player might be "UR" (unrated)
-                    if 'utr' in ratings_df.columns:
-                        # Convert "UR" to NaN for proper datetime operations
-                        if ratings_df['utr'].dtype == object:  # Only for string columns
-                            ratings_df.loc[ratings_df['utr'] == "UR", 'utr'] = np.nan
-                        
-                        # Ensure all UTR values are numeric
-                        ratings_df['utr'] = pd.to_numeric(ratings_df['utr'], errors='coerce')
-                    else:
-                        logger.warning(f"Rating file for player {player_id} has no 'utr' column")
-                        continue
-                    
-                    # Convert dates to datetime
-                    if 'date' in ratings_df.columns:
-                        ratings_df['date'] = pd.to_datetime(ratings_df['date'], errors='coerce')
-                        ratings_df = ratings_df.sort_values('date')
-                    else:
-                        logger.warning(f"Rating file for player {player_id} has no 'date' column")
-                        continue
-                        
-                    player_ratings_cache[player_id] = ratings_df
-                    logger.info(f"Cached rating history for player {player_id}: {len(ratings_df)} entries")
-        except Exception as e:
-            logger.error(f"Error loading rating history from {rating_file}: {e}")
-    
-    # Helper function to get player rating at a specific date
-    def get_player_rating_at_date(player_id, match_date):
-        """Find the closest rating before match_date within max_days_diff"""
-        if player_id is None or str(player_id) == 'nan':
-            return None, None
-        
-        player_id = str(player_id)  # Ensure string type
-        
-        # Check if we have ratings for this player
-        if player_id not in player_ratings_cache:
-            logger.warning(f"No rating history available for player {player_id}")
-            return None, None
-        
-        ratings_df = player_ratings_cache[player_id]
-        
-        # Ensure we have date and utr columns
-        if 'date' not in ratings_df.columns or 'utr' not in ratings_df.columns:
-            logger.warning(f"Invalid rating history format for player {player_id}")
-            return None, None
-        
-        # Convert match_date to datetime if it's not already
-        if not isinstance(match_date, pd.Timestamp) and not isinstance(match_date, datetime):
-            try:
-                match_date = pd.to_datetime(match_date)
-            except:
-                logger.warning(f"Invalid match date format: {match_date}")
-                return None, None
-        
-        # Find the closest rating before the match date
-        past_ratings = ratings_df[ratings_df['date'] <= match_date]
-        
-        if past_ratings.empty:
-            return None, None
-        
-        # Make sure we don't select a row with null/NaN UTR
-        past_ratings = past_ratings.dropna(subset=['utr'])
-        
-        if past_ratings.empty:
-            return None, None
-            
-        closest_rating_idx = past_ratings.index[-1]
-        closest_rating_date = past_ratings.loc[closest_rating_idx, 'date']
-        
-        # Calculate days between the rating and the match
-        if pd.notnull(closest_rating_date) and pd.notnull(match_date):
-            days_diff = (match_date - closest_rating_date).days
-            
-            if days_diff <= max_days_diff:
-                return past_ratings.loc[closest_rating_idx, 'utr'], days_diff
-        
-        return None, None
-    
-    # Function to create standardized match IDs
-    def get_standardized_match_id(row):
-        """
-        Create a standardized match ID by ordering player IDs
-        so the same match will have the same ID regardless of perspective
-        """
-        if pd.isna(row['date']) or pd.isna(row['player_id']) or pd.isna(row['opponent_id']):
-            return None
-            
-        date_str = str(row['date']).split()[0]  # Get just the date part
-        player_id = str(row['player_id'])
-        opponent_id = str(row['opponent_id'])
-        
-        # Sort the IDs so the smaller ID always comes first
-        player_ids = sorted([player_id, opponent_id])
-        
-        # Create standardized match ID
-        return f"{date_str}_{player_ids[0]}_{player_ids[1]}"
-    
-    # Process each match file to enhance with historical UTRs
-    all_enhanced_matches = []
-    valid_match_count = 0
-    skipped_match_count = 0
-    
-    for match_file in match_files:
-        try:
-            # Extract player ID from filename
-            player_id_match = re.search(r"player_(\d+)_matches", str(match_file))
-            if not player_id_match:
-                logger.warning(f"Could not extract player ID from {match_file}")
-                continue
-            
-            player_id = player_id_match.group(1)
-            
-            # Load match data
-            if os.path.getsize(match_file) == 0:  # Check if file is empty
-                logger.warning(f"Match file for player {player_id} is empty")
-                continue
+                matches_df = pd.read_csv(match_file)
                 
-            matches_df = pd.read_csv(match_file)
-            
-            if matches_df.empty:
-                logger.warning(f"No matches found for player {player_id}")
-                continue
-            
-            # Ensure date column is datetime
-            matches_df['date'] = pd.to_datetime(matches_df['date'], errors='coerce')
-            
-            # Process each match to find UTRs at match time
-            for idx, match in matches_df.iterrows():
-                match_date = match['date']
-                
-                if pd.isna(match_date):
-                    logger.warning(f"Skipping match with no date for player {player_id}")
-                    skipped_match_count += 1
+                if matches_df.empty:
+                    logger.warning(f"No matches found for player {player_id}")
                     continue
                 
-                opponent_id = match.get('opponent_id')
-                if pd.isna(opponent_id):
-                    logger.warning(f"Skipping match with no opponent ID for player {player_id}")
-                    skipped_match_count += 1
-                    continue
+                # Ensure date column is datetime
+                matches_df['date'] = pd.to_datetime(matches_df['date'], errors='coerce')
                 
-                # Get player's UTR rating at match time
-                player_rating, player_days_diff = get_player_rating_at_date(player_id, match_date)
-                
-                # Get opponent's UTR rating at match time
-                opponent_rating, opponent_days_diff = get_player_rating_at_date(opponent_id, match_date)
-                
-                # Handle special cases like "UR" (Unrated) players
-                player_displayed_utr = match.get('player_utr_displayed')
-                opponent_displayed_utr = match.get('opponent_utr_displayed')
-                
-                # Special handling for "UR" (Unrated) players
-                if str(player_displayed_utr) == "UR":
-                    player_rating = "UR"
-                    player_days_diff = 0
-                
-                if str(opponent_displayed_utr) == "UR":
-                    opponent_rating = "UR"
-                    opponent_days_diff = 0
-                
-                # Update match data with historical UTR ratings
-                if player_rating is not None:
-                    matches_df.at[idx, 'player_utr_at_match'] = player_rating
-                    matches_df.at[idx, 'player_utr_days_diff'] = player_days_diff
+                # Process each match to find UTRs at match time
+                for idx, match in matches_df.iterrows():
+                    match_date = match['date']
                     
-                    if opponent_rating is not None:
-                        matches_df.at[idx, 'opponent_utr_at_match'] = opponent_rating
-                        matches_df.at[idx, 'opponent_utr_days_diff'] = opponent_days_diff
+                    if pd.isna(match_date):
+                        logger.warning(f"Skipping match with no date for player {player_id}")
+                        skipped_match_count += 1
+                        continue
+                    
+                    opponent_id = match.get('opponent_id')
+                    if pd.isna(opponent_id):
+                        logger.warning(f"Skipping match with no opponent ID for player {player_id}")
+                        skipped_match_count += 1
+                        continue
+                    
+                    # Get player's UTR rating at match time
+                    player_rating, player_days_diff = get_player_rating_at_date(player_id, match_date)
+                    
+                    # Get opponent's UTR rating at match time
+                    opponent_rating, opponent_days_diff = get_player_rating_at_date(opponent_id, match_date)
+                    
+                    # Handle special cases like "UR" (Unrated) players
+                    player_displayed_utr = match.get('player_utr_displayed')
+                    opponent_displayed_utr = match.get('opponent_utr_displayed')
+                    
+                    # Special handling for "UR" (Unrated) players
+                    if str(player_displayed_utr) == "UR":
+                        player_rating = "UR"
+                        player_days_diff = 0
+                    
+                    if str(opponent_displayed_utr) == "UR":
+                        opponent_rating = "UR"
+                        opponent_days_diff = 0
+                    
+                    # Update match data with historical UTR ratings
+                    if player_rating is not None:
+                        matches_df.at[idx, 'player_utr_at_match'] = player_rating
+                        matches_df.at[idx, 'player_utr_days_diff'] = player_days_diff
                         
-                        # Calculate UTR difference if both are numeric
-                        if isinstance(player_rating, (int, float)) and isinstance(opponent_rating, (int, float)):
-                            matches_df.at[idx, 'utr_diff'] = float(player_rating) - float(opponent_rating)
-                            matches_df.at[idx, 'valid_for_model'] = True
-                            valid_match_count += 1
-                            logger.info(f"Valid match: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating}) on {match_date.strftime('%Y-%m-%d')}")
+                        if opponent_rating is not None:
+                            matches_df.at[idx, 'opponent_utr_at_match'] = opponent_rating
+                            matches_df.at[idx, 'opponent_utr_days_diff'] = opponent_days_diff
+                            
+                            # Calculate UTR difference if both are numeric
+                            if isinstance(player_rating, (int, float)) and isinstance(opponent_rating, (int, float)):
+                                matches_df.at[idx, 'utr_diff'] = float(player_rating) - float(opponent_rating)
+                                matches_df.at[idx, 'valid_for_model'] = True
+                                valid_match_count += 1
+                                logger.info(f"Valid match: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating}) on {match_date.strftime('%Y-%m-%d')}")
+                            else:
+                                # One of the players is "UR" - mark accordingly
+                                matches_df.at[idx, 'utr_diff'] = None
+                                matches_df.at[idx, 'valid_for_model'] = False
+                                matches_df.at[idx, 'unrated_player'] = True
+                                logger.info(f"Match with unrated player: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating})")
                         else:
-                            # One of the players is "UR" - mark accordingly
-                            matches_df.at[idx, 'utr_diff'] = None
                             matches_df.at[idx, 'valid_for_model'] = False
-                            matches_df.at[idx, 'unrated_player'] = True
-                            logger.info(f"Match with unrated player: {match['player_name']} ({player_rating}) vs {match['opponent_name']} ({opponent_rating})")
+                            skipped_match_count += 1
+                            logger.debug(f"No valid UTR for opponent {match['opponent_name']} (ID: {opponent_id}) within {max_days_diff} days of match")
                     else:
                         matches_df.at[idx, 'valid_for_model'] = False
                         skipped_match_count += 1
-                        logger.debug(f"No valid UTR for opponent {match['opponent_name']} (ID: {opponent_id}) within {max_days_diff} days of match")
-                else:
-                    matches_df.at[idx, 'valid_for_model'] = False
-                    skipped_match_count += 1
-                    logger.debug(f"No valid UTR for player {match['player_name']} within {max_days_diff} days of match")
-            
-            # Add to collection and save back to file
-            all_enhanced_matches.append(matches_df)
-            matches_df.to_csv(match_file, index=False)
-            
-            logger.info(f"Processed {len(matches_df)} matches for player {player_id}")
+                        logger.debug(f"No valid UTR for player {match['player_name']} within {max_days_diff} days of match")
                 
-        except Exception as e:
-            logger.error(f"Error processing matches from {match_file}: {e}")
-    
-    # Combine all enhanced matches
-    if all_enhanced_matches:
-        try:
-            combined_df = pd.concat(all_enhanced_matches, ignore_index=True)
-            
-            # Add standardized match ID
-            combined_df['standardized_match_id'] = combined_df.apply(get_standardized_match_id, axis=1)
-            
-            # Save all enhanced matches
-            combined_file = self.data_dir / "all_enhanced_matches.csv"
-            combined_df.to_csv(combined_file, index=False)
-            
-            # For the valid_matches output, we want to eliminate duplicates entirely
-            # and only keep one version of each match
-            valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
-            
-            # Use the standardized match ID to drop duplicates, keeping the first occurrence
-            if 'standardized_match_id' in valid_matches_df.columns:
-                original_count = len(valid_matches_df)
-                valid_matches_df.drop_duplicates(subset=['standardized_match_id'], keep='first', inplace=True)
-                dupe_count = original_count - len(valid_matches_df)
-                if dupe_count > 0:
-                    logger.info(f"Removed {dupe_count} duplicate matches from final valid matches output")
-            
-            # Save only valid matches with complete UTR data
-            valid_file = self.data_dir / "valid_matches_for_model.csv"
-            valid_matches_df.to_csv(valid_file, index=False)
-            
-            # Save matches with unrated players - FIX: Check if column exists first
-            if 'unrated_player' in combined_df.columns:
-                unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy()
-                if not unrated_matches_df.empty:
-                    unrated_file = self.data_dir / "unrated_player_matches.csv"
-                    unrated_matches_df.to_csv(unrated_fileindex=False)
-                    logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
-            
-            logger.info(f"Saved {len(combined_df)} enhanced matches to {combined_file}")
-            logger.info(f"Saved {len(valid_matches_df)} valid matches with complete UTR data to {valid_file}")
-            logger.info(f"Valid matches: {valid_match_count}, Skipped matches: {skipped_match_count}")
-            
-            return valid_matches_df
-        except Exception as e:
-            logger.error(f"Error combining matches: {e}")
-            # Log the stack trace for better debugging
-            import traceback
-            logger.error(f"Stack trace: {traceback.format_exc()}")
+                # Add to collection and save back to file
+                all_enhanced_matches.append(matches_df)
+                matches_df.to_csv(match_file, index=False)
+                
+                logger.info(f"Processed {len(matches_df)} matches for player {player_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing matches from {match_file}: {e}")
+        
+        # Combine all enhanced matches
+        if all_enhanced_matches:
+            try:
+                combined_df = pd.concat(all_enhanced_matches, ignore_index=True)
+                
+                # Add standardized match ID
+                combined_df['standardized_match_id'] = combined_df.apply(get_standardized_match_id, axis=1)
+                
+                # Save all enhanced matches
+                combined_file = self.data_dir / "all_enhanced_matches.csv"
+                combined_df.to_csv(combined_file, index=False)
+                
+                # For the valid_matches output, we want to eliminate duplicates entirely
+                # and only keep one version of each match
+                valid_matches_df = combined_df[combined_df['valid_for_model'] == True].copy()
+                
+                # Use the standardized match ID to drop duplicates, keeping the first occurrence
+                if 'standardized_match_id' in valid_matches_df.columns:
+                    original_count = len(valid_matches_df)
+                    valid_matches_df.drop_duplicates(subset=['standardized_match_id'], keep='first', inplace=True)
+                    dupe_count = original_count - len(valid_matches_df)
+                    if dupe_count > 0:
+                        logger.info(f"Removed {dupe_count} duplicate matches from final valid matches output")
+                
+                # Save only valid matches with complete UTR data
+                valid_file = self.data_dir / "valid_matches_for_model.csv"
+                valid_matches_df.to_csv(valid_file, index=False)
+                
+                # Save matches with unrated players - FIX: Check if column exists first
+                if 'unrated_player' in combined_df.columns:
+                    unrated_matches_df = combined_df[combined_df['unrated_player'] == True].copy()
+                    if not unrated_matches_df.empty:
+                        unrated_file = self.data_dir / "unrated_player_matches.csv"
+                        unrated_matches_df.to_csv(unrated_file, index=False)
+                        logger.info(f"Saved {len(unrated_matches_df)} matches with unrated players to {unrated_file}")
+                
+                logger.info(f"Saved {len(combined_df)} enhanced matches to {combined_file}")
+                logger.info(f"Saved {len(valid_matches_df)} valid matches with complete UTR data to {valid_file}")
+                logger.info(f"Valid matches: {valid_match_count}, Skipped matches: {skipped_match_count}")
+                
+                return valid_matches_df
+            except Exception as e:
+                logger.error(f"Error combining matches: {e}")
+                # Log the stack trace for better debugging
+                import traceback
+                logger.error(f"Stack trace: {traceback.format_exc()}")
+                return pd.DataFrame()
+        else:
+            logger.warning("No enhanced matches to combine")
             return pd.DataFrame()
-    else:
-        logger.warning("No enhanced matches to combine")
-        return pd.DataFrame()
 
 # Example usage
 if __name__ == "__main__":

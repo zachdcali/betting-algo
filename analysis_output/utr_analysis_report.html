@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UTR Predictive Analysis Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1, h2 { color: #2c3e50; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .plot { margin: 20px 0; text-align: center; }
+        .plot img { max-width: 100%; border: 1px solid #ddd; }
+        .stats { background-color: #f9f9f9; padding: 15px; border-radius: 5px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>UTR Predictive Analysis Report</h1>
+        <p>Generated on: 2025-08-23 00:11</p>
+        
+        <div class="stats">
+            <h2>Key Statistics</h2>
+            <ul>
+                <li>Overall UTR prediction accuracy (higher-UTR rule, ties=0.5): 72.87%</li>
+                <li>Total matches analyzed: 378,401 (ties: 1,860)</li>
+                <li>Mean UTR in dataset: 12.63 (range: 1.38-16.45)</li>
+                <li>Brier score (test): 0.179</li>
+                <li>ECE (test): 0.011 | MCE (test): 0.022</li>
+            </ul>
+        </div>
+        
+        <div class="stats">
+            <h2>Methodology Notes</h2>
+            <p><strong>Higher-UTR Rule:</strong> Predictions are based on the simple rule that the player with higher UTR wins. 
+            Ties (equal UTR) are counted as 0.5 credit to both outcomes, reflecting the inherent uncertainty when players have identical ratings.</p>
+            <p><strong>Validation:</strong> All model metrics (Brier, ECE, MCE, AUC) are computed on a holdout test set to ensure unbiased evaluation.</p>
+        </div>
+        
+        <h2>UTR Differential Analysis</h2>
+        <div class="plot">
+            <img src="plots/win_rate_by_utr_diff.png" alt="Win Rate by UTR Differential">
+            <p>Win rate by UTR differential with 95% Wilson confidence intervals. Only bins with n≥50 matches shown.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/win_rate_by_small_utr_diff.png" alt="Win Rate by Small UTR Differential">
+            <p>Detailed view of win rates for small UTR differentials (±2) with 95% confidence intervals. Only bins with n≥20 matches shown.</p>
+        </div>
+        
+        <h2>UTR Level Analysis</h2>
+        <div class="plot">
+            <img src="plots/accuracy_by_utr_level.png" alt="Accuracy by UTR Level">
+            <p>This plot shows how UTR's predictive accuracy changes across different skill levels.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/accuracy_heatmap.png" alt="Accuracy Heatmap">
+            <p>Predictive accuracy heatmap by skill level and UTR differential. Cells with n&lt;50 matches are masked for reliability.</p>
+        </div>
+        
+        <h2>Logistic Regression Analysis</h2>
+        <div class="plot">
+            <img src="plots/logistic_regression_curve.png" alt="Logistic Regression Curve">
+            <p>This plot shows the modeled probability of winning based on UTR differential.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/logistic_regression_by_level.png" alt="Logistic Regression by Level">
+            <p>This plot compares the probability curves across different UTR levels.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/roc_curve.png" alt="ROC Curve">
+            <p>ROC curve showing the predictive power of UTR differential.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/calibration_curve.png" alt="Calibration Curve">
+            <p>Reliability diagram on the holdout set with Brier score and calibration errors (ECE/MCE).</p>
+        </div>
+
+        <div class="plot">
+            <img src="plots/count_heatmap.png" alt="Sample Size Heatmap">
+            <p>Sample sizes by skill level and UTR differential (useful context for the accuracy heatmap).</p>
+        </div>
+        
+        <h2>Temporal Stability</h2>
+        <div class="plot">
+            <img src="plots/accuracy_by_year.png" alt="Accuracy by Year">
+            <p>UTR prediction accuracy by year showing temporal stability and consistency over time.</p>
+        </div>
+        
+        <h2>UTR Distribution</h2>
+        <div class="plot">
+            <img src="plots/utr_distribution.png" alt="UTR Distribution">
+            <p>This histogram shows the distribution of UTR ratings in the dataset.</p>
+        </div>
+        
+        <div class="plot">
+            <img src="plots/utr_distribution_by_range.png" alt="UTR Distribution by Range">
+            <p>This bar chart shows the count of players in each UTR range.</p>
+        </div>
+        
+        <h2>Regression Results</h2>
+        <table>
+            <tr>
+                <th>Level</th>
+                <th>Matches</th>
+                <th>Coefficient</th>
+                <th>Intercept</th>
+                <th>Accuracy</th>
+                <th>Brier</th>
+                <th>AUC</th>
+            </tr>
+            <tr>
+                <td>All</td>
+                <td>185,764</td>
+                <td>1.4964</td>
+                <td>0.076093</td>
+                <td>72.53%</td>
+                <td>0.179</td>
+                <td>0.795</td>
+            </tr>
+            <tr>
+                <td>UTR < 12</td>
+                <td>53,359</td>
+                <td>1.4045</td>
+                <td>0.171794</td>
+                <td>79.03%</td>
+                <td>0.144</td>
+                <td>0.840</td>
+            </tr>
+            <tr>
+                <td>UTR 12-14</td>
+                <td>106,917</td>
+                <td>1.5827</td>
+                <td>0.044080</td>
+                <td>71.65%</td>
+                <td>0.185</td>
+                <td>0.786</td>
+            </tr>
+            <tr>
+                <td>UTR 14+</td>
+                <td>25,488</td>
+                <td>1.4711</td>
+                <td>0.000213</td>
+                <td>62.43%</td>
+                <td>0.229</td>
+                <td>0.671</td>
+            </tr>
+        </table>
+    </div>
+</body>
+</html>
