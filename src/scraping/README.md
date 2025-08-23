@@ -1,114 +1,71 @@
-# UTR Tennis Data Scraping Infrastructure
+# UTR Tennis Data Scraping
 
-Production-ready scraping system for collecting Universal Tennis Rating (UTR) data and cross-referencing with match histories.
+> Production-ready Playwright scraper + cross-referencing pipeline for UTR.  
+> **Sample run:** 378,401 matches · Overall accuracy 72.9% (95% CI via Wilson)
 
-## Overview
+**Docs:** [Usage](./USAGE.md) · [Architecture](./ARCHITECTURE.md) · [Full Results](./RESULTS.md)  
+**Sample Report:** [`analysis_output/utr_analysis_report.html`](./analysis_output/utr_analysis_report.html)
 
-This scraping infrastructure systematically collects tennis match and rating data using a three-tier approach to maximize dataset completeness for predictive modeling. Successfully processed **378,401 matches** with UTR ratings at match time.
+## Quick Start
 
-## Core Files
-
-- **`utr_scraper_cloud.py`**: Main scraper class with Playwright browser automation
-- **`finish_processing.py`**: Complete pipeline orchestrator with multiprocessing
-- **`archive/`**: Legacy scraper versions (deprecated)
-
-## How It Works
-
-### Data Collection Strategy
-1. **ATP Rankings Import**: Downloads top 100 men's ATP player rankings from UTR site
-2. **Tier 1 - Top Players**: Collects complete match and rating histories for all top 100 ATP players  
-3. **Tier 2 - First-Degree Opponents**: Collects match and rating histories for all opponents of top players (~15,000 players)
-4. **Tier 3 - Second-Degree Opponents**: Collects rating histories for opponents of first-degree opponents (~50,000+ players)
-
-### Cross-Referencing Engine
-- Matches historical UTR ratings with match dates (±30 days tolerance)
-- Ensures both players have valid UTR ratings at time of match
-- Maximizes dataset completeness for accurate predictive modeling
-
-### Resilience Features
-- **Resume Capability**: Automatically detects existing files and resumes where interrupted
-- **Multi-processing**: Configurable process count for optimal performance
-- **Error Recovery**: Automatic browser restarts and retry logic on failures
-- **Batch Processing**: Groups requests to minimize server load
-
-## Requirements
-
-- **UTR Premium subscription** required for full decimal ratings and complete rating histories
-- Python 3.8+ with Playwright browser automation
-- Environment variables: `UTR_EMAIL` and `UTR_PASSWORD`
-
-## Usage
-
-### Setup Environment
 ```bash
-# Set your UTR credentials
-export UTR_EMAIL=your_email@example.com
-export UTR_PASSWORD=your_password
+# Setup credentials
+cp .env.example .env
+# Edit .env with your UTR_EMAIL and UTR_PASSWORD
 
 # Install dependencies
 pip install playwright pandas asyncio
 playwright install chromium
-```
 
-### Run Complete Pipeline
-```bash
-# Run with default 4 processes
-python finish_processing.py
-
-# Run with custom process count (recommended: 2-8)
+# Run scraper (adjust processes as needed)
 python finish_processing.py --processes 6
+
+# View sample analysis (no private data required)
+python ./scripts/demo_report.py
 ```
 
-### Generate Analysis Report
-```bash
-# Create comprehensive statistical analysis
-python ../../utr_analysis_report.py
-```
+## Data Access
 
-## Output Structure
+We **don't** commit scraped data. A **UTR Premium** account is required to reproduce the full pipeline.  
+We ship a **static sample report** and plots so you can see expected outputs without data access.
 
-```
-data/
-├── matches/           # Match histories: player_{id}_matches.csv
-├── players/          # Player profiles: player_{id}.json
-└── ratings/          # Rating histories: player_{id}_ratings.csv
+## Core Files
 
-analysis_output/
-├── utr_analysis_report.html    # Statistical analysis report
-├── analysis_results.json       # Raw analysis data
-└── plots/                      # Generated visualizations
-```
+- **`finish_processing.py`** - Complete pipeline orchestrator with multiprocessing
+- **`utr_scraper_cloud.py`** - Main scraper class with Playwright automation
+- **`scripts/demo_report.py`** - Generate sample report from bundled data
+- **`archive/`** - Legacy scraper versions (deprecated)
 
-## Key Results
+## Three-Tier Collection Strategy
 
-- **Overall UTR Prediction Accuracy**: 72.87%
-- **Highest Accuracy at Lower Levels**: 75%+ for UTR <12
-- **Elite Level Challenges**: ~65% accuracy for UTR 14+
-- **Temporal Stability**: Consistent across multiple years
-- **Publication-Ready**: Wilson confidence intervals, calibration metrics
+1. **ATP Rankings** - Downloads top 100 men's rankings from UTR
+2. **Top Players** - Complete match + rating histories for all top 100  
+3. **First-Degree Opponents** - Match + rating data for ~15,000 opponents
+4. **Second-Degree Opponents** - Rating histories only for ~50,000+ players
 
-## Configuration
+Cross-references all matches with historical UTR ratings (±30 days tolerance) to ensure both players have valid ratings at match time.
 
-### Command Line Options
-- `--processes N`: Number of parallel processes (default: 4)
+## Key Features
 
-### Internal Parameters
-- Cross-reference tolerance: ±30 days for rating-match date matching
-- Batch sizes: 50 opponents per batch for optimal processing
-- Browser: Headless Chromium with stealth configuration
+- **Resume capability** - Automatically resumes where interrupted
+- **Multi-processing** - Configurable process count for optimal performance  
+- **Error recovery** - Browser restarts and retry logic on failures
+- **Batch processing** - Groups requests to minimize server load
+- **Data quality** - Enforces rating_date ≤ match_date to prevent leakage
 
-## Monitoring
+## Requirements
 
-The scraper provides comprehensive logging:
-- Progress tracking with percentage completion
-- Error reporting with automatic recovery
-- File existence checks to avoid duplicate work
-- Cross-reference statistics and validation
+- **UTR Premium subscription** required for full decimal ratings
+- **Python 3.8+** with Playwright browser automation
+- **Environment variables:** `UTR_EMAIL` and `UTR_PASSWORD`
 
-## Architecture Notes
+## Known Limitations
 
-- **Asynchronous Processing**: Uses asyncio for efficient I/O operations
-- **Multiprocessing**: Parallel workers for scalable data collection  
-- **Error Handling**: Graceful browser restarts and retry logic
-- **Data Integrity**: Validates file completeness before processing
-- **Memory Efficient**: Streams large datasets without loading into memory
+- Requires premium UTR account access
+- Rate-limited by UTR site capacity  
+- Browser automation may occasionally fail (auto-restarts)
+- Large datasets require significant processing time
+
+## License & Disclaimer
+
+For personal research use only. Respect UTR's terms of service. No redistribution of scraped data.
