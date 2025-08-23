@@ -3718,8 +3718,14 @@ class UTRScraper:
 
 # Example usage
 if __name__ == "__main__":
-    email = "zachdodson12@gmail.com"
-    password = "Thailand@123"
+    email = os.environ.get("UTR_EMAIL")
+    password = os.environ.get("UTR_PASSWORD")
+    
+    if not email or not password:
+        print("Error: UTR_EMAIL and UTR_PASSWORD environment variables must be set")
+        print("Set them with: export UTR_EMAIL=your_email@example.com")
+        print("Set them with: export UTR_PASSWORD=your_password")
+        sys.exit(1)
     
     async def main():
         async with UTRScraper(email=email, password=password, headless=True) as scraper:

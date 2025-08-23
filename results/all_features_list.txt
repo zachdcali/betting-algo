@@ -1,0 +1,185 @@
+Complete List of Features Used in Tennis Prediction Models
+============================================================
+
+Total Features: 143
+
+Temporal Features (28 features):
+----------------------------------------
+  - P1_Form_Trend_30d
+  - P1_Level_Matches_Career
+  - P1_Matches_14d
+  - P1_Matches_30d
+  - P1_Rank_Change_30d
+  - P1_Rank_Change_90d
+  - P1_Rank_Volatility_90d
+  - P1_Sets_14d
+  - P1_Surface_Matches_30d
+  - P1_Surface_Matches_90d
+  - P1_Surface_WinRate_90d
+  - P1_WinRate_Last10_120d
+  - P1_WinStreak_Current
+  - P2_Form_Trend_30d
+  - P2_Level_Matches_Career
+  - P2_Matches_14d
+  - P2_Matches_30d
+  - P2_Rank_Change_30d
+  - P2_Rank_Change_90d
+  - P2_Rank_Volatility_90d
+  - P2_Sets_14d
+  - P2_Surface_Matches_30d
+  - P2_Surface_Matches_90d
+  - P2_Surface_WinRate_90d
+  - P2_WinRate_Last10_120d
+  - P2_WinStreak_Current
+  - Rank_Momentum_Diff_30d
+  - Rank_Momentum_Diff_90d
+
+Ranking Features (17 features):
+----------------------------------------
+  - Avg_Rank
+  - Avg_Rank_Points
+  - P1_Rank_Change_30d
+  - P1_Rank_Change_90d
+  - P1_Rank_Volatility_90d
+  - P2_Rank_Change_30d
+  - P2_Rank_Change_90d
+  - P2_Rank_Volatility_90d
+  - Player1_Rank
+  - Player1_Rank_Points
+  - Player2_Rank
+  - Player2_Rank_Points
+  - Rank_Diff
+  - Rank_Momentum_Diff_30d
+  - Rank_Momentum_Diff_90d
+  - Rank_Points_Diff
+  - Rank_Ratio
+
+Physical Features (24 features):
+----------------------------------------
+  - Age_Diff
+  - Avg_Age
+  - Avg_Height
+  - Handedness_Matchup_LL
+  - Handedness_Matchup_LR
+  - Handedness_Matchup_RL
+  - Handedness_Matchup_RR
+  - Height_Diff
+  - P1_Hand_A
+  - P1_Hand_L
+  - P1_Hand_R
+  - P1_Hand_U
+  - P1_Peak_Age
+  - P2_Hand_A
+  - P2_Hand_L
+  - P2_Hand_R
+  - P2_Hand_U
+  - P2_Peak_Age
+  - Peak_Age_P1
+  - Peak_Age_P2
+  - Player1_Age
+  - Player1_Height
+  - Player2_Age
+  - Player2_Height
+
+Match Context Features (47 features):
+----------------------------------------
+  - Clay_Season
+  - Grass_Season
+  - Indoor_Season
+  - Level_15
+  - Level_25
+  - Level_A
+  - Level_C
+  - Level_D
+  - Level_F
+  - Level_G
+  - Level_M
+  - Level_O
+  - Level_S
+  - P1_Level_Matches_Career
+  - P1_Level_WinRate_Career
+  - P1_Round_WinRate_Career
+  - P1_Surface_Experience
+  - P1_Surface_Matches_30d
+  - P1_Surface_Matches_90d
+  - P1_Surface_WinRate_90d
+  - P2_Level_Matches_Career
+  - P2_Level_WinRate_Career
+  - P2_Round_WinRate_Career
+  - P2_Surface_Experience
+  - P2_Surface_Matches_30d
+  - P2_Surface_Matches_90d
+  - P2_Surface_WinRate_90d
+  - Round_BR
+  - Round_ER
+  - Round_F
+  - Round_Q1
+  - Round_Q2
+  - Round_Q3
+  - Round_Q4
+  - Round_QF
+  - Round_R128
+  - Round_R16
+  - Round_R32
+  - Round_R64
+  - Round_RR
+  - Round_SF
+  - Surface_Carpet
+  - Surface_Clay
+  - Surface_Grass
+  - Surface_Hard
+  - Surface_Transition_Flag
+  - draw_size
+
+Country Features (26 features):
+----------------------------------------
+  - P1_Country_ARG
+  - P1_Country_AUS
+  - P1_Country_CZE
+  - P1_Country_ESP
+  - P1_Country_FRA
+  - P1_Country_GBR
+  - P1_Country_GER
+  - P1_Country_ITA
+  - P1_Country_Other
+  - P1_Country_RUS
+  - P1_Country_SRB
+  - P1_Country_SUI
+  - P1_Country_USA
+  - P2_Country_ARG
+  - P2_Country_AUS
+  - P2_Country_CZE
+  - P2_Country_ESP
+  - P2_Country_FRA
+  - P2_Country_GBR
+  - P2_Country_GER
+  - P2_Country_ITA
+  - P2_Country_Other
+  - P2_Country_RUS
+  - P2_Country_SRB
+  - P2_Country_SUI
+  - P2_Country_USA
+
+Head-to-Head Features (5 features):
+----------------------------------------
+  - H2H_P1_WinRate
+  - H2H_P1_Wins
+  - H2H_P2_Wins
+  - H2H_Recent_P1_Advantage
+  - H2H_Total_Matches
+
+Other Features (12 features):
+----------------------------------------
+  - P1_BigMatch_WinRate
+  - P1_Days_Since_Last
+  - P1_Finals_WinRate
+  - P1_Rust_Flag
+  - P1_Semifinals_WinRate
+  - P1_vs_Lefty_WinRate
+  - P2_BigMatch_WinRate
+  - P2_Days_Since_Last
+  - P2_Finals_WinRate
+  - P2_Rust_Flag
+  - P2_Semifinals_WinRate
+  - P2_vs_Lefty_WinRate
+

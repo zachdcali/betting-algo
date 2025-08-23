@@ -75,25 +75,57 @@ if hand_cols:
 else:
     print("   - Handedness: not found in dataset")
 
-# Get feature columns automatically
-feature_cols = get_feature_columns(ml_df)
+# Use the exact same 143 features as the Neural Network model (excludes leaky advantage features)
+exact_143_features = [
+    'P2_WinStreak_Current', 'P1_WinStreak_Current', 'P2_Surface_Matches_30d', 'Height_Diff',
+    'P1_Surface_Matches_30d', 'Player2_Height', 'P1_Matches_30d', 'P2_Matches_30d',
+    'P2_Surface_Experience', 'P2_Form_Trend_30d', 'Player1_Height', 'P1_Form_Trend_30d',
+    'Round_R16', 'Surface_Transition_Flag', 'P1_Surface_Matches_90d', 'P1_Surface_Experience',
+    'Rank_Diff', 'Round_R32', 'Rank_Points_Diff', 'P2_Level_WinRate_Career',
+    'P2_Surface_Matches_90d', 'P1_Level_WinRate_Career', 'P2_Level_Matches_Career',
+    'P2_WinRate_Last10_120d', 'Round_QF', 'Level_25', 'P1_Round_WinRate_Career',
+    'P1_Surface_WinRate_90d', 'Round_Q1', 'Player1_Rank', 'P1_Level_Matches_Career',
+    'P2_Round_WinRate_Career', 'draw_size', 'P1_WinRate_Last10_120d', 'Age_Diff',
+    'Level_15', 'Player1_Rank_Points', 'Handedness_Matchup_RL', 'Player2_Rank',
+    'Avg_Age', 'P1_Country_RUS', 'Player2_Age', 'P2_vs_Lefty_WinRate',
+    'Round_F', 'Surface_Clay', 'P2_Sets_14d', 'Rank_Momentum_Diff_30d',
+    'H2H_P2_Wins', 'Player2_Rank_Points', 'Player1_Age', 'P2_Rank_Volatility_90d',
+    'P1_Days_Since_Last', 'Grass_Season', 'P1_Semifinals_WinRate', 'Level_A',
+    'Level_D', 'P1_Country_USA', 'P1_Country_GBR', 'P1_Country_FRA',
+    'P2_Matches_14d', 'P2_Country_USA', 'P2_Country_ITA', 'Round_Q2',
+    'P2_Surface_WinRate_90d', 'P1_Hand_L', 'P2_Hand_L', 'P1_Country_ITA',
+    'P2_Rust_Flag', 'P1_Rank_Change_90d', 'P1_Country_AUS', 'P1_Hand_U',
+    'P1_Hand_R', 'Round_RR', 'Avg_Height', 'P1_Sets_14d',
+    'P2_Country_Other', 'Round_SF', 'P1_vs_Lefty_WinRate', 'Indoor_Season',
+    'Avg_Rank', 'P1_Rust_Flag', 'Avg_Rank_Points', 'Level_F',
+    'Round_R64', 'P2_Country_CZE', 'P2_Hand_R', 'Surface_Hard',
+    'P1_Matches_14d', 'Surface_Carpet', 'Round_R128', 'P1_Country_SRB',
+    'P2_Hand_U', 'P1_Rank_Volatility_90d', 'Level_M', 'P2_Country_ESP',
+    'Handedness_Matchup_LR', 'P1_Country_CZE', 'P2_Country_SUI', 'Surface_Grass',
+    'H2H_Total_Matches', 'Level_O', 'P1_Hand_A', 'P1_Finals_WinRate',
+    'Rank_Momentum_Diff_90d', 'P2_Finals_WinRate',
+    # Zero importance features (7 total)
+    'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2',
+    # Negative importance features (31 total) 
+    'Round_Q3', 'Rank_Ratio', 'P1_Country_SUI', 'Clay_Season', 'P1_Country_GER',
+    'P2_Rank_Change_30d', 'P1_Country_ESP', 'P2_Hand_A', 'H2H_Recent_P1_Advantage',
+    'P2_Country_AUS', 'P2_Country_SRB', 'P2_Country_GBR', 'P2_Country_ARG',
+    'Handedness_Matchup_RR', 'P1_Rank_Change_30d', 'P2_Country_GER', 'Handedness_Matchup_LL',
+    'P2_Country_RUS', 'P1_Country_ARG', 'Level_C', 'P2_Semifinals_WinRate',
+    'P2_Days_Since_Last', 'P1_Peak_Age', 'P2_Peak_Age', 'H2H_P1_WinRate',
+    'P1_Country_Other', 'H2H_P1_Wins', 'P1_BigMatch_WinRate', 'P2_Rank_Change_90d',
+    'P2_BigMatch_WinRate', 'P2_Country_FRA'
+]
 
-# Filter to only numeric columns to avoid the median error
-numeric_cols = []
-for col in feature_cols:
-    if col in ml_df.columns:
-        if ml_df[col].dtype in ['int64', 'float64', 'bool']:
-            numeric_cols.append(col)
-        elif ml_df[col].dtype == 'object':
-            # Check if it's actually numeric but stored as object
-            try:
-                pd.to_numeric(ml_df[col], errors='raise')
-                numeric_cols.append(col)
-            except:
-                print(f"   Skipping non-numeric column: {col} (dtype: {ml_df[col].dtype})")
+# Filter to only features that exist in the dataset  
+feature_cols = [col for col in exact_143_features if col in ml_df.columns]
 
-feature_cols = numeric_cols
-print(f"   Features for training: {len(feature_cols)}")
+print(f"   Features for training: {len(feature_cols)} (same 143-feature set as Neural Network)")
+if len(feature_cols) != 143:
+    print(f"   WARNING: Expected 143 features but got {len(feature_cols)} - some features may be missing from dataset")
+    missing_features = [col for col in exact_143_features if col not in ml_df.columns]
+    if missing_features:
+        print(f"   Missing features: {missing_features[:5]}...")  # Show first 5 missing
 
 # Split into train/test based on date
 print("\n4. Creating train/test split...")
@@ -348,6 +380,12 @@ if hasattr(xgb_model, 'evals_result_'):
 
 print(f"   Results saved to: {output_dir}")
 
+# Save the trained model
+print("\n14. Saving trained model...")
+model_path = os.path.join(output_dir, 'xgboost_model.json')
+xgb_model.save_model(model_path)
+print(f"   XGBoost model saved: {model_path}")
+
 print("\n" + "=" * 60)
 print("PROFESSIONAL TENNIS XGBOOST TRAINING COMPLETE")
 print("=" * 60)
@@ -355,6 +393,7 @@ print(f"Final accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
 print(f"ATP Ranking baseline: {baseline_accuracy:.4f} ({baseline_accuracy*100:.2f}%)")
 print(f"Improvement: {(accuracy - baseline_accuracy)*100:+.2f} percentage points")
 print(f"Results saved to: {output_dir}")
+print(f"Model saved to: {model_path}")
 
 # Print classification report
 print("\nDetailed Classification Report:")

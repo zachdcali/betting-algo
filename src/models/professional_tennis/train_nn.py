@@ -3,9 +3,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import pickle
 from torch.utils.data import TensorDataset, DataLoader
 import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report, log_loss
+from sklearn.calibration import calibration_curve
 from sklearn.preprocessing import StandardScaler
 import seaborn as sns
 import os
@@ -62,9 +64,9 @@ class TennisNet(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0.001):
+def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0.001, patience=10):
     """
-    Train the neural network model
+    Train the neural network model with early stopping
     """
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -73,6 +75,12 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
     val_losses = []
     train_accuracies = []
     val_accuracies = []
+    
+    # Early stopping variables
+    best_val_loss = float('inf')
+    best_epoch = 0
+    best_model_state = None
+    patience_counter = 0
     
     for epoch in range(num_epochs):
         # Training phase
@@ -123,6 +131,19 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
         train_accuracies.append(train_acc)
         val_accuracies.append(val_acc)
         
+        # Early stopping check
+        if val_loss_avg < best_val_loss:
+            best_val_loss = val_loss_avg
+            best_epoch = epoch
+            best_model_state = model.state_dict().copy()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f'   Early stopping at epoch {epoch} (best epoch: {best_epoch}, best val loss: {best_val_loss:.4f})')
+                model.load_state_dict(best_model_state)
+                break
+        
         print(f'   Epoch {epoch:3d}/{num_epochs}: Train Loss: {train_loss_avg:.4f}, Val Loss: {val_loss_avg:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')
     
     return train_losses, val_losses, train_accuracies, val_accuracies
@@ -135,7 +156,7 @@ print("=" * 60)
 MIN_YEAR = 1990  # Starting from 1990 for better data quality - can be adjusted as needed
 
 # Check if ML-ready dataset exists, if not create it
-ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "professional_tennis", "ml_ready_all_years.csv")
+ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_LEAK_FREE.csv")
 if not os.path.exists(ml_ready_path):
     print("ML-ready dataset not found. Creating it...")
     from preprocess import preprocess_data_for_ml
@@ -187,25 +208,57 @@ if hand_cols:
 else:
     print("   - Handedness: not found in dataset")
 
-# Get feature columns automatically
-feature_cols = get_feature_columns(ml_df)
+# Use the exact 143 features from the feature importance analysis (in order of importance)
+exact_143_features = [
+    'P2_WinStreak_Current', 'P1_WinStreak_Current', 'P2_Surface_Matches_30d', 'Height_Diff',
+    'P1_Surface_Matches_30d', 'Player2_Height', 'P1_Matches_30d', 'P2_Matches_30d',
+    'P2_Surface_Experience', 'P2_Form_Trend_30d', 'Player1_Height', 'P1_Form_Trend_30d',
+    'Round_R16', 'Surface_Transition_Flag', 'P1_Surface_Matches_90d', 'P1_Surface_Experience',
+    'Rank_Diff', 'Round_R32', 'Rank_Points_Diff', 'P2_Level_WinRate_Career',
+    'P2_Surface_Matches_90d', 'P1_Level_WinRate_Career', 'P2_Level_Matches_Career',
+    'P2_WinRate_Last10_120d', 'Round_QF', 'Level_25', 'P1_Round_WinRate_Career',
+    'P1_Surface_WinRate_90d', 'Round_Q1', 'Player1_Rank', 'P1_Level_Matches_Career',
+    'P2_Round_WinRate_Career', 'draw_size', 'P1_WinRate_Last10_120d', 'Age_Diff',
+    'Level_15', 'Player1_Rank_Points', 'Handedness_Matchup_RL', 'Player2_Rank',
+    'Avg_Age', 'P1_Country_RUS', 'Player2_Age', 'P2_vs_Lefty_WinRate',
+    'Round_F', 'Surface_Clay', 'P2_Sets_14d', 'Rank_Momentum_Diff_30d',
+    'H2H_P2_Wins', 'Player2_Rank_Points', 'Player1_Age', 'P2_Rank_Volatility_90d',
+    'P1_Days_Since_Last', 'Grass_Season', 'P1_Semifinals_WinRate', 'Level_A',
+    'Level_D', 'P1_Country_USA', 'P1_Country_GBR', 'P1_Country_FRA',
+    'P2_Matches_14d', 'P2_Country_USA', 'P2_Country_ITA', 'Round_Q2',
+    'P2_Surface_WinRate_90d', 'P1_Hand_L', 'P2_Hand_L', 'P1_Country_ITA',
+    'P2_Rust_Flag', 'P1_Rank_Change_90d', 'P1_Country_AUS', 'P1_Hand_U',
+    'P1_Hand_R', 'Round_RR', 'Avg_Height', 'P1_Sets_14d',
+    'P2_Country_Other', 'Round_SF', 'P1_vs_Lefty_WinRate', 'Indoor_Season',
+    'Avg_Rank', 'P1_Rust_Flag', 'Avg_Rank_Points', 'Level_F',
+    'Round_R64', 'P2_Country_CZE', 'P2_Hand_R', 'Surface_Hard',
+    'P1_Matches_14d', 'Surface_Carpet', 'Round_R128', 'P1_Country_SRB',
+    'P2_Hand_U', 'P1_Rank_Volatility_90d', 'Level_M', 'P2_Country_ESP',
+    'Handedness_Matchup_LR', 'P1_Country_CZE', 'P2_Country_SUI', 'Surface_Grass',
+    'H2H_Total_Matches', 'Level_O', 'P1_Hand_A', 'P1_Finals_WinRate',
+    'Rank_Momentum_Diff_90d', 'P2_Finals_WinRate',
+    # Zero importance features (7 total)
+    'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2',
+    # Negative importance features (31 total)
+    'Round_Q3', 'Rank_Ratio', 'P1_Country_SUI', 'Clay_Season', 'P1_Country_GER',
+    'P2_Rank_Change_30d', 'P1_Country_ESP', 'P2_Hand_A', 'H2H_Recent_P1_Advantage',
+    'P2_Country_AUS', 'P2_Country_SRB', 'P2_Country_GBR', 'P2_Country_ARG',
+    'Handedness_Matchup_RR', 'P1_Rank_Change_30d', 'P2_Country_GER', 'Handedness_Matchup_LL',
+    'P2_Country_RUS', 'P1_Country_ARG', 'Level_C', 'P2_Semifinals_WinRate',
+    'P2_Days_Since_Last', 'P1_Peak_Age', 'P2_Peak_Age', 'H2H_P1_WinRate',
+    'P1_Country_Other', 'H2H_P1_Wins', 'P1_BigMatch_WinRate', 'P2_Rank_Change_90d',
+    'P2_BigMatch_WinRate', 'P2_Country_FRA'
+]
 
-# Filter to only numeric columns to avoid the median error
-numeric_cols = []
-for col in feature_cols:
-    if col in ml_df.columns:
-        if ml_df[col].dtype in ['int64', 'float64', 'bool']:
-            numeric_cols.append(col)
-        elif ml_df[col].dtype == 'object':
-            # Check if it's actually numeric but stored as object
-            try:
-                pd.to_numeric(ml_df[col], errors='raise')
-                numeric_cols.append(col)
-            except:
-                print(f"   Skipping non-numeric column: {col} (dtype: {ml_df[col].dtype})")
+# Filter to only features that exist in the dataset
+feature_cols = [col for col in exact_143_features if col in ml_df.columns]
 
-feature_cols = numeric_cols
-print(f"   Features for training: {len(feature_cols)}")
+print(f"   Features for training: {len(feature_cols)} (exact 143-feature model from importance analysis)")
+if len(feature_cols) != 143:
+    print(f"   WARNING: Expected 143 features but got {len(feature_cols)} - some features may be missing from dataset")
+    missing_features = [col for col in exact_143_features if col not in ml_df.columns]
+    if missing_features:
+        print(f"   Missing features: {missing_features[:10]}...")  # Show first 10 missing
 
 # Split into train/test based on date
 print("\n4. Creating train/test split...")
@@ -322,6 +375,15 @@ print(f"Recall: {recall:.4f}")
 print(f"F1-score: {f1:.4f}")
 print(f"AUC-ROC: {auc:.4f}")
 
+# Calculate additional calibration metrics
+logloss = log_loss(y_test.values, y_pred_proba)
+brier = np.mean((y_pred_proba - y_test.values)**2)
+prob_true, prob_pred = calibration_curve(y_test.values, y_pred_proba, n_bins=10)
+ece = np.mean(np.abs(prob_true - prob_pred))
+print(f"Log Loss: {logloss:.4f}")
+print(f"Brier Score: {brier:.4f}")
+print(f"Expected Calibration Error (ECE): {ece:.4f}")
+
 # Calculate ATP ranking baseline for comparison
 print("\n10. Calculating ATP ranking baseline...")
 # Correct baseline: predict the better-ranked player wins (regardless of Player1/Player2 position)
@@ -410,8 +472,8 @@ results_df.to_csv(os.path.join(output_dir, 'predictions.csv'), index=False)
 
 # Save model metrics
 metrics_df = pd.DataFrame({
-    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'ATP_Baseline'],
-    'Value': [accuracy, precision, recall, f1, auc, baseline_accuracy]
+    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'Log_Loss', 'Brier_Score', 'ECE', 'ATP_Baseline'],
+    'Value': [accuracy, precision, recall, f1, auc, logloss, brier, ece, baseline_accuracy]
 })
 metrics_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
 
@@ -480,3 +542,17 @@ print(f"Results saved to: {output_dir}")
 # Print classification report
 print("\nDetailed Classification Report:")
 print(classification_report(y_test.values, y_pred, target_names=['Player2_Wins', 'Player1_Wins']))
+
+# Save the corrected 143-feature model (replaces corrupted original)
+print(f"\nSaving corrected 143-feature Neural Network model...")
+original_model_path = os.path.join(output_dir, 'neural_network_model.pth')
+original_scaler_path = os.path.join(output_dir, 'scaler.pkl')
+
+torch.save(model.state_dict(), original_model_path)
+with open(original_scaler_path, 'wb') as f:
+    pickle.dump(scaler, f)
+
+print(f"   Corrected Neural Network model saved to: {original_model_path}")
+print(f"   Corrected scaler saved to: {original_scaler_path}")
+print(f"   Features used: {len(feature_cols)} (full feature set)")
+print(f"   This replaces the corrupted 143-feature model")

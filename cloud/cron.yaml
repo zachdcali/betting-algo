@@ -1,0 +1,9 @@
+cron:
+- description: "Daily UTR data collection"
+  url: /cron/daily-scrape
+  schedule: every day 02:00
+  timezone: America/New_York
+  retry_parameters:
+    min_backoff_seconds: 10
+    max_backoff_seconds: 300
+    max_retry_attempts: 3

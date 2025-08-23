@@ -438,8 +438,15 @@ async def complete_processing(num_processes=4):
     for directory in [data_dir / "players", data_dir / "matches", data_dir / "ratings"]:
         directory.mkdir(parents=True, exist_ok=True)
     
-    email = os.environ.get("UTR_EMAIL", "zachdodson12@gmail.com")
-    password = os.environ.get("UTR_PASSWORD", "Thailand@123")
+    email = os.environ.get("UTR_EMAIL")
+    password = os.environ.get("UTR_PASSWORD")
+    
+    if not email or not password:
+        print("Error: UTR_EMAIL and UTR_PASSWORD environment variables must be set")
+        print("Set them with: export UTR_EMAIL=your_email@example.com") 
+        print("Set them with: export UTR_PASSWORD=your_password")
+        print("Note: UTR Premium subscription required for full decimal ratings and complete rating histories")
+        return False
     years = ["2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018"]
     
     print("\nCollecting data for top players...")
