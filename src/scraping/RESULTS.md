@@ -14,12 +14,12 @@ Sample analysis results from production run on **August 23, 2025** with **378,40
 ## Key Visualizations
 
 <p align="center">
-  <a href="./analysis_output/plots/win_rate_by_utr_diff.png">
-    <img src="./analysis_output/plots/win_rate_by_utr_diff.png" width="45%" alt="Win Rate by UTR Differential" />
+  <a href="analysis_output/plots/win_rate_by_utr_diff.png">
+    <img src="analysis_output/plots/win_rate_by_utr_diff.png" width="45%" alt="Win Rate by UTR Differential" />
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="./analysis_output/plots/accuracy_heatmap.png">
-    <img src="./analysis_output/plots/accuracy_heatmap.png" width="45%" alt="Accuracy Heatmap" />
+  <a href="analysis_output/plots/accuracy_heatmap.png">
+    <img src="analysis_output/plots/accuracy_heatmap.png" width="45%" alt="Accuracy Heatmap" />
   </a>
 </p>
 
