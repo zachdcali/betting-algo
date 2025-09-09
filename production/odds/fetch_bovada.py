@@ -39,11 +39,11 @@ REQUIRE_WIN = False         # require moneyline present to keep a row
 ALLOW_PARTIAL_ROWS = True   # if REQUIRE_WIN == False, keep rows without ML (names + time only)
 
 # Scroll / timing caps
-SCROLL_PASSES_INITIAL = 5
+SCROLL_PASSES_INITIAL = 7
 SCROLL_PASSES_SETTLE = 2
 SCROLL_DY = 2200
 SCROLL_PAUSE_MS = 200
-SHOW_MORE_PASSES = 8
+SHOW_MORE_PASSES = 12
 SHOW_MORE_PAUSE_MS = 220
 
 # In-coupon "Show more" caps
@@ -174,6 +174,37 @@ def lazy_scroll(page, passes=SCROLL_PASSES_INITIAL, dy=SCROLL_DY, pause_ms=SCROL
         page.mouse.wheel(0, dy + j)
         page.wait_for_timeout(pause_ms + random.randint(0, 80))
 
+def count_headers(page):
+    root = get_next_events_root(page)
+    return root.locator("h4.header-collapsible.league-header-collapsible").count()
+
+def exhaust_show_more_headers(page, target_min=0, max_rounds=20, pause_ms=220):
+    """
+    Scrolls and clicks page-level Show more until header count stops growing.
+    Stops when:
+      - no growth over 2 consecutive rounds, or
+      - max_rounds reached, or
+      - target_min (if >0) achieved.
+    """
+    no_growth = 0
+    prev = -1
+    for rnd in range(max_rounds):
+        # Scroll to bottom, try to click the last Show more
+        drain_bottom_show_more(page, max_passes=3, pause_ms=pause_ms)
+        lazy_scroll(page, passes=2, dy=4000, pause_ms=pause_ms)
+
+        cur = count_headers(page)
+        if VERBOSE: print(f"   [exhaust] round {rnd+1}: headers={cur} (prev={prev})")
+        if target_min and cur >= target_min:
+            break
+        if cur <= prev:
+            no_growth += 1
+            if no_growth >= 2:
+                break
+        else:
+            no_growth = 0
+        prev = cur
+
 def drain_bottom_show_more(page, max_passes=SHOW_MORE_PASSES, pause_ms=SHOW_MORE_PAUSE_MS) -> None:
     for _ in range(max_passes):
         btns = page.locator("button:has-text('Show More'), button:has-text('Show more')")
@@ -220,19 +251,25 @@ def stabilize_headers(page, min_headers=10, max_wait_ms=7000, poll_ms=250) -> in
 
 def find_tournament_buckets(page) -> List[Any]:
     """
-    Only buckets under TENNIS - NEXT EVENTS.
-    Explicitly avoid LIVE containers (sp-happening-now-bucket).
+    Robust bucket discovery:
+      - iterate headers under NEXT EVENTS (or page fallback)
+      - prefer nearest grouped container; else use header node as the 'bucket'
+      - explicitly skip 'happening now' live buckets
     """
     root = get_next_events_root(page)
-    # safety: exclude anything whose ancestor is happening-now
-    blocks = root.locator("div.grouped-events").filter(
-        has_not=page.locator("xpath=ancestor::sp-happening-now-bucket")
-    )
+    headers = root.locator("h4.header-collapsible.league-header-collapsible")
     out = []
-    for i in range(blocks.count()):
-        blk = blocks.nth(i)
-        if blk.locator("h4.header-collapsible").count():
-            out.append(blk)
+    for i in range(headers.count()):
+        h = headers.nth(i)
+        if h.locator("xpath=ancestor::sp-happening-now-bucket").count():
+            continue
+
+        bucket = h.locator("xpath=ancestor::div[contains(@class,'grouped-events')][1]")
+        if bucket.count() == 0:
+            bucket = h.locator("xpath=parent::*")
+        if bucket.count() == 0:
+            bucket = h  # header as bucket
+        out.append(bucket)
     return out
 
 def get_bucket_title(bucket) -> str:
@@ -395,11 +432,10 @@ def nearest_section_host(node):
 
 def discover_match_hosts(bucket) -> List[Any]:
     """
-    Prefer DOM order: take section.coupon-content blocks first (as they appear on the page),
-    then add any extra hosts we only reach via sp-score-coupon mapping.
+    Prefer section.coupon-content blocks. If bucket is only a header node,
+    also search its following siblings for coupon-content. Keep hybrid mapping.
     """
-    hosts = []
-    seen_handles = set()
+    hosts, seen_handles = [], set()
 
     def add_host(h):
         try:
@@ -412,21 +448,30 @@ def discover_match_hosts(bucket) -> List[Any]:
             seen_handles.add(oid)
         hosts.append(h)
 
-    # B) Sections in DOM order (primary source of truth for order)
+    # Normal: within bucket
     sections = bucket.locator("section.coupon-content:has(h4.competitor-name span.name)")
     for i in range(sections.count()):
         add_host(sections.nth(i))
 
-    # A) Any rows reachable via sp-score-coupon → map to nearest section host (fills gaps)
-    cps = coupons_in_bucket(bucket)
-    for cp in cps:
+    # NEW: if none found and bucket is a header, look after it
+    if not hosts:
+        sib_sections = bucket.locator(
+            "xpath=following-sibling::section[contains(@class,'coupon-content')][.//h4[contains(@class,'competitor-name')]//span[contains(@class,'name')]]"
+        )
+        for i in range(sib_sections.count()):
+            add_host(sib_sections.nth(i))
+
+    # Hybrid: map rows from sp-score-coupon to nearest section host
+    cps = bucket.locator("sp-coupon")
+    for i in range(cps.count()):
+        cp = cps.nth(i)
         try:
             drain_coupon_until_stable(cp.page, cp)
         except Exception:
             pass
         rows = cp.locator("sp-score-coupon")
-        for i in range(rows.count()):
-            host = nearest_section_host(rows.nth(i))
+        for j in range(rows.count()):
+            host = nearest_section_host(rows.nth(j))
             add_host(host)
 
     return hosts
@@ -473,9 +518,13 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                 dismiss_banners(page)
                 drain_bottom_show_more(page, max_passes=SHOW_MORE_PASSES, pause_ms=SHOW_MORE_PAUSE_MS)
 
+                # NEW: aggressively exhaust pagination until headers stop growing (or you hit ~60+)
+                print("🔄 Exhausting Show More until headers stop growing...")
+                exhaust_show_more_headers(page, target_min=60, max_rounds=20, pause_ms=180)
+
                 # Stabilize headers
                 print("🧭 Stabilizing header list…")
-                hdr_count = stabilize_headers(page, min_headers=10)
+                hdr_count = stabilize_headers(page, min_headers=10, max_wait_ms=9000)
                 print(f"   Stabilized at ~{hdr_count} tournament headers")
 
                 if hdr_count < 10:
@@ -520,6 +569,11 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                     h.evaluate("el => el.scrollIntoView({block:'center'})")
                     page.wait_for_timeout(90)
 
+                    # Periodic drain every 8 headers
+                    if (i+1) % 8 == 0:
+                        drain_bottom_show_more(page, max_passes=1, pause_ms=140)
+                        lazy_scroll(page, passes=1, dy=2200, pause_ms=120)
+
                 print(f"   Successfully expanded {expanded} tournaments (of {header_total} total headers)")
 
                 # STEP 3: settle + drain again
@@ -537,6 +591,9 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                 # For adjusted expected accounting:
                 # bucket_stats[title] = {"expected_raw": N, "doubles_detected": D, "found_singles": K}
                 bucket_stats: Dict[str, Dict[str, int]] = {}
+
+                hdr_after = count_headers(page)
+                print(f"   Headers visible just before bucket scan: {hdr_after}")
 
                 buckets = find_tournament_buckets(page)
                 allowed = [b for b in buckets if is_allowed_bucket(get_bucket_title(b)) and not is_blocked_bucket(get_bucket_title(b))]
