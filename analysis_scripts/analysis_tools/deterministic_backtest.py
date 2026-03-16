@@ -65,9 +65,17 @@ def load_pure(model: str) -> pd.DataFrame | None:
     if "week_id" not in df.columns:
         week = df["date"].dt.isocalendar()
         df["week_id"] = week.year.astype(str) + "-" + week.week.astype(str).str.zfill(2)
-    # sanity
+    # Stable loader fixes
+    # 1. Clip probabilities to avoid edge cases
+    df["prob"] = df["prob"].clip(0.001, 0.999)
+    
+    # 2. Sanity filters
     df = df[(df["prob"] > 0) & (df["prob"] < 1) & (df["odds"] > 1.01)]
-    df = df.sort_values(["date", "player1", "player2"]).reset_index(drop=True)
+    
+    # 3. Stable sorting (add row number for deterministic tie-breaking)
+    df = df.reset_index(drop=True).reset_index()  # adds 'index' column
+    df = df.sort_values(["date", "player1", "player2", "index"]).reset_index(drop=True)
+    df = df.drop(columns=["index"])  # remove helper column
     return df
 
 def kelly_star(p: float, b: float) -> float:
@@ -76,6 +84,51 @@ def kelly_star(p: float, b: float) -> float:
         return 0.0
     f = (b * p - (1.0 - p)) / b
     return max(0.0, f)
+
+def full_kelly_fraction(p: float, odds: float) -> float:
+    """Full Kelly fraction for a single binary bet with decimal odds."""
+    return max((odds * p - 1.0) / (odds - 1.0), 0.0)
+
+def allocate_block_stakes(block_bets: pd.DataFrame, bankroll: float, k: float, 
+                         alloc: str = 'kelly_prop', budget_mode: str = 'k', 
+                         budget_frac: float = None, allow_lev: bool = False) -> list[float]:
+    """Allocate stakes within a betting block."""
+    if block_bets.empty:
+        return []
+    
+    # Block budget
+    total_frac = k if budget_mode == 'k' else float(budget_frac or k)
+    total_budget = bankroll * total_frac
+    if not allow_lev:
+        total_budget = min(total_budget, bankroll)
+    
+    # Calculate weights for each bet
+    weights = []
+    for _, bet in block_bets.iterrows():
+        p = float(bet['prob'])
+        odds = float(bet['odds'])
+        edge = p - 1.0 / odds
+        
+        if alloc == 'kelly_prop':
+            w = full_kelly_fraction(p, odds)
+        elif alloc == 'edge_prop':
+            w = max(edge, 0.0)
+        else:  # equal
+            w = 1.0 if edge > 0 else 0.0
+        weights.append(w)
+    
+    # Filter to positive-weight bets
+    pos_indices = [i for i, w in enumerate(weights) if w > 0]
+    if not pos_indices:
+        return [0.0] * len(block_bets)
+    
+    # Allocate stakes proportionally
+    weight_sum = sum(weights[i] for i in pos_indices)
+    stakes = [0.0] * len(block_bets)
+    for i in pos_indices:
+        stakes[i] = total_budget * (weights[i] / weight_sum)
+    
+    return stakes
 
 def compute_metrics_from_path(equity: np.ndarray) -> dict:
     """Compute classic + log-based drawdowns, time in DD, ulcer, etc."""
@@ -133,6 +186,25 @@ def compute_metrics_from_path(equity: np.ndarray) -> dict:
         "pain_ratio_log": pain_ratio_log,
     }
 
+def group_bets(df: pd.DataFrame, grouping: str) -> list[pd.DataFrame]:
+    """Group bets by the specified grouping method."""
+    if grouping == "sequential":
+        return [df.iloc[[i]] for i in range(len(df))]
+    elif grouping == "day":
+        # Group by date
+        groups = []
+        for date, group in df.groupby(df['date'].dt.date):
+            groups.append(group)
+        return groups
+    elif grouping == "week":
+        # Group by week_id
+        groups = []
+        for week_id, group in df.groupby('week_id'):
+            groups.append(group)
+        return groups
+    else:
+        raise ValueError(f"Unknown grouping method: {grouping}")
+
 def run_path(rows: pd.DataFrame,
              k_mult: float,
              max_fraction: float | None,
@@ -140,98 +212,282 @@ def run_path(rows: pd.DataFrame,
              start_bankroll: float,
              fixed_base: float,
              shortfall_policy: str,
-             min_stake: float) -> tuple[pd.DataFrame, dict]:
+             min_stake: float,
+             bust_thresholds: list[float] = None,
+             abs_bust_levels: list[float] = None,
+             grouping: str = "sequential",
+             block_allocation: str = "kelly_prop",
+             block_budget: str = "k",
+             block_budget_frac: float = None,
+             allow_leverage: bool = False) -> tuple[pd.DataFrame, dict]:
     """
-    Simulate one deterministic path. Returns (bet_log_df, metrics_dict).
+    Simulate one deterministic path with optional block betting. Returns (bet_log_df, metrics_dict).
     shortfall_policy: "skip" (default) or "all-in" when stake > bankroll.
     min_stake: minimum $ stake to place a bet; set 0 for theoretical Kelly.
     """
     bankroll = start_bankroll
     equity_list = [bankroll]
 
+    # NEW: time-step (block) tracking for correct log Sharpe in block mode
+    block_end_equity = []
+    block_sizes = []
+    block_end_dates = []
+
     logs = []
     skipped_floor = 0
 
-    for idx, r in rows.iterrows():
-        p = float(r["prob"])
-        b = float(r["odds"]) - 1.0
-        outcome = int(r["outcome"])  # 1 if we win
+    # Group bets by the specified method
+    bet_groups = group_bets(rows, grouping)
+    
+    for block_df in bet_groups:
+        # Snapshot bankroll at start of block
+        block_start_bankroll = bankroll
+        
+        # Check for bankruptcy before processing block
+        if bankroll < min_stake and grouping != "sequential":
+            equity_list.extend([bankroll] * len(block_df))
+            break
+        
+        if grouping == "sequential":
+            # Original sequential logic for single bet
+            idx, r = next(block_df.iterrows())
+            p = float(r["prob"])
+            b = float(r["odds"]) - 1.0
+            outcome = int(r["outcome"])  # 1 if we win
 
-        # Check for bankruptcy FIRST (before calculating stakes)
-        if bankroll < min_stake:
-            equity_list.append(bankroll)
-            break  # Stop completely when bankrupt
+            # Check for bankruptcy FIRST (before calculating stakes)
+            if bankroll < min_stake:
+                equity_list.append(bankroll)
+                break  # Stop completely when bankrupt
 
-        f_star = kelly_star(p, b)
-        stake_frac = k_mult * f_star
-        if max_fraction is not None:
-            stake_frac = min(stake_frac, max_fraction)
-        stake_frac = max(0.0, min(stake_frac, 1.0))
-        if stake_frac <= 0:
-            equity_list.append(bankroll)
-            continue
-
-        # Base for stake sizing
-        bankroll_base = fixed_base if fixed_size else bankroll
-        stake = bankroll_base * stake_frac
-
-        # Apply min stake floor to the calculated stake
-        if min_stake > 0 and stake < min_stake:
-            stake = min_stake
-
-        # Shortfall handling if stake > bankroll
-        if stake > bankroll:
-            if shortfall_policy == "skip":
+            f_star = kelly_star(p, b)
+            stake_frac = k_mult * f_star
+            if max_fraction is not None:
+                stake_frac = min(stake_frac, max_fraction)
+            stake_frac = max(0.0, min(stake_frac, 1.0))
+            if stake_frac <= 0:
                 equity_list.append(bankroll)
                 continue
-            elif shortfall_policy == "all-in":
-                stake = bankroll
+
+            # Base for stake sizing
+            bankroll_base = fixed_base if fixed_size else bankroll
+            stake = bankroll_base * stake_frac
+
+            # Apply min stake floor to the calculated stake
+            if min_stake > 0 and stake < min_stake:
+                stake = min_stake
+
+            # Shortfall handling if stake > bankroll
+            if stake > bankroll:
+                if shortfall_policy == "skip":
+                    equity_list.append(bankroll)
+                    continue
+                elif shortfall_policy == "all-in":
+                    stake = bankroll
+                else:
+                    raise ValueError("shortfall_policy must be 'skip' or 'all-in'")
+
+            before = bankroll
+            if outcome == 1:
+                profit = stake * b
+                bankroll = bankroll + profit
+                won = True
             else:
-                raise ValueError("shortfall_policy must be 'skip' or 'all-in'")
+                profit = -stake
+                bankroll = bankroll + profit
+                won = False
 
-        before = bankroll
-        if outcome == 1:
-            profit = stake * b
-            bankroll = bankroll + profit
-            won = True
+            # Per-bet simple return (relative to current bankroll at entry)
+            simple_ret = profit / before
+            # Effective stake fraction vs current bankroll at entry
+            stake_frac_eff = stake / before if before > 0 else 0.0
+
+            logs.append({
+                "idx": idx,
+                "date": r.get("date"),
+                "player1": r.get("player1",""),
+                "player2": r.get("player2",""),
+                "bet_on_player": r.get("bet_on_player",""),
+                "bet_on_p1": r.get("bet_on_p1",""),
+                "prob": p,
+                "market_prob": r.get("market_prob",""),
+                "edge": r.get("edge",""),
+                "odds": r.get("odds",""),
+                "kelly_star": f_star,
+                "k_multiplier": k_mult,
+                "stake_frac_nominal": stake_frac,
+                "stake_frac_eff": stake_frac_eff,
+                "fixed_size_mode": fixed_size,
+                "bankroll_before": before,
+                "stake": stake,
+                "won": won,
+                "profit": profit,
+                "simple_return": simple_ret,
+                "bankroll_after": bankroll,
+            })
+
+            equity_list.append(bankroll)
+            # NEW: sequential => one bet is one block
+            block_end_equity.append(bankroll)
+            block_sizes.append(1)
+            block_end_dates.append(pd.to_datetime(r.get("date")))
+        
         else:
-            profit = -stake
-            bankroll = bankroll + profit
-            won = False
-
-        # Per-bet simple return (relative to current bankroll at entry)
-        simple_ret = profit / before
-        # Effective stake fraction vs current bankroll at entry
-        stake_frac_eff = stake / before if before > 0 else 0.0
-
-        logs.append({
-            "idx": idx,
-            "date": r.get("date"),
-            "player1": r.get("player1",""),
-            "player2": r.get("player2",""),
-            "bet_on_player": r.get("bet_on_player",""),
-            "bet_on_p1": r.get("bet_on_p1",""),
-            "prob": p,
-            "market_prob": r.get("market_prob",""),
-            "edge": r.get("edge",""),
-            "odds": r.get("odds",""),
-            "kelly_star": f_star,
-            "k_multiplier": k_mult,
-            "stake_frac_nominal": stake_frac,
-            "stake_frac_eff": stake_frac_eff,
-            "fixed_size_mode": fixed_size,
-            "bankroll_before": before,
-            "stake": stake,
-            "won": won,
-            "profit": profit,
-            "simple_return": simple_ret,
-            "bankroll_after": bankroll,
-        })
-
-        equity_list.append(bankroll)
+            # Block betting logic
+            block_bankroll = bankroll  # Snapshot for this block
+            
+            # Get stakes for all bets in this block
+            stakes = allocate_block_stakes(
+                block_df, block_bankroll, k_mult, block_allocation, 
+                block_budget, block_budget_frac, allow_leverage
+            )
+            
+            # Apply min_stake floor and shortfall policy to each stake
+            adjusted_stakes = []
+            total_block_stake = 0.0
+            
+            for stake in stakes:
+                if min_stake > 0 and stake < min_stake and stake > 0:
+                    stake = min_stake
+                adjusted_stakes.append(stake)
+                total_block_stake += stake
+            
+            # Handle shortfall if total block stake > bankroll
+            if total_block_stake > block_bankroll:
+                if shortfall_policy == "skip":
+                    # Skip entire block
+                    equity_list.extend([bankroll] * len(block_df))
+                    continue
+                elif shortfall_policy == "all-in":
+                    # Scale down all stakes proportionally
+                    if total_block_stake > 0:
+                        scale_factor = block_bankroll / total_block_stake
+                        adjusted_stakes = [s * scale_factor for s in adjusted_stakes]
+            
+            # Execute all bets in the block
+            block_pnl = 0.0
+            for i, (idx, r) in enumerate(block_df.iterrows()):
+                stake = adjusted_stakes[i]
+                if stake <= 0:
+                    continue
+                    
+                p = float(r["prob"])
+                b = float(r["odds"]) - 1.0
+                outcome = int(r["outcome"])
+                
+                if outcome == 1:
+                    profit = stake * b
+                    won = True
+                else:
+                    profit = -stake
+                    won = False
+                
+                block_pnl += profit
+                
+                # Calculate metrics for individual bet
+                f_star = kelly_star(p, b)
+                simple_ret = profit / block_bankroll if block_bankroll > 0 else 0.0
+                stake_frac_eff = stake / block_bankroll if block_bankroll > 0 else 0.0
+                
+                logs.append({
+                    "idx": idx,
+                    "date": r.get("date"),
+                    "player1": r.get("player1",""),
+                    "player2": r.get("player2",""),
+                    "bet_on_player": r.get("bet_on_player",""),
+                    "bet_on_p1": r.get("bet_on_p1",""),
+                    "prob": p,
+                    "market_prob": r.get("market_prob",""),
+                    "edge": r.get("edge",""),
+                    "odds": r.get("odds",""),
+                    "kelly_star": f_star,
+                    "k_multiplier": k_mult,
+                    "stake_frac_nominal": stake / block_bankroll if block_bankroll > 0 else 0.0,
+                    "stake_frac_eff": stake_frac_eff,
+                    "fixed_size_mode": fixed_size,
+                    "bankroll_before": block_bankroll,
+                    "stake": stake,
+                    "won": won,
+                    "profit": profit,
+                    "simple_return": simple_ret,
+                    "bankroll_after": bankroll + block_pnl,  # Will be updated after block
+                })
+            
+            # Update bankroll after entire block is processed
+            bankroll += block_pnl
+            equity_list.extend([bankroll] * len(block_df))
+            
+            # NEW: record the block as a single time step
+            block_end_equity.append(bankroll)
+            block_sizes.append(len(block_df))
+            if "date" in block_df.columns and not block_df["date"].isna().all():
+                block_end_dates.append(pd.to_datetime(block_df["date"].max()))
+            else:
+                block_end_dates.append(None)
 
     betlog = pd.DataFrame(logs)
     equity = np.array(equity_list, dtype=float)
+
+    # --- NEW: per-block log returns & blocks/year ---
+    eps = 1e-12
+    if block_end_equity:
+        block_equity = np.array([start_bankroll] + list(block_end_equity), dtype=float)
+        # stop at first ruin for log math
+        alive = block_equity > eps
+        if not np.all(alive):
+            cutoff = int(np.where(~alive)[0][0])  # first index where dead
+            block_equity = block_equity[:cutoff+1]
+        rets_log_block = np.diff(np.log(np.maximum(block_equity, eps)))
+    else:
+        rets_log_block = np.array([])
+
+    # blocks/year based on date span
+    if "date" in rows.columns and rows["date"].notna().any():
+        d0 = pd.to_datetime(rows["date"].iloc[0])
+        d1 = pd.to_datetime(rows["date"].iloc[-1])
+        years_span = max((d1 - d0).days / 365.25, 1e-6)
+        blocks_per_year = (len(block_end_equity) / years_span) if years_span > 0 else 0.0
+    else:
+        blocks_per_year = 0.0
+
+    if rets_log_block.size >= 2 and np.std(rets_log_block) > 0:
+        sharpe_log_block = float(np.mean(rets_log_block) / np.std(rets_log_block) * np.sqrt(blocks_per_year))
+    else:
+        sharpe_log_block = 0.0
+
+    # Initialize bust threshold defaults if None
+    if bust_thresholds is None:
+        bust_thresholds = []
+    if abs_bust_levels is None:
+        abs_bust_levels = []
+
+    # Calculate bust flags
+    bust_flags = {}
+    
+    # Drawdown-based bust thresholds
+    if bust_thresholds and len(equity) > 1:
+        peaks = np.maximum.accumulate(np.maximum(equity[0], equity))
+        drawdowns = (peaks - equity) / peaks  # decimal drawdowns
+        
+        for threshold in bust_thresholds:
+            bust_bet_idx = None
+            # Find first bet where drawdown exceeds threshold
+            bust_indices = np.where(drawdowns >= threshold)[0]
+            if len(bust_indices) > 0:
+                bust_bet_idx = int(bust_indices[0]) - 1  # -1 because equity[0] is start, bet indices are 0-based
+                bust_bet_idx = max(0, bust_bet_idx)  # Ensure non-negative
+            bust_flags[f"bust_dd_{threshold:.0%}"] = bust_bet_idx
+    
+    # Absolute bankroll floor bust levels
+    if abs_bust_levels and len(equity) > 1:
+        for level in abs_bust_levels:
+            bust_bet_idx = None
+            # Find first bet where bankroll falls below absolute level
+            bust_indices = np.where(equity <= level)[0]
+            if len(bust_indices) > 0:
+                bust_bet_idx = int(bust_indices[0]) - 1  # -1 because equity[0] is start
+                bust_bet_idx = max(0, bust_bet_idx)  # Ensure non-negative
+            bust_flags[f"bust_abs_{level:.0f}"] = bust_bet_idx
 
     # Path-based summaries
     base_metrics = compute_metrics_from_path(equity)
@@ -356,7 +612,7 @@ def run_path(rows: pd.DataFrame,
         "sharpe_industry": float(sharpe_industry),               # industry-standard hedge fund style
         "sortino_per_bet_arith": float(sortino_per_bet_arith),
         
-        "sharpe_per_bet_log": float(sharpe_per_bet_log),         # per-bet log-return Sharpe (penalizes big losses)
+        "sharpe_per_bet_log": float(sharpe_log_block),         # block-aware log-return Sharpe
         
         "sharpe_weekly": float(sharpe_weekly),                   # calendarized, industry-style
         "sortino_weekly": float(sortino_weekly),
@@ -368,7 +624,25 @@ def run_path(rows: pd.DataFrame,
         "max_loss_usd": float(max_loss_usd),
         "avg_stake_frac_eff": float(avg_stake_frac_eff),
         "avg_stake_usd": float(avg_stake_usd),
+        
+        # NEW: block-aware summary
+        "blocks": int(len(block_end_equity)),
+        "blocks_per_year": float(blocks_per_year),
+        "avg_bets_per_block": float(np.mean(block_sizes)) if block_sizes else 0.0,
+        "median_bets_per_block": float(np.median(block_sizes)) if block_sizes else 0.0,
+        
+        # Bust threshold flags
+        **bust_flags,
     }
+    
+    # NEW: set risk metrics to NaN after ruin
+    ruined = (metrics["final_bankroll"] <= 1e-12) or (metrics["max_dd_pct"] >= 100.0)
+    if ruined:
+        for k in ["sharpe_per_bet_arith","sharpe_industry","sortino_per_bet_arith",
+                  "sharpe_per_bet_log","sharpe_weekly","sortino_weekly",
+                  "sharpe_monthly","sortino_monthly"]:
+            metrics[k] = float("nan")
+    
     return betlog, metrics
 
 def plot_equity(df: pd.DataFrame, out_png: Path, title: str, start_bankroll: float):
@@ -466,6 +740,26 @@ def main():
     # Shortfall policy if stake > bankroll
     ap.add_argument("--shortfall-policy", type=str, default="all-in", choices=["skip", "all-in"], help="Handle stake>bankroll")
 
+    # Bust threshold reporting
+    ap.add_argument("--bust-thresholds", type=str, default="0.2,0.5,0.75,0.9",
+                    help="Comma-separated drawdown thresholds (decimals). Example: 0.2,0.5,0.75,0.9")
+    ap.add_argument("--abs-bust-levels", type=str, default="",
+                    help="Comma-separated bankroll floors in dollars. Example: 10,5,1")
+
+    # Block betting mode
+    ap.add_argument("--grouping", type=str, default="sequential", 
+                    choices=["sequential", "day", "week"],
+                    help="Betting grouping: sequential (current), day (tournament rounds), or week")
+    ap.add_argument("--block-allocation", type=str, default="kelly_prop",
+                    choices=["kelly_prop", "edge_prop", "equal"],
+                    help="How to allocate stakes within a block")
+    ap.add_argument("--block-budget", type=str, default="k", choices=["k", "fixed"],
+                    help="Block budget: k (Kelly multiplier) or fixed fraction")
+    ap.add_argument("--block-budget-frac", type=float, default=None,
+                    help="Fixed block budget fraction (when --block-budget=fixed)")
+    ap.add_argument("--allow-leverage", action="store_true",
+                    help="Allow total block stake to exceed bankroll")
+
     # Printing options
     ap.add_argument("--print-all", action="store_true", help="Print full 1..100% sweep lines")
     ap.add_argument("--save-all-k", action="store_true", help="Save bet logs and charts for ALL Kelly fractions (not just representative ones)")
@@ -476,6 +770,15 @@ def main():
         kmults = [float(x) for x in args.klist.split(",")]
     else:
         kmults = KELLY_GRID
+
+    # Parse bust thresholds
+    bust_thresholds = []
+    if args.bust_thresholds.strip():
+        bust_thresholds = [float(x) for x in args.bust_thresholds.split(",")]
+    
+    abs_bust_levels = []
+    if args.abs_bust_levels.strip():
+        abs_bust_levels = [float(x) for x in args.abs_bust_levels.split(",")]
 
     # Header
     print("="*88)
@@ -488,6 +791,14 @@ def main():
         print(f"Start bankroll: {args.start_bankroll:.2f}")
     print(f"Shortfall policy: {args.shortfall_policy}")
     print(f"Min stake: {args.min_stake:.2f}")
+    
+    # Block betting info
+    if args.grouping != "sequential":
+        print(f"Block betting: {args.grouping} grouping, {args.block_allocation} allocation")
+        budget_desc = f"k={args.block_budget_frac:.2f}" if args.block_budget == "fixed" else "k (Kelly multiplier)"
+        print(f"Block budget: {budget_desc}, leverage allowed: {args.allow_leverage}")
+    else:
+        print("Block betting: sequential (original behavior)")
     print()
 
     combined_rows = []
@@ -500,6 +811,15 @@ def main():
 
         df_use = df[df["edge"] >= args.edge].copy()
         print(f"  ✅ After edge filter: {len(df_use):,} bets")
+        
+        # Sanity check: ensure identical bet placement across Kelly fractions
+        # This verifies that --min_stake=0 --shortfall-policy=all-in produces consistent opportunities
+        if args.min_stake == 0 and args.shortfall_policy == "all-in":
+            # Count expected betting opportunities (should be same for all k values)
+            expected_bets = len(df_use)
+            print(f"  🔍 Sanity check: expecting {expected_bets:,} identical betting opportunities across all Kelly fractions")
+        else:
+            print(f"  ⚠️  Using min_stake={args.min_stake} or shortfall_policy={args.shortfall_policy} - bet counts may vary by Kelly fraction")
 
         # Output folders per model
         model_res = RESULTS_DIR / model
@@ -528,7 +848,14 @@ def main():
                 start_bankroll=start_bankroll,
                 fixed_base=fixed_base,
                 shortfall_policy=args.shortfall_policy,
-                min_stake=args.min_stake
+                min_stake=args.min_stake,
+                bust_thresholds=bust_thresholds,
+                abs_bust_levels=abs_bust_levels,
+                grouping=args.grouping,
+                block_allocation=args.block_allocation,
+                block_budget=args.block_budget,
+                block_budget_frac=args.block_budget_frac,
+                allow_leverage=args.allow_leverage
             )
 
             row = {
@@ -567,6 +894,12 @@ def main():
             if 'bets_per_year' in band.columns and not band.empty:
                 bpy = band.iloc[0]['bets_per_year']
                 print(f"  Implied bets/year: {bpy:.1f} (based on date span)")
+            
+            # NEW: block-mode transparency
+            if args.grouping != "sequential" and 'blocks_per_year' in band.columns:
+                bpy_blocks = band.iloc[0]['blocks_per_year']
+                abpb = band.iloc[0].get('avg_bets_per_block', 0.0)
+                print(f"  Blocks/year: {bpy_blocks:.1f} | Avg bets/block: {abpb:.1f}")
             
             print("  Kelly 1–10% summary:")
             print("  k     ret%    DD%   Academic¹  Industry²  Log¹     Weekly¹   Monthly¹")

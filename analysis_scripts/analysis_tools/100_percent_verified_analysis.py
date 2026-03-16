@@ -9,7 +9,8 @@ import os
 import pickle
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_auc_score, brier_score_loss
+from sklearn.calibration import calibration_curve
 import xgboost as xgb
 import re
 import matplotlib.pyplot as plt
@@ -57,11 +58,29 @@ low_importance_features = [
     'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2'
 ]
 
+def compute_ece(y_true, y_prob, n_bins=10):
+    """Compute Expected Calibration Error"""
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    bin_lowers = bin_edges[:-1]
+    bin_uppers = bin_edges[1:]
+
+    ece = 0.0
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        in_bin = (y_prob > bin_lower) & (y_prob <= bin_upper)
+        prop_in_bin = in_bin.mean()
+
+        if prop_in_bin > 0:
+            accuracy_in_bin = y_true[in_bin].mean()
+            avg_confidence_in_bin = y_prob[in_bin].mean()
+            ece += np.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+
+    return ece
+
 def calculate_betting_accuracy(data, win_col, lose_col):
     odds_data = data.dropna(subset=[win_col, lose_col]).copy()
     if len(odds_data) == 0:
         return None, 0
-    
+
     odds_data[win_col] = pd.to_numeric(odds_data[win_col], errors='coerce')
     odds_data[lose_col] = pd.to_numeric(odds_data[lose_col], errors='coerce')
     odds_clean = odds_data.dropna(subset=[win_col, lose_col])
@@ -108,7 +127,7 @@ print("="*80)
 
 # Load datasets
 print("\n1. Loading datasets...")
-ml_ready = pd.read_csv('data/JeffSackmann/jeffsackmann_ml_ready_all_years.csv', low_memory=False)
+ml_ready = pd.read_csv('data/JeffSackmann/jeffsackmann_ml_ready_LEAK_FREE.csv', low_memory=False)
 jeff_matched = pd.read_csv('data/JeffSackmann/jeffsackmann_exact_matched_final.csv', low_memory=False)
 tennis_matched = pd.read_csv('data/Tennis-Data.co.uk/tennis_data_exact_matched_final.csv', low_memory=False)
 
@@ -166,39 +185,62 @@ tennis_100_verified = tennis_matched.iloc[verified_indices].copy()
 # Create ML-ready dataset for 100% verified matches
 print(f"\n3. Creating ML-ready dataset for 100% verified matches...")
 ml_verified = []
+tennis_dates = []  # Store actual Tennis-Data dates for chronological sorting
 
-for _, verified_row in jeff_100_verified.iterrows():
+# Reset indices to ensure alignment after filtering
+jeff_100_verified = jeff_100_verified.reset_index(drop=True)
+tennis_100_verified = tennis_100_verified.reset_index(drop=True)
+
+for idx in range(len(jeff_100_verified)):
+    verified_row = jeff_100_verified.iloc[idx]
     date = verified_row['tourney_date']
     winner = str(verified_row['winner_name']).strip()
     loser = str(verified_row['loser_name']).strip()
-    
+
+    # Get actual match date from Tennis-Data (chronologically accurate)
+    tennis_date = tennis_100_verified.iloc[idx]['Date']
+
     # Find corresponding ML-ready row
     ml_candidates = ml_ready[ml_ready['tourney_date'] == date]
-    
+
     for _, ml_row in ml_candidates.iterrows():
         player1 = str(ml_row['Player1_Name']).strip()
         player2 = str(ml_row['Player2_Name']).strip()
-        
+
         if (player1 == winner and player2 == loser):
             ml_row_copy = ml_row.copy()
             ml_row_copy['Player1_Wins'] = 1
             ml_verified.append(ml_row_copy)
+            tennis_dates.append(tennis_date)
             break
         elif (player1 == loser and player2 == winner):
             ml_row_copy = ml_row.copy()
             ml_row_copy['Player1_Wins'] = 0
             ml_verified.append(ml_row_copy)
+            tennis_dates.append(tennis_date)
             break
 
 ml_verified_df = pd.DataFrame(ml_verified)
+ml_verified_df['actual_match_date'] = tennis_dates  # Add actual chronological dates
+
+# CRITICAL FIX: Sort by actual Tennis-Data dates to ensure chronological ordering
 print(f"   ML-ready 100% verified: {len(ml_verified_df):,} matches")
+print(f"   ⚠️  SORTING BY TENNIS-DATA DATES (chronological) instead of Sackmann dates")
+
+# Sort all dataframes by actual match date to maintain alignment
+sort_indices = ml_verified_df['actual_match_date'].argsort()
+ml_verified_df = ml_verified_df.iloc[sort_indices].reset_index(drop=True)
+tennis_100_verified = tennis_100_verified.iloc[sort_indices].reset_index(drop=True)
+jeff_100_verified = jeff_100_verified.iloc[sort_indices].reset_index(drop=True)
 
 if len(ml_verified_df) == 0:
     print("   ❌ No ML-ready verified matches found!")
     sys.exit(1)
 
-# Check distribution
-ml_verified_df['year'] = ml_verified_df['tourney_date'].dt.year
+# Check distribution - use actual_match_date for accurate temporal analysis
+ml_verified_df['actual_match_date'] = pd.to_datetime(ml_verified_df['actual_match_date'])
+ml_verified_df['year'] = ml_verified_df['actual_match_date'].dt.year
+ml_verified_df['month'] = ml_verified_df['actual_match_date'].dt.month
 target_dist = ml_verified_df['Player1_Wins'].mean()
 print(f"   Target distribution: {target_dist:.3f}")
 
@@ -257,6 +299,21 @@ print(f"   Betting Odds: {betting_acc:.4f} ({betting_acc*100:.2f}%) on {betting_
 
 # Test models
 print(f"\n6. Testing models (100% verified data)...")
+
+# Check which models are available
+print(f"\n📦 Model Availability:")
+xgb_path = 'results/professional_tennis/XGBoost/xgboost_model.json'
+rf_path = 'results/professional_tennis/Random_Forest/random_forest_model.pkl'
+nn_path_143 = 'results/professional_tennis/Neural_Network/neural_network_model_UNBIASED.pth'
+nn_path_temporal = 'results/professional_tennis/Neural_Network/neural_network_model_UNBIASED_TEMPORAL.pth'
+nn_path_98 = 'results/professional_tennis/Neural_Network/neural_network_symmetric_features.pth'
+
+print(f"   XGBoost       : {'✅ Found' if os.path.exists(xgb_path) else '❌ Not found'}")
+print(f"   Random Forest : {'✅ Found' if os.path.exists(rf_path) else '❌ Not found'}")
+print(f"   NN-143        : {'✅ Found' if os.path.exists(nn_path_143) else '❌ Not found'}")
+print(f"   NN-143-TEMP   : {'✅ Found' if os.path.exists(nn_path_temporal) else '❌ Not found'}")
+print(f"   NN-98         : {'⚠️  Disabled (feature mismatch)' if os.path.exists(nn_path_98) else '❌ Not found'}")
+
 results = {}
 
 # All models now use the same 143-feature set (exact_143_features list from training scripts)
@@ -305,6 +362,31 @@ exact_143_features = [
 feature_cols_143 = [col for col in exact_143_features if col in ml_verified_df.columns]
 X_test_143 = ml_verified_df[feature_cols_143]  # No fillna needed after pre-filtering
 
+# Feature alignment verification
+print(f"\n📊 Feature Alignment Check:")
+print(f"   143 feature count in analysis: {len(feature_cols_143)}")
+print(f"   First 10 features: {feature_cols_143[:10]}")
+
+# Verify alignment with saved scalers
+scaler_paths_to_check = [
+    ('results/professional_tennis/Neural_Network/scaler_UNBIASED.pkl', 'UNBIASED'),
+    ('results/professional_tennis/Neural_Network/scaler_UNBIASED_TEMPORAL.pkl', 'TEMPORAL')
+]
+
+for scaler_path, label in scaler_paths_to_check:
+    if os.path.exists(scaler_path):
+        with open(scaler_path, 'rb') as f:
+            scaler_check = pickle.load(f)
+        expected = scaler_check.n_features_in_
+        actual = len(feature_cols_143)
+        if expected == actual:
+            print(f"   ✅ {label} scaler: {expected} features (MATCH)")
+        else:
+            print(f"   ⚠️  {label} scaler expects {expected}, got {actual}")
+            missing = [c for c in exact_143_features if c not in ml_verified_df.columns]
+            if missing:
+                print(f"      Missing features: {missing[:10]}")
+
 # XGBoost
 xgb_path = 'results/professional_tennis/XGBoost/xgboost_model.json'
 if os.path.exists(xgb_path):
@@ -331,36 +413,64 @@ if os.path.exists(rf_path):
     except Exception as e:
         print(f"   Random Forest failed: {e}")
 
-# Neural Network (143-feature)
-nn_path_143 = 'results/professional_tennis/Neural_Network/neural_network_143_features.pth'
-scaler_path_143 = 'results/professional_tennis/Neural_Network/scaler_143_features.pkl'
+# Neural Network (143-feature UNBIASED model with true test set)
+nn_path_143 = 'results/professional_tennis/Neural_Network/neural_network_model_UNBIASED.pth'
+scaler_path_143 = 'results/professional_tennis/Neural_Network/scaler_UNBIASED.pkl'
 if os.path.exists(nn_path_143) and os.path.exists(scaler_path_143):
     try:
         with open(scaler_path_143, 'rb') as f:
             scaler_143 = pickle.load(f)
-        
+
         nn_model_143 = TennisNet(len(feature_cols_143))
         nn_model_143.load_state_dict(torch.load(nn_path_143, map_location='cpu'))
         nn_model_143.eval()
-        
+
         # Use exact same 143 features as the model was trained on
         X_scaled_143 = scaler_143.transform(X_test_143.values)
         X_tensor_143 = torch.FloatTensor(X_scaled_143)
-        
+
         with torch.no_grad():
             nn_pred_proba_143 = nn_model_143(X_tensor_143).squeeze().numpy()
             nn_pred_143 = (nn_pred_proba_143 > 0.5).astype(int)
-        
+
         nn_acc_143 = accuracy_score(y_test, nn_pred_143)
         results['Neural_Network_143'] = nn_acc_143
         print(f"   Neural Network (143-feature): {nn_acc_143:.4f} ({nn_acc_143*100:.2f}%) using {len(feature_cols_143)} features")
     except Exception as e:
         print(f"   Neural Network (143-feature) failed: {e}")
 
-# Neural Network (98-feature)
+# Neural Network (143-feature UNBIASED TEMPORAL model with temporal features)
+nn_path_temporal = 'results/professional_tennis/Neural_Network/neural_network_model_UNBIASED_TEMPORAL.pth'
+scaler_path_temporal = 'results/professional_tennis/Neural_Network/scaler_UNBIASED_TEMPORAL.pkl'
+if os.path.exists(nn_path_temporal) and os.path.exists(scaler_path_temporal):
+    try:
+        with open(scaler_path_temporal, 'rb') as f:
+            scaler_temporal = pickle.load(f)
+
+        nn_model_temporal = TennisNet(len(feature_cols_143))
+        nn_model_temporal.load_state_dict(torch.load(nn_path_temporal, map_location='cpu'))
+        nn_model_temporal.eval()
+
+        # Use exact same features as the model was trained on
+        X_scaled_temporal = scaler_temporal.transform(X_test_143.values)
+        X_tensor_temporal = torch.FloatTensor(X_scaled_temporal)
+
+        with torch.no_grad():
+            nn_pred_proba_temporal = nn_model_temporal(X_tensor_temporal).squeeze().numpy()
+            nn_pred_temporal = (nn_pred_proba_temporal > 0.5).astype(int)
+
+        nn_acc_temporal = accuracy_score(y_test, nn_pred_temporal)
+        results['NN_143_TEMPORAL'] = nn_acc_temporal
+        print(f"   Neural Network (TEMPORAL): {nn_acc_temporal:.4f} ({nn_acc_temporal*100:.2f}%) with 57 temporal features")
+    except Exception as e:
+        print(f"   Neural Network (TEMPORAL) failed: {e}")
+
+# Neural Network (98-feature) - TEMPORARILY DISABLED due to feature mismatch
+# TODO: Rebuild 98-feature model with deterministic feature selection
+run_98_feature_model = False  # Set to True after rebuilding with correct feature list
 nn_path_98 = 'results/professional_tennis/Neural_Network/neural_network_symmetric_features.pth'
 scaler_path_98 = 'results/professional_tennis/Neural_Network/scaler_symmetric_features.pkl'
-if os.path.exists(nn_path_98) and os.path.exists(scaler_path_98):
+if run_98_feature_model and os.path.exists(nn_path_98) and os.path.exists(scaler_path_98):
     try:
         with open(scaler_path_98, 'rb') as f:
             scaler_98 = pickle.load(f)
@@ -406,6 +516,64 @@ if os.path.exists(nn_path_98) and os.path.exists(scaler_path_98):
     except Exception as e:
         print(f"   Neural Network (98-feature) failed: {e}")
 
+# ==============================================================================
+# CALIBRATION METRICS FOR TEMPORAL MODEL (2023 vs 2024)
+# ==============================================================================
+if 'NN_143_TEMPORAL' in results:
+    print(f"\n{'='*80}")
+    print(f"CALIBRATION DIAGNOSTICS: NN_143_TEMPORAL")
+    print(f"{'='*80}")
+
+    for year in [2023, 2024]:
+        year_mask = ml_verified_df['year'] == year
+        year_data = ml_verified_df[year_mask]
+
+        if len(year_data) == 0:
+            continue
+
+        # Get predictions for this year
+        year_X_143 = year_data[feature_cols_143]
+        year_X_scaled = scaler_temporal.transform(year_X_143.values)
+        year_X_tensor = torch.FloatTensor(year_X_scaled)
+
+        with torch.no_grad():
+            year_proba = nn_model_temporal(year_X_tensor).squeeze().numpy()
+
+        year_y = year_data['Player1_Wins'].values
+
+        # Compute metrics
+        auc = roc_auc_score(year_y, year_proba)
+        brier = brier_score_loss(year_y, year_proba)
+        ece = compute_ece(year_y, year_proba, n_bins=10)
+        acc = accuracy_score(year_y, (year_proba > 0.5).astype(int))
+
+        print(f"\n{year} ({len(year_data):,} matches):")
+        print(f"   Accuracy:     {acc:.4f} ({acc*100:.2f}%)")
+        print(f"   AUC:          {auc:.4f}")
+        print(f"   Brier Score:  {brier:.4f} (lower is better)")
+        print(f"   ECE:          {ece:.4f} (lower is better)")
+
+        # Reliability by confidence bins
+        print(f"\n   Reliability by Model Confidence:")
+        print(f"   {'Conf Range':<15} {'Count':<8} {'Obs Win%':<10} {'Model Avg':<10} {'Calibration'}")
+        print(f"   {'-'*65}")
+
+        bins = [(0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 1.00)]
+        for low, high in bins:
+            mask = (year_proba >= low) & (year_proba < high)
+            count = mask.sum()
+
+            if count > 0:
+                observed_winrate = year_y[mask].mean()
+                model_avg_conf = year_proba[mask].mean()
+                calibration_gap = model_avg_conf - observed_winrate
+
+                print(f"   [{low:.2f}, {high:.2f})  {count:<8} {observed_winrate:<10.3f} {model_avg_conf:<10.3f} {calibration_gap:+.3f}")
+            else:
+                print(f"   [{low:.2f}, {high:.2f})  {count:<8} {'—':<10} {'—':<10} —")
+
+    print(f"\n{'='*80}")
+
 # Year-by-year breakdown
 print(f"\n7. Year-by-year breakdown (100% verified)...")
 for year in [2023, 2024]:
@@ -437,33 +605,148 @@ for year in [2023, 2024]:
     # Models
     year_X = year_data[numeric_cols].fillna(year_data[numeric_cols].median())
     year_y = year_data['Player1_Wins']
-    
+
     for model_name in results:
+        year_pred = None  # Initialize to prevent variable reuse
+
         if model_name == 'XGBoost':
-            year_X_143 = year_data[feature_cols_143]  # No fillna needed after pre-filtering
+            year_X_143 = year_data[feature_cols_143]
             year_pred = xgb_model.predict(year_X_143)
         elif model_name == 'Random_Forest':
-            year_X_143 = year_data[feature_cols_143]  # No fillna needed after pre-filtering
+            year_X_143 = year_data[feature_cols_143]
             year_pred = rf_model.predict(year_X_143)
         elif model_name == 'Neural_Network_143':
-            year_X_143 = year_data[feature_cols_143]  # No fillna needed after pre-filtering
+            year_X_143 = year_data[feature_cols_143]
             year_X_scaled = scaler_143.transform(year_X_143.values)
             year_X_tensor = torch.FloatTensor(year_X_scaled)
             with torch.no_grad():
                 year_pred_proba = nn_model_143(year_X_tensor).squeeze().numpy()
                 year_pred = (year_pred_proba > 0.5).astype(int)
+        elif model_name == 'NN_143_TEMPORAL':
+            year_X_143 = year_data[feature_cols_143]
+            year_X_scaled = scaler_temporal.transform(year_X_143.values)
+            year_X_tensor = torch.FloatTensor(year_X_scaled)
+            with torch.no_grad():
+                year_pred_proba = nn_model_temporal(year_X_tensor).squeeze().numpy()
+                year_pred = (year_pred_proba > 0.5).astype(int)
         elif model_name == 'Neural_Network_98':
-            # Use same X_test_98_cols definition for consistency
-            year_X_98 = year_data[X_test_98_cols]  # No fillna needed after pre-filtering
+            year_X_98 = year_data[X_test_98_cols]
             year_X_scaled = scaler_98.transform(year_X_98.values)
             year_X_tensor = torch.FloatTensor(year_X_scaled)
             with torch.no_grad():
                 year_pred_proba = nn_model_98(year_X_tensor).squeeze().numpy()
                 year_pred = (year_pred_proba > 0.5).astype(int)
-        
+
+        if year_pred is None:
+            continue  # Skip if we didn't compute predictions for this model
+
         year_acc = accuracy_score(year_y, year_pred)
         display_name = model_name.replace('_', ' ').replace('Neural Network', 'NN')
         print(f"     {display_name}: {year_acc:.4f} ({year_acc*100:.2f}%)")
+
+# Month-by-month breakdown to detect model degradation over time
+print(f"\n8. Month-by-month breakdown (100% verified) - Detecting Model Degradation...")
+months_to_analyze = []
+for year in [2023, 2024]:
+    for month in range(1, 13):
+        year_month_data = ml_verified_df[
+            (ml_verified_df['year'] == year) & 
+            (ml_verified_df['tourney_date'].dt.month == month)
+        ]
+        if len(year_month_data) >= 50:  # Only include months with sufficient data
+            months_to_analyze.append((year, month, len(year_month_data)))
+
+print(f"   Analyzing {len(months_to_analyze)} months with ≥50 matches each:")
+print("   Month         ATP      Betting  XGBoost  RandFor   NN-143   NN-TEMP   NN-98    N")
+print("   " + "-" * 90)
+
+for year, month, count in months_to_analyze:
+    # Use actual_match_date consistently for all temporal filtering
+    month_data = ml_verified_df[
+        (ml_verified_df['actual_match_date'].dt.year == year) &
+        (ml_verified_df['actual_match_date'].dt.month == month)
+    ]
+    month_tennis = tennis_100_verified[
+        (tennis_100_verified['Date'].dt.year == year) &
+        (tennis_100_verified['Date'].dt.month == month)
+    ]
+
+    if len(month_data) == 0:
+        continue
+
+    # ATP baseline for month
+    month_jeff = jeff_100_verified[
+        (jeff_100_verified['tourney_date'].dt.year == year) &
+        (jeff_100_verified['tourney_date'].dt.month == month)
+    ]
+    month_atp = month_jeff.dropna(subset=['winner_rank', 'loser_rank']).copy()
+    month_atp['winner_rank'] = pd.to_numeric(month_atp['winner_rank'], errors='coerce')
+    month_atp['loser_rank'] = pd.to_numeric(month_atp['loser_rank'], errors='coerce')
+    month_atp = month_atp.dropna(subset=['winner_rank', 'loser_rank'])
+    
+    atp_acc = 0.0
+    if len(month_atp) > 0:
+        month_atp_correct = (month_atp['winner_rank'] < month_atp['loser_rank']).sum()
+        atp_acc = month_atp_correct / len(month_atp)
+    
+    # Betting odds for month
+    betting_acc, _ = calculate_betting_accuracy(month_tennis, 'AvgW', 'AvgL')
+    betting_acc = betting_acc if betting_acc is not None else 0.0
+    
+    # Model accuracies for month
+    month_y = month_data['Player1_Wins']
+    model_accs = {}
+
+    for model_name in results:
+        month_pred = None  # Initialize to prevent variable reuse
+
+        if model_name == 'XGBoost':
+            month_X_143 = month_data[feature_cols_143]
+            month_pred = xgb_model.predict(month_X_143)
+        elif model_name == 'Random_Forest':
+            month_X_143 = month_data[feature_cols_143]
+            month_pred = rf_model.predict(month_X_143)
+        elif model_name == 'Neural_Network_143':
+            month_X_143 = month_data[feature_cols_143]
+            month_X_scaled = scaler_143.transform(month_X_143.values)
+            month_X_tensor = torch.FloatTensor(month_X_scaled)
+            with torch.no_grad():
+                month_pred_proba = nn_model_143(month_X_tensor).squeeze().numpy()
+                month_pred = (month_pred_proba > 0.5).astype(int)
+        elif model_name == 'NN_143_TEMPORAL':
+            month_X_143 = month_data[feature_cols_143]
+            month_X_scaled = scaler_temporal.transform(month_X_143.values)
+            month_X_tensor = torch.FloatTensor(month_X_scaled)
+            with torch.no_grad():
+                month_pred_proba = nn_model_temporal(month_X_tensor).squeeze().numpy()
+                month_pred = (month_pred_proba > 0.5).astype(int)
+        elif model_name == 'Neural_Network_98':
+            month_X_98 = month_data[X_test_98_cols]
+            month_X_scaled = scaler_98.transform(month_X_98.values)
+            month_X_tensor = torch.FloatTensor(month_X_scaled)
+            with torch.no_grad():
+                month_pred_proba = nn_model_98(month_X_tensor).squeeze().numpy()
+                month_pred = (month_pred_proba > 0.5).astype(int)
+
+        if month_pred is None:
+            continue  # Skip if we didn't compute predictions for this model
+
+        month_acc = accuracy_score(month_y, month_pred)
+        model_accs[model_name] = month_acc
+    
+    # Format output
+    month_name = f"{year}-{month:02d}"
+    xgb_acc = model_accs.get('XGBoost', 0.0)
+    rf_acc = model_accs.get('Random_Forest', 0.0)
+    nn143_acc = model_accs.get('Neural_Network_143', 0.0)
+    nn_temp_acc = model_accs.get('NN_143_TEMPORAL', 0.0)
+    nn98_acc = model_accs.get('Neural_Network_98', 0.0)
+
+    print(f"   {month_name}      {atp_acc:.3f}    {betting_acc:.3f}   {xgb_acc:.3f}   {rf_acc:.3f}    {nn143_acc:.3f}   {nn_temp_acc:.3f}    {nn98_acc:.3f}   {count:,}")
+
+print(f"\n   📊 Analysis: Compare each model's performance over time.")
+print(f"   🔍 Look for declining accuracy trends that suggest model degradation.")
+print(f"   ⏰ Models trained on older data may perform worse in later months.")
 
 # Final comparison
 print(f"\n" + "="*80)
@@ -518,17 +801,21 @@ def kelly_fraction(model_prob, decimal_odds):
     return max(0, kelly)  # Never bet negative amounts
 
 def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis_data, verified_ml_data):
-    """Run Kelly betting simulation for a single model"""
+    """Run Kelly betting simulation for a single model with de-vigged edges"""
     STARTING_BANKROLL = 100.0
-    MAX_BET_PCT = 0.05  # Never bet more than 5% of bankroll (Kelly cap)
-    MIN_EDGE = 0.02     # Require at least 2% edge
+    MAX_BET_PCT = 0.01  # Never bet more than 1% of bankroll (Kelly cap) - TIGHTENED
+    MIN_EDGE = 0.05     # Require at least 5% edge - TIGHTENED
     MIN_BET = 0.01      # Minimum bet size
-    
+    MIN_CONFIDENCE = 0.575  # Require model prob ≥ 0.575 on the side we're betting - NEW
+    DEAD_ZONE_LOW = 0.47    # Skip if model too uncertain - NEW
+    DEAD_ZONE_HIGH = 0.53   # Skip if model too uncertain - NEW
+
     bankroll = STARTING_BANKROLL
     total_bets = 0
     winning_bets = 0
     total_profit = 0
     bet_history = []
+    total_vig = 0.0  # Track average market overround
     
     for i in range(len(verified_ml_data)):
         tennis_row = verified_tennis_data.iloc[i]
@@ -558,33 +845,46 @@ def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis
             model_p1_prob = probabilities[i] if i < len(probabilities) else 0.5
         else:
             model_p1_prob = 0.5  # Fallback
-            
-        # Market probabilities
-        market_p1_prob = decimal_to_implied_prob(p1_odds)
-        market_p2_prob = decimal_to_implied_prob(p2_odds)
+
+        # Skip dead zone (model too uncertain)
+        if DEAD_ZONE_LOW <= model_p1_prob <= DEAD_ZONE_HIGH:
+            continue
+
+        # Market probabilities - RAW (with vig)
+        raw_p1_prob = decimal_to_implied_prob(p1_odds)
+        raw_p2_prob = decimal_to_implied_prob(p2_odds)
+
+        # De-vig: compute FAIR probabilities for edge calculation
+        overround = raw_p1_prob + raw_p2_prob
+        total_vig += (overround - 1.0)  # Track vig
+
+        p1_fair = raw_p1_prob / overround
+        p2_fair = raw_p2_prob / overround
+
+        # Calculate edges using FAIR probabilities
+        edge_p1 = model_p1_prob - p1_fair
+        edge_p2 = (1 - model_p1_prob) - p2_fair
         
-        # Calculate edges
-        edge_p1 = model_p1_prob - market_p1_prob
-        edge_p2 = (1 - model_p1_prob) - market_p2_prob
-        
-        # Determine best bet
+        # Determine best bet with CONFIDENCE floor
         bet_on_p1 = None
         odds_used = None
         model_prob_used = None
-        market_prob_used = None
+        fair_prob_used = None
         edge_used = None
-        
-        if edge_p1 > MIN_EDGE and edge_p1 > edge_p2:
+
+        # Check P1 bet: edge > threshold AND model confident enough
+        if edge_p1 > MIN_EDGE and model_p1_prob >= MIN_CONFIDENCE and edge_p1 > edge_p2:
             bet_on_p1 = True
             odds_used = p1_odds
             model_prob_used = model_p1_prob
-            market_prob_used = market_p1_prob
+            fair_prob_used = p1_fair
             edge_used = edge_p1
-        elif edge_p2 > MIN_EDGE:
+        # Check P2 bet: edge > threshold AND model confident enough
+        elif edge_p2 > MIN_EDGE and (1 - model_p1_prob) >= MIN_CONFIDENCE:
             bet_on_p1 = False
             odds_used = p2_odds
             model_prob_used = 1 - model_p1_prob
-            market_prob_used = market_p2_prob
+            fair_prob_used = p2_fair
             edge_used = edge_p2
         else:
             continue  # No good bet
@@ -618,13 +918,13 @@ def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis
             print(f"  model_p1_prob: {model_p1_prob}, edge_p1: {edge_p1}, edge_p2: {edge_p2}")
             if bet_on_p1 is not None:
                 bet_on_player = ml_row['Player1_Name'] if bet_on_p1 else ml_row['Player2_Name']
-                print(f"  bet_on_p1: {bet_on_p1}, bet_on_player: {bet_on_player}, odds_used: {odds_used}, market_prob_bet_on: {market_prob_used}")
-        
+                print(f"  bet_on_p1: {bet_on_p1}, bet_on_player: {bet_on_player}, odds_used: {odds_used}, fair_prob_bet_on: {fair_prob_used}")
+
         # Log bet
         bet_history.append({
             'bet_number': total_bets,
             'match_index': i,
-            'date': ml_row.get('tourney_date', ''),
+            'date': ml_row.get('actual_match_date', ''),
             'player1': ml_row.get('Player1_Name', ''),
             'player2': ml_row.get('Player2_Name', ''),
             'bet_on_player': ml_row['Player1_Name'] if bet_on_p1 else ml_row['Player2_Name'],
@@ -632,7 +932,7 @@ def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis
             'actual_p1_win': actual_p1_win,
             'model_p1_prob': model_p1_prob,
             'model_prob_bet_on': model_prob_used,
-            'market_prob_bet_on': market_prob_used,
+            'fair_market_prob_bet_on': fair_prob_used,  # De-vigged fair probability
             'edge': edge_used,
             'kelly_fraction': kelly_frac,
             'bankroll_before': bankroll - profit,
@@ -650,7 +950,8 @@ def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis
     win_rate = winning_bets / total_bets if total_bets > 0 else 0
     total_return_pct = ((bankroll - STARTING_BANKROLL) / STARTING_BANKROLL) * 100
     roi = (total_profit / (total_bets * STARTING_BANKROLL * MAX_BET_PCT)) * 100 if total_bets > 0 else 0
-    
+    avg_vig = (total_vig / len(verified_ml_data)) if len(verified_ml_data) > 0 else 0
+
     return {
         'model_name': model_name,
         'final_bankroll': bankroll,
@@ -660,7 +961,8 @@ def run_kelly_simulation(model_name, predictions, probabilities, verified_tennis
         'win_rate': win_rate,
         'total_profit': total_profit,
         'bet_history': bet_history,
-        'roi': roi
+        'roi': roi,
+        'avg_market_vig_pct': avg_vig * 100  # Average overround as percentage
     }
 
 print(f"\n" + "="*80)
@@ -693,15 +995,26 @@ if 'Neural_Network_143' in results:
     model_predictions['Neural_Network_143'] = (nn_proba_143 > 0.5).astype(int)
     model_probabilities['Neural_Network_143'] = nn_proba_143
 
+if 'NN_143_TEMPORAL' in results:
+    # Get probabilities for TEMPORAL model using exact same features as training
+    X_scaled_temporal_nn = scaler_temporal.transform(X_test_143.values)
+    X_tensor_temporal_nn = torch.FloatTensor(X_scaled_temporal_nn)
+
+    with torch.no_grad():
+        nn_proba_temporal = nn_model_temporal(X_tensor_temporal_nn).squeeze().numpy()
+
+    model_predictions['NN_143_TEMPORAL'] = (nn_proba_temporal > 0.5).astype(int)
+    model_probabilities['NN_143_TEMPORAL'] = nn_proba_temporal
+
 if 'Neural_Network_98' in results:
     # Get probabilities for 98-feature model using exact same features as training
     # Use the same X_test_98 that was created during model testing
     X_scaled_98_nn = scaler_98.transform(X_test_98.values)
     X_tensor_98_nn = torch.FloatTensor(X_scaled_98_nn)
-    
+
     with torch.no_grad():
         nn_proba_98 = nn_model_98(X_tensor_98_nn).squeeze().numpy()
-    
+
     model_predictions['Neural_Network_98'] = (nn_proba_98 > 0.5).astype(int)
     model_probabilities['Neural_Network_98'] = nn_proba_98
 
@@ -729,12 +1042,13 @@ for model_name in model_predictions.keys():
     )
     
     kelly_results[model_name] = result
-    
+
     print(f"   Final bankroll: ${result['final_bankroll']:.2f}")
     print(f"   Total return: {result['total_return_pct']:+.1f}%")
     print(f"   Bets placed: {result['total_bets']:,}")
     print(f"   Win rate: {result['win_rate']:.1%}")
     print(f"   Bet frequency: {result['total_bets']/len(ml_verified_df)*100:.1f}% of matches")
+    print(f"   Avg market vig: {result['avg_market_vig_pct']:.2f}%")
 
 # Save detailed betting logs
 print(f"\n8. Saving detailed betting logs...")
@@ -970,7 +1284,7 @@ def run_fixed_bankroll_kelly(model_name, predictions, probabilities, verified_te
         bet_history.append({
             'bet_number': total_bets,
             'match_index': i,
-            'date': ml_row.get('tourney_date', ''),
+            'date': ml_row.get('actual_match_date', ''),
             'player1': ml_row.get('Player1_Name', ''),
             'player2': ml_row.get('Player2_Name', ''),
             'bet_on_player': ml_row['Player1_Name'] if bet_on_p1 else ml_row['Player2_Name'],
@@ -1211,7 +1525,7 @@ def run_fractional_kelly(model_name, predictions, probabilities, verified_tennis
         bet_history.append({
             'bet_number': total_bets,
             'match_index': i,
-            'date': ml_row.get('tourney_date', ''),
+            'date': ml_row.get('actual_match_date', ''),
             'player1': ml_row.get('Player1_Name', ''),
             'player2': ml_row.get('Player2_Name', ''),
             'bet_on_player': ml_row['Player1_Name'] if bet_on_p1 else ml_row['Player2_Name'],
@@ -1334,7 +1648,7 @@ def run_hybrid_fractional_kelly(model_name, predictions, probabilities, verified
             
             bet_history.append({
                 'bet_number': total_bets,
-                'date': ml_row.get('tourney_date', ''),
+                'date': ml_row.get('actual_match_date', ''),
                 'tournament': ml_row.get('tourney_name', ''),
                 'player1': ml_row.get('Player1_Name', ''),
                 'player2': ml_row.get('Player2_Name', ''),

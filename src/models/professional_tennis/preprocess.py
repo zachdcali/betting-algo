@@ -4,6 +4,10 @@ import os
 from datetime import datetime
 from collections import defaultdict, deque
 
+def laplace(wins: int, total: int, alpha: float = 3.0) -> float:
+    """Bayesian (Laplace) smoothing: (wins + α/2) / (total + α). Returns 0.5 when total=0."""
+    return (wins + alpha / 2.0) / (total + alpha)
+
 def get_feature_columns(df):
     """
     Helper function to identify feature columns for ML models.
@@ -209,24 +213,24 @@ def calculate_temporal_features(df):
             
             # === PHASE 2: TOURNAMENT LEVEL EXPERIENCE ===
             level_stats = stats['level_stats'][level]
-            level_win_rate = level_stats['wins'] / level_stats['total'] if level_stats['total'] >= 5 else 0.5
+            level_win_rate = laplace(level_stats['wins'], level_stats['total'])
             df_sorted.loc[row.name, f'{prefix}Level_WinRate_Career'] = level_win_rate
             df_sorted.loc[row.name, f'{prefix}Level_Matches_Career'] = level_stats['total']
             
             # Big match performance (Grand Slams + Masters)
             big_match_wins = stats['level_stats']['G']['wins'] + stats['level_stats']['M']['wins']
             big_match_total = stats['level_stats']['G']['total'] + stats['level_stats']['M']['total']
-            big_match_rate = big_match_wins / big_match_total if big_match_total >= 3 else 0.5
+            big_match_rate = laplace(big_match_wins, big_match_total)
             df_sorted.loc[row.name, f'{prefix}BigMatch_WinRate'] = big_match_rate
             
             # === PHASE 2: ROUND PERFORMANCE ===
             round_stats = stats['round_stats'][round_name]
-            round_win_rate = round_stats['wins'] / round_stats['total'] if round_stats['total'] >= 3 else 0.5
+            round_win_rate = laplace(round_stats['wins'], round_stats['total'])
             df_sorted.loc[row.name, f'{prefix}Round_WinRate_Career'] = round_win_rate
             
             # Specific round performance
-            finals_rate = stats['round_stats']['F']['wins'] / stats['round_stats']['F']['total'] if stats['round_stats']['F']['total'] >= 1 else 0.5
-            sf_rate = stats['round_stats']['SF']['wins'] / stats['round_stats']['SF']['total'] if stats['round_stats']['SF']['total'] >= 2 else 0.5
+            finals_rate = laplace(stats['round_stats']['F']['wins'], stats['round_stats']['F']['total'])
+            sf_rate = laplace(stats['round_stats']['SF']['wins'], stats['round_stats']['SF']['total'])
             df_sorted.loc[row.name, f'{prefix}Finals_WinRate'] = finals_rate
             df_sorted.loc[row.name, f'{prefix}Semifinals_WinRate'] = sf_rate
             
@@ -248,7 +252,7 @@ def calculate_temporal_features(df):
         df_sorted.loc[row.name, 'H2H_P1_Wins'] = h2h_stats['wins']
         df_sorted.loc[row.name, 'H2H_P2_Wins'] = h2h_stats['total'] - h2h_stats['wins']
         
-        h2h_win_rate = h2h_stats['wins'] / h2h_stats['total'] if h2h_stats['total'] >= 3 else 0.5
+        h2h_win_rate = laplace(h2h_stats['wins'], h2h_stats['total'])
         df_sorted.loc[row.name, 'H2H_P1_WinRate'] = h2h_win_rate
         
         # Recent H2H advantage (last 3 meetings)
@@ -424,21 +428,18 @@ def count_surface_matches(surface_matches, target_date, days):
     return count
 
 def calculate_surface_win_rate(surface_stats, target_date, days, min_matches=5):
-    """Calculate win rate on surface with minimum match threshold."""
+    """Calculate win rate on surface using Laplace smoothing."""
     cutoff_date = target_date - pd.Timedelta(days=days)
-    
+
     matches = []
     wins = []
-    
+
     for match_date, won in zip(surface_stats['matches'], surface_stats['wins']):
         if cutoff_date <= match_date < target_date:
             matches.append(match_date)
             wins.append(won)
-    
-    if len(matches) >= min_matches:
-        return sum(wins) / len(wins)
-    else:
-        return 0.5  # Neutral prior for insufficient data
+
+    return laplace(sum(wins), len(matches))
 
 def calculate_recent_form(match_history, target_date, max_matches=10, max_days=120):
     """Calculate win rate over last N matches within M days."""
@@ -454,11 +455,8 @@ def calculate_recent_form(match_history, target_date, max_matches=10, max_days=1
     recent_matches.sort(key=lambda x: x['date'], reverse=True)
     recent_matches = recent_matches[:max_matches]
     
-    if len(recent_matches) >= 3:  # Minimum for meaningful rate
-        wins = sum(1 for match in recent_matches if match['won'])
-        return wins / len(recent_matches)
-    else:
-        return 0.5  # Neutral prior
+    wins = sum(1 for match in recent_matches if match['won'])
+    return laplace(wins, len(recent_matches))
 
 def calculate_current_streak(match_history):
     """Calculate current win/loss streak."""
@@ -497,7 +495,7 @@ def calculate_form_trend(match_history, target_date, days=30):
         if cutoff_date <= match['date'] < target_date:
             recent_matches.append(match)
     
-    if len(recent_matches) < 3:
+    if not recent_matches:
         return 0.5
     
     # Calculate exponential weights (more recent = higher weight)
@@ -525,11 +523,8 @@ def calculate_recent_h2h(match_history, opponent_id, max_meetings=3):
     h2h_matches.sort(key=lambda x: x['date'], reverse=True)
     recent_h2h = h2h_matches[:max_meetings]
     
-    if len(recent_h2h) >= 2:
-        wins = sum(1 for match in recent_h2h if match['won'])
-        return wins / len(recent_h2h) - 0.5  # Advantage relative to 50%
-    else:
-        return 0  # No advantage for insufficient data
+    wins = sum(1 for match in recent_h2h if match['won'])
+    return laplace(wins, len(recent_h2h)) - 0.5  # Advantage relative to 50%
 
 def calculate_vs_handedness_rate(match_history, target_handedness):
     """Calculate win rate vs specific handedness."""
@@ -538,11 +533,8 @@ def calculate_vs_handedness_rate(match_history, target_handedness):
         if match.get('opponent_hand') == target_handedness:
             vs_hand_matches.append(match)
     
-    if len(vs_hand_matches) >= 3:
-        wins = sum(1 for match in vs_hand_matches if match['won'])
-        return wins / len(vs_hand_matches)
-    else:
-        return 0.5  # Neutral prior
+    wins = sum(1 for match in vs_hand_matches if match['won'])
+    return laplace(wins, len(vs_hand_matches))
 
 def get_last_surface(match_history):
     """Get surface of most recent match."""

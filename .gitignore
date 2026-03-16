@@ -105,3 +105,25 @@ tmp/
 # Backup files
 *.bak
 *.backup
+
+# Large output directories (never commit)
+out/
+tennis_env/
+"Bovada HTML"/
+
+# Production runtime files (generated, not source)
+production/prediction_log.csv
+production/match_features_export.csv
+production/logs/
+production/search_error_*.png
+
+# HTML debug files
+*.html
+
+# Model backups (large, kept local)
+results/*/backups/
+
+# Exported feature CSVs
+production/*_export.csv
+# Keep apples-to-apples results chart
+!analysis_scripts/backtests/apples_to_apples.png

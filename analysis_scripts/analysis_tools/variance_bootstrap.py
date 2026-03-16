@@ -106,6 +106,137 @@ def ensure_strict_index(idx: pd.Index) -> pd.Index:
         idx = idx + pd.to_timedelta(np.cumsum(idx.duplicated()).astype(int), unit="s")
     return idx
 
+def _group_equity_blocks(bankroll_ts: pd.Series, start_bankroll: float, grouping: str) -> tuple[pd.Series, np.ndarray]:
+    """
+    From a per-bet bankroll series (first point is pre-start), build one equity point per block:
+    - 'bet': every bet is a block (no aggregation)
+    - 'day': last equity per calendar day that had >=1 bet
+    - 'week': last equity per ISO week that had >=1 bet
+    Returns: (grouped_equity_series, block_sizes_array)
+    """
+    if bankroll_ts.empty or len(bankroll_ts) < 2:
+        return pd.Series(dtype=float), np.array([], dtype=int)
+
+    # Drop the pre-start point; the remaining index corresponds to bet timestamps
+    s = bankroll_ts.iloc[1:].copy()
+
+    if grouping == "bet":
+        grouped = s
+        sizes = np.ones(len(grouped), dtype=int)
+        return grouped, sizes
+
+    if grouping == "day":
+        grp = s.groupby(s.index.date)
+        grouped = grp.last()
+        sizes = grp.size().to_numpy(dtype=int)
+        return grouped, sizes
+
+    if grouping == "week":
+        idx = s.index.to_series()
+        iso = idx.dt.isocalendar()
+        key = (iso.year.astype(str) + "-" + iso.week.astype(str).str.zfill(2)).to_numpy()
+        grp = s.groupby(key)
+        grouped = grp.last()
+        sizes = grp.size().to_numpy(dtype=int)
+        return grouped, sizes
+
+    raise ValueError(f"Unknown grouping: {grouping}")
+
+def block_log_sharpe_from_ts(bankroll_ts: pd.Series, start_bankroll: float, grouping: str) -> tuple[float, float, int, float, float]:
+    """
+    Compute Log-Sharpe from block equity (per 'grouping'), annualizing by blocks/year.
+    Returns: (log_sharpe, blocks_per_year, n_blocks, avg_bets_per_block, median_bets_per_block)
+    """
+    grouped, sizes = _group_equity_blocks(bankroll_ts, start_bankroll, grouping)
+    if grouped.empty:
+        return 0.0, 0.0, 0, 0.0, 0.0
+
+    # Build equity path with start point
+    eq = np.concatenate(([start_bankroll], grouped.values)).astype(float)
+    eps = 1e-12
+    alive = eq > eps
+    if not np.all(alive):
+        cutoff = int(np.where(~alive)[0][0])
+        eq = eq[:cutoff+1]
+        sizes = sizes[:max(0, len(eq)-1)]
+        grouped = grouped.iloc[:max(0, len(eq)-1)]
+
+    if len(eq) < 3:
+        return 0.0, 0.0, len(grouped), float(np.mean(sizes)) if len(sizes) else 0.0, float(np.median(sizes)) if len(sizes) else 0.0
+
+    lr = np.diff(np.log(np.maximum(eq, eps)))
+    years = max((bankroll_ts.index[-1] - bankroll_ts.index[0]).days / 365.25, 1e-6)
+    blocks_per_year = (len(grouped) / years) if years > 0 else 0.0
+
+    if lr.size >= 2:
+        sd = float(np.nanstd(lr, ddof=1))
+        sh = (float(np.nanmean(lr)) / sd) * math.sqrt(blocks_per_year) if sd > 0 and blocks_per_year > 0 else 0.0
+    else:
+        sh = 0.0
+
+    return float(sh), float(blocks_per_year), int(len(grouped)), float(np.mean(sizes)) if len(sizes) else 0.0, float(np.median(sizes)) if len(sizes) else 0.0
+
+def compute_bust_flags(bankroll_ts: pd.Series, start_bankroll: float, dd_thresholds: list[float], abs_levels: list[float]) -> dict:
+    """
+    Compute whether the path ever crosses drawdown thresholds and/or absolute bankroll floors.
+    Returns dict with keys like 'hit_dd_20', 'hit_abs_10'
+    """
+    out = {}
+    if bankroll_ts.empty:
+        for t in dd_thresholds:
+            out[f"hit_dd_{int(round(t*100))}"] = 0
+        for lvl in abs_levels:
+            out[f"hit_abs_{int(round(lvl))}"] = 0
+        return out
+
+    equity = bankroll_ts.values.astype(float)
+    peaks = np.maximum.accumulate(np.maximum(start_bankroll, equity))
+    dd = (peaks - equity) / peaks
+
+    for t in dd_thresholds:
+        key = f"hit_dd_{int(round(t*100))}"
+        out[key] = 1 if np.any(dd >= t) else 0
+
+    for lvl in abs_levels:
+        key = f"hit_abs_{int(round(lvl))}"
+        out[key] = 1 if np.any(equity <= lvl) else 0
+
+    return out
+
+def allocate_block_stakes(block_bets: pd.DataFrame, bankroll: float, k: float, 
+                          alloc: str = 'kelly_prop', budget_mode: str = 'k', 
+                          budget_frac: float = None, allow_lev: bool = False) -> list[float]:
+    if block_bets.empty:
+        return []
+    total_frac = k if budget_mode == 'k' else float(budget_frac or k)
+    total_budget = bankroll * total_frac
+    if not allow_lev:
+        total_budget = min(total_budget, bankroll)
+
+    weights = []
+    for _, bet in block_bets.iterrows():
+        p = float(bet['prob'])
+        odds = float(bet['odds'])
+        edge = p - 1.0 / odds
+        if alloc == 'kelly_prop':
+            denom = max(odds - 1.0, 1e-9)
+            w = max((p * odds - 1.0) / denom, 0.0)
+        elif alloc == 'edge_prop':
+            w = max(edge, 0.0)
+        else:
+            w = 1.0 if edge > 0 else 0.0
+        weights.append(w)
+
+    idx_pos = [i for i, w in enumerate(weights) if w > 0]
+    if not idx_pos:
+        return [0.0] * len(block_bets)
+
+    wsum = sum(weights[i] for i in idx_pos)
+    stakes = [0.0] * len(block_bets)
+    for i in idx_pos:
+        stakes[i] = total_budget * (weights[i] / wsum)
+    return stakes
+
 # =========================
 # Sizing (mirror deterministic backtest)
 # =========================
@@ -140,7 +271,13 @@ def calculate_stake(sizing: str, k: float, bankroll: float, edge: float, odds: f
 # =========================
 def simulate_path(df: pd.DataFrame, sizing: str, k: float, start_bankroll: float,
                   friction_bps: float, shortfall_policy: str, min_stake: float,
-                  fixed_frac: float, fixed_amt: float) -> tuple[pd.Series, np.ndarray, np.ndarray, np.ndarray]:
+                  fixed_frac: float, fixed_amt: float,
+                  exec_grouping: str = "sequential",
+                  block_allocation: str = "kelly_prop",
+                  block_budget: str = "k",
+                  block_budget_frac: float = None,
+                  allow_leverage: bool = False
+                 ) -> tuple[pd.Series, np.ndarray, np.ndarray, np.ndarray]:
     """Simulate betting path (mirrors deterministic backtest logic)"""
     dates = pd.to_datetime(df["date"].values)
     edges = df["edge"].to_numpy(float)
@@ -155,6 +292,74 @@ def simulate_path(df: pd.DataFrame, sizing: str, k: float, start_bankroll: float
     
     friction_factor = friction_bps / 10000.0
 
+    if exec_grouping in ("day","week"):
+        # define block keys without re-sorting (preserve sample order)
+        if exec_grouping == "day":
+            keys = pd.to_datetime(df["date"]).dt.date
+        else:
+            iso = pd.to_datetime(df["date"]).dt.isocalendar()
+            keys = (iso.year.astype(str) + "-" + iso.week.astype(str).str.zfill(2))
+
+        for _, block in df.groupby(keys, sort=False):
+            if bankroll <= min_stake:
+                bankroll_history.extend([bankroll]*len(block))
+                break
+
+            block_start = bankroll
+            stakes = allocate_block_stakes(
+                block, block_start, k,
+                alloc=block_allocation,
+                budget_mode=block_budget,
+                budget_frac=block_budget_frac,
+                allow_lev=allow_leverage
+            )
+
+            # floor + shortfall
+            adj, total = [], 0.0
+            for s in stakes:
+                s2 = 0.0 if s <= 0 else max(min_stake, s)
+                adj.append(s2); total += s2
+
+            if total > block_start:
+                if shortfall_policy == "skip":
+                    bankroll_history.extend([bankroll]*len(block))
+                    continue
+                elif shortfall_policy == "all-in" and total > 0:
+                    scale = block_start / total
+                    adj = [s * scale for s in adj]
+
+            # settle all bets in the block, measure vs block_start
+            block_pnl = 0.0
+            for i, (_, r) in enumerate(block.iterrows()):
+                stake = adj[i]
+                if stake <= 0:
+                    continue
+                odds_val = float(r["odds"])
+                outcome = float(r["outcome"])
+                cost = stake * friction_factor
+                if outcome > 0:
+                    profit = stake * (odds_val - 1.0) - cost
+                else:
+                    profit = -stake - cost
+                block_pnl += profit
+                per_bet_returns.append(profit / block_start if block_start > 0 else 0.0)
+                outcome_history.append(outcome)
+                stake_fracs.append(stake / block_start if block_start > 0 else 0.0)
+
+            bankroll = max(0.0, bankroll + block_pnl)
+            bankroll_history.extend([bankroll]*len(block))
+
+        # build series index
+        if len(dates):
+            idx0 = pd.to_datetime(dates).min() - pd.Timedelta(seconds=1)
+            date_indices = [idx0] + list(dates[:len(bankroll_history)-1])
+        else:
+            date_indices = [pd.Timestamp.now()] * len(bankroll_history)
+        idx = ensure_strict_index(pd.Index(date_indices))
+        bk_series = pd.Series(bankroll_history, index=idx)
+        return bk_series, np.array(per_bet_returns, float), np.array(outcome_history, float), np.array(stake_fracs, float)
+    
+    # else: sequential per-bet loop (unchanged)
     for i in range(len(df)):
         edge = edges[i]
         odds_val = odds[i]
@@ -214,24 +419,33 @@ def sample_iid(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
     # Sort by date to preserve temporal coherence for calendar Sharpe
     return sampled.sort_values("date").reset_index(drop=True)
 
-def sample_blocks(df: pd.DataFrame, block_days: int, rng: np.random.Generator) -> pd.DataFrame:
-    """Block bootstrap: sample blocks of consecutive days"""
-    df = df.sort_values("date").reset_index(drop=True)
-    dates = pd.to_datetime(df["date"])
-    dmin, dmax = dates.min(), dates.max()
-    target_len = len(df)
-    
-    out = []
+def sample_blocks(df: pd.DataFrame, block_group: str, rng: np.random.Generator) -> pd.DataFrame:
+    """
+    Block bootstrap by calendar groups (day or week):
+      - sample whole blocks with replacement
+      - preserve sampled block order (no final sort)
+    """
+    base = df.sort_values("date").reset_index(drop=True)
+    if block_group == "day":
+        groups = [g.copy() for _, g in base.groupby(base["date"].dt.date, sort=False)]
+    elif block_group == "week":
+        iso = pd.to_datetime(base["date"]).dt.isocalendar()
+        keys = (iso.year.astype(str) + "-" + iso.week.astype(str).str.zfill(2))
+        groups = [g.copy() for _, g in base.groupby(keys, sort=False)]
+    else:
+        raise ValueError("block_group must be 'day' or 'week'")
+
+    if not groups:
+        return base.copy()
+
+    out, target_len = [], len(base)
     while sum(len(x) for x in out) < target_len:
-        span = max(1, (dmax - dmin).days - block_days + 1)
-        start = dmin + pd.Timedelta(days=int(rng.integers(0, span)))
-        end = start + pd.Timedelta(days=block_days-1)
-        chunk = df[(dates >= start) & (dates <= end)]
-        if not chunk.empty:
-            out.append(chunk)
-    
-    res = pd.concat(out, axis=0).head(target_len)
-    return res.sort_values("date").reset_index(drop=True)
+        gi = int(rng.integers(0, len(groups)))
+        out.append(groups[gi])
+
+    sampled = pd.concat(out, axis=0).head(target_len).reset_index(drop=True)
+    # NOTE: do NOT re-sort by date here; we want the sampled block order
+    return sampled
 
 # =========================
 # Deterministic-Style Metrics (comprehensive)
@@ -328,7 +542,8 @@ def calculate_geometric_mean_return(per_bet_rets: np.ndarray) -> float:
 
 def calculate_comprehensive_metrics(bankroll_ts: pd.Series, per_bet_rets: np.ndarray, outcomes: np.ndarray, 
                                   stake_fracs: np.ndarray, start_bankroll: float, bets_per_year: float, 
-                                  min_stake: float, start_date: str, end_date: str) -> dict:
+                                  min_stake: float, start_date: str, end_date: str,
+                                  eval_grouping: str, dd_thresholds: list[float], abs_levels: list[float]) -> dict:
     """Calculate comprehensive metrics like deterministic backtest"""
     
     # Basic values
@@ -339,7 +554,19 @@ def calculate_comprehensive_metrics(bankroll_ts: pd.Series, per_bet_rets: np.nda
     # Sharpe ratios
     sh_academic = sharpe_academic(per_bet_rets, bets_per_year)
     sh_industry = sharpe_industry(per_bet_rets, bets_per_year)
-    sh_log = log_sharpe(per_bet_rets, bets_per_year)
+    
+    # Log Sharpe: per-bet OR block-aware depending on eval_grouping
+    if eval_grouping == "bet":
+        sh_log = log_sharpe(per_bet_rets, bets_per_year)
+        blocks_per_year = 0.0
+        n_blocks = 0
+        avg_bpb = 0.0
+        med_bpb = 0.0
+    else:
+        sh_log, blocks_per_year, n_blocks, avg_bpb, med_bpb = block_log_sharpe_from_ts(
+            bankroll_ts, start_bankroll, eval_grouping
+        )
+    
     sh_weekly = calendar_sharpe(bankroll_ts, "W", 52)
     sh_monthly = calendar_sharpe(bankroll_ts, "ME", 12)
     
@@ -358,15 +585,18 @@ def calculate_comprehensive_metrics(bankroll_ts: pd.Series, per_bet_rets: np.nda
     geometric_mean_ret = calculate_geometric_mean_return(per_bet_rets)
     exp_log_growth = expected_log_growth(per_bet_rets)
     
+    # Bust flags (drawdown + absolute floors)
+    bust = compute_bust_flags(bankroll_ts, start_bankroll, dd_thresholds, abs_levels)
+    
     # Risk metrics
     ruin = 1 if (bankroll_ts <= min_stake).any() else 0
     exposure = float(np.nanmean(stake_fracs)) if len(stake_fracs) else 0.0
     
-    return {
+    out = {
         'final_return_pct': final_return_pct,
         'final_bankroll': final_bankroll,
         'max_dd_pct': max_dd_pct,
-        'cagr': cagr * 100.0,  # Convert to percentage
+        'cagr': cagr * 100.0,
         'mar_ratio': mar_ratio,
         'calmar_ratio': calmar_ratio,
         'sharpe_academic': sh_academic,
@@ -375,17 +605,25 @@ def calculate_comprehensive_metrics(bankroll_ts: pd.Series, per_bet_rets: np.nda
         'sharpe_weekly': sh_weekly,
         'sharpe_monthly': sh_monthly,
         'sortino_ratio': sortino,
-        'win_rate': win_rate * 100.0,  # Convert to percentage
+        'win_rate': win_rate * 100.0,
         'avg_win_pct': avg_win,
         'avg_loss_pct': avg_loss,
         'profit_factor': profit_factor,
-        'geometric_mean_return': geometric_mean_ret * 100.0,  # Convert to percentage
+        'geometric_mean_return': geometric_mean_ret * 100.0,
         'exp_log_growth': exp_log_growth,
-        'exposure': exposure * 100.0,  # Convert to percentage
+        'exposure': exposure * 100.0,
         'ruin': ruin,
         'num_bets': len(per_bet_rets),
-        'implied_bets_per_year': bets_per_year
+        'implied_bets_per_year': bets_per_year,
+        # NEW: block transparency
+        'blocks': n_blocks,
+        'blocks_per_year': blocks_per_year,
+        'avg_bets_per_block': avg_bpb,
+        'median_bets_per_block': med_bpb,
     }
+    # Merge bust flags
+    out.update(bust)
+    return out
 
 # =========================
 # Metrics Calculation
@@ -477,7 +715,7 @@ def run_model(df: pd.DataFrame, model_name: str, args, rng) -> pd.DataFrame:
             if args.bootstrap == "iid":
                 boot = sample_iid(base, model_rng)
             else:
-                boot = sample_blocks(base, args.block_days, model_rng)
+                boot = sample_blocks(base, args.block_grouping, model_rng)
 
             # Simulate path
             bk_ts, per_bet_rets, outcomes, stake_fracs = simulate_path(
@@ -490,6 +728,11 @@ def run_model(df: pd.DataFrame, model_name: str, args, rng) -> pd.DataFrame:
                 min_stake=args.min_stake,
                 fixed_frac=args.fixed_frac,
                 fixed_amt=args.fixed_amt,
+                exec_grouping=args.exec_grouping,
+                block_allocation=args.block_allocation,
+                block_budget=args.block_budget,
+                block_budget_frac=args.block_budget_frac,
+                allow_leverage=args.allow_leverage,
             )
 
             # Calculate comprehensive metrics for this simulation (like deterministic)
@@ -497,7 +740,8 @@ def run_model(df: pd.DataFrame, model_name: str, args, rng) -> pd.DataFrame:
             end_date = str(boot["date"].max())
             metrics = calculate_comprehensive_metrics(
                 bk_ts, per_bet_rets, outcomes, stake_fracs, 
-                args.start_bankroll, bpy, args.min_stake, start_date, end_date
+                args.start_bankroll, bpy, args.min_stake, start_date, end_date,
+                args.eval_grouping, args.bust_thresholds, args.abs_bust_levels
             )
             metrics['sim_id'] = s
             metrics['k'] = k
@@ -516,6 +760,12 @@ def run_model(df: pd.DataFrame, model_name: str, args, rng) -> pd.DataFrame:
 
         # Aggregate metrics across simulations
         metrics_df = pd.DataFrame(sim_metrics)
+        
+        # Drawdown / abs-floor probabilities across sims
+        dd_abs_prob = {}
+        for col in metrics_df.columns:
+            if col.startswith("hit_dd_") or col.startswith("hit_abs_"):
+                dd_abs_prob[f"{col}_prob"] = float(metrics_df[col].mean())
         
         def agg_stats(col):
             """Calculate aggregation statistics"""
@@ -556,6 +806,15 @@ def run_model(df: pd.DataFrame, model_name: str, args, rng) -> pd.DataFrame:
         for metric in metrics_to_aggregate:
             if metric in metrics_df.columns:
                 row.update(agg_stats(metric))
+        
+        row.update(dd_abs_prob)
+        
+        # (Optional) aggregate block stats across sims
+        for col in ["blocks_per_year", "avg_bets_per_block", "median_bets_per_block"]:
+            if col in metrics_df.columns:
+                row[f"{col}_mean"] = float(metrics_df[col].mean())
+                row[f"{col}_median"] = float(metrics_df[col].median())
+                row[f"{col}_std"] = float(metrics_df[col].std())
         
         summary_rows.append(row)
         
@@ -842,11 +1101,32 @@ def main():
     # Bootstrap options
     ap.add_argument("--bootstrap", type=str, default="iid", 
                     choices=["iid", "block"])
+    ap.add_argument("--block-grouping", type=str, default="week", choices=["day","week"],
+                    help="Calendar block used for block bootstrap sampling.")
     ap.add_argument("--block-days", type=int, default=7,
                     help="Block size in days for block bootstrap")
     ap.add_argument("--num-sims", type=int, default=10000,
                     help="Number of bootstrap simulations")
     
+    # Evaluation / risk flags
+    ap.add_argument("--eval-grouping", type=str, default="bet",
+                    choices=["bet", "day", "week"],
+                    help="Time base for Log-Sharpe & blocks/year: 'bet' (per-bet), 'day' (all bets in a day are one block), 'week' (ISO week).")
+    ap.add_argument("--bust-thresholds", type=str, default="0.2,0.5,0.75,0.9",
+                    help="Comma-separated drawdown thresholds (decimals). Example: 0.2,0.5,0.75,0.9")
+    ap.add_argument("--abs-bust-levels", type=str, default="",
+                    help="Comma-separated bankroll floors in dollars. Example: 10,5,1")
+
+    # Execution mode
+    ap.add_argument("--exec-grouping", type=str, default="sequential",
+                    choices=["sequential","day","week"],
+                    help="How to EXECUTE bets: per-bet or per calendar block.")
+    ap.add_argument("--block-allocation", type=str, default="kelly_prop",
+                    choices=["kelly_prop","edge_prop","equal"])
+    ap.add_argument("--block-budget", type=str, default="k", choices=["k","fixed"])
+    ap.add_argument("--block-budget-frac", type=float, default=None)
+    ap.add_argument("--allow-leverage", action="store_true")
+
     # Output options
     ap.add_argument("--save-example-paths", type=int, default=5,
                     help="Number of example paths to save per k")
@@ -857,6 +1137,10 @@ def main():
     ap.add_argument("--print-all", action="store_true")
 
     args = ap.parse_args()
+    
+    # Normalize thresholds/lists
+    args.bust_thresholds = [float(x) for x in args.bust_thresholds.split(",")] if args.bust_thresholds.strip() else []
+    args.abs_bust_levels = [float(x) for x in args.abs_bust_levels.split(",")] if args.abs_bust_levels.strip() else []
     
     # Validate inputs
     if not args.input_csvs and not args.input_csv:
@@ -872,6 +1156,11 @@ def main():
     print(f"Edge ≥ {args.edge*100:.1f}% | Sims {args.num_sims:,} | Bootstrap {args.bootstrap}")
     if args.bootstrap == "block":
         print(f"Block size: {args.block_days} days")
+    print(f"Eval grouping: {args.eval_grouping}")
+    if args.bust_thresholds:
+        print(f"Bust DD thresholds: {', '.join(f'{t:.0%}' for t in args.bust_thresholds)}")
+    if args.abs_bust_levels:
+        print(f"Abs bankroll floors: {', '.join(f'${lvl:g}' for lvl in args.abs_bust_levels)}")
     
     sizing_desc = f"{args.sizing.title()} sizing"
     if args.sizing == "kelly":
@@ -950,6 +1239,24 @@ def main():
                           f"{dd_mean:5.1f}%  "
                           f"{sharpe:6.2f}  "
                           f"{sortino:6.2f}")
+                
+                # Show bust probabilities for key thresholds
+                print(f"\n  💀 Bust Probabilities (first few k values):")
+                print("  k     20%DD  50%DD  75%DD  90%DD  ruin%")
+                for _, row in summary.head(10).iterrows():
+                    k = row.get('k', 0.0)
+                    dd20 = row.get('hit_dd_20_prob', 0.0) * 100
+                    dd50 = row.get('hit_dd_50_prob', 0.0) * 100 
+                    dd75 = row.get('hit_dd_75_prob', 0.0) * 100
+                    dd90 = row.get('hit_dd_90_prob', 0.0) * 100
+                    ruin = row.get('ruin_prob', 0.0) * 100
+                    
+                    print(f"  {k:.2f}  "
+                          f"{dd20:5.1f}% "
+                          f"{dd50:5.1f}% "
+                          f"{dd75:5.1f}% "
+                          f"{dd90:5.1f}% "
+                          f"{ruin:5.1f}%")
                     
                 # Also show compact comparison for key k values
                 comparison_ks = [0.01, 0.05, 0.10, 0.25, 0.50, 1.00]

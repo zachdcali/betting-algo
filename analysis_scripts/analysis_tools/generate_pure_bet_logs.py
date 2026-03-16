@@ -63,7 +63,7 @@ EXACT_143_FEATURES = [
     'P2_Country_AUS','P2_Country_SRB','P2_Country_GBR','P2_Country_ARG',
     'Handedness_Matchup_RR','P1_Rank_Change_30d','P2_Country_GER','Handedness_Matchup_LL',
     'P2_Country_RUS','P1_Country_ARG','Level_C','P2_Semifinals_WinRate',
-    'P2_Days_Since_Last','P1_Peak_Age','P2_Peak_Age','H2H_P1_WinRate',
+    'P2_Days_Since_Last','H2H_P1_WinRate',
     'P1_Country_Other','H2H_P1_Wins','P1_BigMatch_WinRate','P2_Rank_Change_90d',
     'P2_BigMatch_WinRate','P2_Country_FRA'
 ]
@@ -91,8 +91,8 @@ TENNIS_VERIFIED_PATH = VERIFIED_DIR / "tennis_verified.csv"
 # Model files — adjust if your repo uses different names
 XGB_PATH       = REPO / "results" / "professional_tennis" / "XGBoost" / "xgboost_model.json"
 RF_PATH        = REPO / "results" / "professional_tennis" / "Random_Forest" / "random_forest_model.pkl"
-NN143_PATH     = REPO / "results" / "professional_tennis" / "Neural_Network" / "neural_network_143_features.pth"
-SCALER143_PATH = REPO / "results" / "professional_tennis" / "Neural_Network" / "scaler_143_features.pkl"
+NN143_PATH     = REPO / "results" / "professional_tennis" / "Neural_Network" / "neural_network_model_UNBIASED_TEMPORAL.pth"
+SCALER143_PATH = REPO / "results" / "professional_tennis" / "Neural_Network" / "scaler_UNBIASED_TEMPORAL.pkl"
 NN98_PATH      = REPO / "results" / "professional_tennis" / "Neural_Network" / "neural_network_symmetric_features.pth"
 SCALER98_PATH  = REPO / "results" / "professional_tennis" / "Neural_Network" / "scaler_symmetric_features.pkl"
 
