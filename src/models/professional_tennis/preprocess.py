@@ -8,6 +8,87 @@ def laplace(wins: int, total: int, alpha: float = 3.0) -> float:
     """Bayesian (Laplace) smoothing: (wins + α/2) / (total + α). Returns 0.5 when total=0."""
     return (wins + alpha / 2.0) / (total + alpha)
 
+
+def get_round_day_offset(tourney_level, draw_size, round_code):
+    """
+    Estimate the day offset from tourney_date for a given round.
+
+    Sackmann data stores tourney_date as the tournament start date (first day of
+    main-draw play, typically Monday). Qualifiers have negative offsets.
+
+    Offsets vary by tournament level and draw size because:
+      - Grand Slams: 2-week event, early rounds span 2 calendar days each
+      - Masters 1000 large (IW/Miami, draw>=96): ~12-day event, similar 2-day early rounds
+      - Masters 1000 medium (64-draw): 9-day event, 1 day per round
+      - Masters 1000 small (48/56-draw): 7-day event
+      - ATP 500/250, Challengers, ITF: 7-day event, 1 day per round
+    """
+    level = str(tourney_level).strip().upper() if pd.notna(tourney_level) else ''
+    try:
+        draw = int(draw_size)
+    except (TypeError, ValueError):
+        draw = 32
+    rnd = str(round_code).strip().upper() if pd.notna(round_code) else 'R32'
+
+    # Grand Slam (G) — 2-week, 2-day rounds, qualifiers the week before
+    if level == 'G':
+        offsets = {
+            'Q1': -7, 'Q2': -5, 'Q3': -3, 'Q4': -3,
+            'R128': 0, 'R64': 2, 'R32': 4, 'R16': 7,
+            'QF': 9, 'SF': 11, 'F': 13, 'BR': 13,
+        }
+    # Masters 1000 large draw (Indian Wells / Miami: 96 or 128 players, ~12-day event)
+    elif level == 'M' and draw >= 96:
+        offsets = {
+            'Q1': -2, 'Q2': -1,
+            'R128': 0, 'R64': 4, 'R32': 6, 'R16': 8,
+            'QF': 10, 'SF': 11, 'F': 13, 'BR': 13,
+        }
+    # Masters 1000 medium draw (64: Madrid, Rome, Canada, Cincinnati, Shanghai — 9-10 day)
+    elif level == 'M' and draw == 64:
+        offsets = {
+            'Q1': -2, 'Q2': -1,
+            'R64': 0, 'R32': 2, 'R16': 4,
+            'QF': 6, 'SF': 8, 'F': 9, 'BR': 9,
+        }
+    # Masters 1000 small draw (48/56: Monte Carlo, Paris Bercy — 7-8 day)
+    elif level == 'M':
+        offsets = {
+            'Q1': -2, 'Q2': -1,
+            'R64': 0, 'R32': 1, 'R16': 3,
+            'QF': 4, 'SF': 5, 'F': 7, 'BR': 7,
+        }
+    # Tour Finals / Year-End Championship (O level) — round-robin + knockout
+    elif level == 'O':
+        offsets = {
+            'RR': 1, 'SF': 6, 'F': 7,
+        }
+    # Davis Cup / team events (D) — best-of-5 rubbers over 3 days
+    elif level == 'D':
+        offsets = {
+            'RR': 0, 'QF': 0, 'SF': 0, 'F': 2, 'BR': 2,
+        }
+    # ATP 500 / ATP 250 / Other ATP (A) — 7-day event (Mon–Sun)
+    elif level == 'A':
+        offsets = {
+            'Q1': -2, 'Q2': -1,
+            'R32': 0, 'R16': 2, 'QF': 4, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
+        }
+    # Challenger (C) — 7-day event
+    elif level == 'C':
+        offsets = {
+            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
+            'R32': 0, 'R16': 2, 'QF': 3, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
+        }
+    # ITF Futures M15 (S), M25 (F level code), and anything else — 7-day event
+    else:
+        offsets = {
+            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
+            'R32': 0, 'R16': 2, 'QF': 3, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
+        }
+
+    return offsets.get(rnd, 0)
+
 def get_feature_columns(df):
     """
     Helper function to identify feature columns for ML models.
@@ -43,8 +124,14 @@ def calculate_temporal_features(df):
     print("CALCULATING ENHANCED TEMPORAL FEATURES")
     print("=" * 60)
     
-    # Sort by date for chronological processing (CRITICAL - prevents data leakage)
-    df_sorted = df.sort_values(['tourney_date']).reset_index(drop=True).copy()
+    # Sort by inferred match date (tourney_date + round offset) then match_num for
+    # within-tournament ordering. This is CRITICAL — Sackmann stores tournament start
+    # date for all rounds, so without this two tournaments starting the same week
+    # would be interleaved and within-tournament features would be computed out of order.
+    if 'inferred_match_date' in df.columns:
+        df_sorted = df.sort_values(['inferred_match_date', 'match_num']).reset_index(drop=True).copy()
+    else:
+        df_sorted = df.sort_values(['tourney_date', 'match_num']).reset_index(drop=True).copy()
     df_sorted['tourney_date'] = pd.to_datetime(df_sorted['tourney_date'])
     
     # Initialize player tracking dictionaries
@@ -53,6 +140,7 @@ def calculate_temporal_features(df):
         'match_history': deque(maxlen=50),  # Store last 50 matches per player
         'rank_history': deque(maxlen=50),
         'surface_stats': defaultdict(lambda: {'matches': deque(maxlen=20), 'wins': deque(maxlen=20)}),
+        'surface_career_count': defaultdict(int),  # Unbounded career match count per surface (fixes deque(maxlen=20) cap bug)
         'level_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
         'round_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
         'h2h_stats': defaultdict(lambda: {'total': 0, 'wins': 0})
@@ -126,7 +214,9 @@ def calculate_temporal_features(df):
         # Get player IDs and basic info
         p1_id = row['Player1_ID'] if pd.notna(row['Player1_ID']) else row['Player1_Name']
         p2_id = row['Player2_ID'] if pd.notna(row['Player2_ID']) else row['Player2_Name']
-        match_date = row['tourney_date']
+        # Use inferred match date (tourney_date + round offset) if available,
+        # otherwise fall back to raw tourney_date.
+        match_date = row['inferred_match_date'] if 'inferred_match_date' in df_sorted.columns else row['tourney_date']
         surface = row['surface'] if pd.notna(row['surface']) else 'Hard'
         level = row['tourney_level'] if pd.notna(row['tourney_level']) else 'A'
         round_name = row['round'] if pd.notna(row['round']) else 'R32'
@@ -207,8 +297,8 @@ def calculate_temporal_features(df):
             surface_win_rate = calculate_surface_win_rate(surface_stats, match_date, days=90, min_matches=5)
             df_sorted.loc[row.name, f'{prefix}Surface_WinRate_90d'] = surface_win_rate
             
-            # Career surface experience
-            career_surface_matches = len(surface_stats['matches'])
+            # Career surface experience — use unbounded counter, not deque length (which was capped at 20)
+            career_surface_matches = stats['surface_career_count'][surface]
             df_sorted.loc[row.name, f'{prefix}Surface_Experience'] = career_surface_matches
             
             # === PHASE 2: TOURNAMENT LEVEL EXPERIENCE ===
@@ -322,6 +412,7 @@ def calculate_temporal_features(df):
             # Update surface stats
             stats['surface_stats'][surface]['matches'].append(match_date)
             stats['surface_stats'][surface]['wins'].append(won)
+            stats['surface_career_count'][surface] += 1  # Unbounded career counter
             
             # Update level/round stats
             stats['level_stats'][level]['total'] += 1
@@ -580,7 +671,8 @@ def preprocess_jeffsackmann_data_for_ml():
     
     # Load the master combined Jeffsackmann data
     print(f"\n1. Loading Jeff Sackmann master combined data...")
-    df = pd.read_csv("/app/data/JeffSackmann/jeffsackmann_master_combined.csv", low_memory=False)
+    _base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../..", "data", "JeffSackmann")
+    df = pd.read_csv(os.path.join(_base, "jeffsackmann_master_combined.csv"), low_memory=False)
     print(f"   Original data shape: {df.shape}")
     print(f"   Data source distribution:")
     print(f"   {df['data_source'].value_counts()}")
@@ -741,10 +833,24 @@ def preprocess_jeffsackmann_data_for_ml():
     print(f"   Created {len(hand_features)} handedness features")
     print(f"   Created {len(country_features)} country features")
     
-    # 6. Calculate enhanced temporal features
-    print("\n6. Calculating enhanced temporal features...")
+    # 6. Infer per-match dates using round day offsets, then calculate temporal features
+    print("\n6. Inferring match dates from round + tournament type...")
+    # Sackmann stores tournament START DATE for every round. We derive an estimated
+    # actual match date so that within-tournament rounds are processed in the correct
+    # chronological order and rolling windows (30d/90d) are computed accurately.
+    df['inferred_match_date'] = df.apply(
+        lambda row: row['tourney_date'] + pd.Timedelta(days=get_round_day_offset(
+            row.get('tourney_level'), row.get('draw_size'), row.get('round')
+        )),
+        axis=1
+    )
+    print(f"   Sample inferred dates (first 3 rows):")
+    for _, r in df[['tourney_name', 'round', 'tourney_date', 'inferred_match_date']].head(3).iterrows():
+        print(f"     {r['tourney_name']} {r['round']}: {r['tourney_date'].date()} -> {r['inferred_match_date'].date()}")
+
+    print("\n   Calculating enhanced temporal features...")
     print("   This is the major enhancement - adding 60+ temporal features!")
-    
+
     df_with_temporal = calculate_temporal_features(df)
     
     # 7. Select final features for ML
@@ -809,7 +915,7 @@ def preprocess_jeffsackmann_data_for_ml():
     # 8. Save the enhanced ML-ready dataset (REPLACES old file)
     print("\n8. Saving enhanced ML-ready dataset...")
     
-    output_path = "/app/data/JeffSackmann/jeffsackmann_ml_ready_all_years.csv"
+    output_path = os.path.join(_base, "jeffsackmann_ml_ready_SURFACE_FIX.csv")
     ml_df.to_csv(output_path, index=False)
     
     print(f"   ✅ REPLACED old dataset with enhanced version: {output_path}")
@@ -826,7 +932,8 @@ def preprocess_jeffsackmann_data_for_ml():
     print(f"  -> NEW temporal features: {len(temporal_features)}")
     print(f"Target balance: {ml_df['Player1_Wins'].mean()*100:.1f}% Player1 wins")
     print(f"Data spans: {ml_df['tourney_date'].min().date()} to {ml_df['tourney_date'].max().date()}")
-    print(f"Years covered: {ml_df['year'].min()} to {ml_df['year'].max()}")
+    if 'year' in ml_df.columns:
+        print(f"Years covered: {ml_df['year'].min()} to {ml_df['year'].max()}")
     
     # Show sample of NEW temporal features
     print(f"\nSample of NEW temporal features:")

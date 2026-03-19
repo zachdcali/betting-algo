@@ -156,11 +156,11 @@ print("=" * 60)
 MIN_YEAR = 1990  # Starting from 1990 for better data quality - can be adjusted as needed
 
 # Check if ML-ready dataset exists, if not create it
-ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_LEAK_FREE.csv")
+ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_SURFACE_FIX.csv")
 if not os.path.exists(ml_ready_path):
     print("ML-ready dataset not found. Creating it...")
-    from preprocess import preprocess_data_for_ml
-    ml_df, feature_columns = preprocess_data_for_ml()
+    from preprocess import preprocess_jeffsackmann_data_for_ml
+    ml_df, feature_columns = preprocess_jeffsackmann_data_for_ml()
 else:
     print("\n1. Loading ML-ready professional tennis dataset...")
     ml_df = pd.read_csv(ml_ready_path, low_memory=False)
@@ -543,16 +543,82 @@ print(f"Results saved to: {output_dir}")
 print("\nDetailed Classification Report:")
 print(classification_report(y_test.values, y_pred, target_names=['Player2_Wins', 'Player1_Wins']))
 
-# Save the corrected 143-feature model (replaces corrupted original)
-print(f"\nSaving corrected 143-feature Neural Network model...")
-original_model_path = os.path.join(output_dir, 'neural_network_model.pth')
-original_scaler_path = os.path.join(output_dir, 'scaler.pkl')
+# Save new SURFACE_FIX model (does NOT overwrite UNBIASED_TEMPORAL)
+print(f"\nSaving SURFACE_FIX Neural Network model...")
+original_model_path = os.path.join(output_dir, 'neural_network_model_SURFACE_FIX.pth')
+original_scaler_path = os.path.join(output_dir, 'scaler_SURFACE_FIX.pkl')
 
 torch.save(model.state_dict(), original_model_path)
 with open(original_scaler_path, 'wb') as f:
     pickle.dump(scaler, f)
 
-print(f"   Corrected Neural Network model saved to: {original_model_path}")
-print(f"   Corrected scaler saved to: {original_scaler_path}")
+print(f"   Model saved to: {original_model_path}")
+print(f"   Scaler saved to: {original_scaler_path}")
 print(f"   Features used: {len(feature_cols)} (full feature set)")
-print(f"   This replaces the corrupted 143-feature model")
+
+# ── Comparison vs UNBIASED_TEMPORAL ──────────────────────────────────────────
+print("\n" + "="*60)
+print("COMPARISON: SURFACE_FIX vs UNBIASED_TEMPORAL")
+print("="*60)
+
+from sklearn.metrics import brier_score_loss
+from sklearn.calibration import calibration_curve
+
+y_prob_new = y_pred_proba  # already 1D P(player1 wins)
+
+def ece_score(y_true, y_prob, n_bins=10):
+    """Expected Calibration Error"""
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    for i in range(n_bins):
+        mask = (y_prob >= bins[i]) & (y_prob < bins[i+1])
+        if mask.sum() > 0:
+            bin_acc = y_true[mask].mean()
+            bin_conf = y_prob[mask].mean()
+            ece += mask.sum() * abs(bin_acc - bin_conf)
+    return ece / len(y_true)
+
+auc_new = roc_auc_score(y_test.values, y_prob_new)
+brier_new = brier_score_loss(y_test.values, y_prob_new)
+ece_new = ece_score(y_test.values, y_prob_new)
+acc_new = accuracy_score(y_test.values, y_pred)
+
+print(f"\nSURFACE_FIX model (new):")
+print(f"  Accuracy : {acc_new:.4f}")
+print(f"  AUC-ROC  : {auc_new:.4f}")
+print(f"  Brier    : {brier_new:.4f}  (lower is better)")
+print(f"  ECE      : {ece_new:.4f}  (lower is better)")
+
+# Load and evaluate UNBIASED_TEMPORAL for comparison
+ut_model_path = os.path.join(output_dir, 'neural_network_model_UNBIASED_TEMPORAL.pth')
+ut_scaler_path = os.path.join(output_dir, 'scaler_UNBIASED_TEMPORAL.pkl')
+if os.path.exists(ut_model_path) and os.path.exists(ut_scaler_path):
+    with open(ut_scaler_path, 'rb') as f:
+        scaler_ut = pickle.load(f)
+    model_ut = TennisNet(len(feature_cols))
+    model_ut.load_state_dict(torch.load(ut_model_path, map_location='cpu'))
+    model_ut.eval()
+
+    X_test_ut = scaler_ut.transform(X_test.values)
+    with torch.no_grad():
+        y_prob_ut = model_ut(torch.FloatTensor(X_test_ut)).squeeze().numpy()
+    y_pred_ut = (y_prob_ut > 0.5).astype(int)
+
+    auc_ut = roc_auc_score(y_test.values, y_prob_ut)
+    brier_ut = brier_score_loss(y_test.values, y_prob_ut)
+    ece_ut = ece_score(y_test.values, y_prob_ut)
+    acc_ut = accuracy_score(y_test.values, y_pred_ut)
+
+    print(f"\nUNBIASED_TEMPORAL model (old):")
+    print(f"  Accuracy : {acc_ut:.4f}")
+    print(f"  AUC-ROC  : {auc_ut:.4f}")
+    print(f"  Brier    : {brier_ut:.4f}  (lower is better)")
+    print(f"  ECE      : {ece_ut:.4f}  (lower is better)")
+
+    print(f"\nDelta (SURFACE_FIX minus UNBIASED_TEMPORAL):")
+    print(f"  Accuracy : {acc_new - acc_ut:+.4f}")
+    print(f"  AUC-ROC  : {auc_new - auc_ut:+.4f}")
+    print(f"  Brier    : {brier_new - brier_ut:+.4f}")
+    print(f"  ECE      : {ece_new - ece_ut:+.4f}")
+else:
+    print("  (UNBIASED_TEMPORAL not found for comparison)")

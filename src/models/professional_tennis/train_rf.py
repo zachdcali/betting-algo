@@ -23,11 +23,11 @@ print("=" * 60)
 MIN_YEAR = 1990  # Starting from 1990 for better data quality - can be adjusted as needed
 
 # Check if ML-ready dataset exists, if not create it
-ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_LEAK_FREE.csv")
+ml_ready_path = os.path.join(os.path.dirname(__file__), "../../..", "data", "JeffSackmann", "jeffsackmann_ml_ready_SURFACE_FIX.csv")
 if not os.path.exists(ml_ready_path):
     print("ML-ready dataset not found. Creating it...")
-    from preprocess import preprocess_data_for_ml
-    ml_df, feature_columns = preprocess_data_for_ml()
+    from preprocess import preprocess_jeffsackmann_data_for_ml
+    ml_df, feature_columns = preprocess_jeffsackmann_data_for_ml()
 else:
     print("\n1. Loading ML-ready professional tennis dataset...")
     ml_df = pd.read_csv(ml_ready_path, low_memory=False)
@@ -373,7 +373,7 @@ print(f"   Results saved to: {output_dir}")
 # Save the trained model
 print("\n14. Saving trained model...")
 import pickle
-model_path = os.path.join(output_dir, 'random_forest_model.pkl')
+model_path = os.path.join(output_dir, 'random_forest_model_SURFACE_FIX.pkl')
 with open(model_path, 'wb') as f:
     pickle.dump(rf_model, f)
 print(f"   Random Forest model saved: {model_path}")
@@ -390,3 +390,51 @@ print(f"Model saved to: {model_path}")
 # Print classification report
 print("\nDetailed Classification Report:")
 print(classification_report(y_test, y_pred, target_names=['Player2_Wins', 'Player1_Wins']))
+
+# ── Calibration metrics ───────────────────────────────────────────────────────
+from sklearn.metrics import brier_score_loss, log_loss
+from sklearn.calibration import calibration_curve as sk_cal_curve
+
+def ece_score(y_true, y_prob, n_bins=10):
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    for i in range(n_bins):
+        mask = (y_prob >= bins[i]) & (y_prob < bins[i+1])
+        if mask.sum() > 0:
+            ece += mask.sum() * abs(np.array(y_true)[mask].mean() - y_prob[mask].mean())
+    return ece / len(y_true)
+
+brier_new = brier_score_loss(y_test.values, y_pred_proba)
+ece_new = ece_score(y_test.values, y_pred_proba)
+
+print("\n" + "="*60)
+print("COMPARISON: SURFACE_FIX vs previous model")
+print("="*60)
+print(f"\nSURFACE_FIX model (new):")
+print(f"  Accuracy : {accuracy:.4f}")
+print(f"  AUC-ROC  : {auc:.4f}")
+print(f"  Brier    : {brier_new:.4f}  (lower is better)")
+print(f"  ECE      : {ece_new:.4f}  (lower is better)")
+
+old_model_path = os.path.join(output_dir, 'random_forest_model.pkl')
+if os.path.exists(old_model_path):
+    with open(old_model_path, 'rb') as f:
+        rf_old = pickle.load(f)
+    y_pred_old = rf_old.predict(X_test)
+    y_prob_old = rf_old.predict_proba(X_test)[:, 1]
+    acc_old = accuracy_score(y_test, y_pred_old)
+    auc_old = roc_auc_score(y_test, y_prob_old)
+    brier_old = brier_score_loss(y_test.values, y_prob_old)
+    ece_old = ece_score(y_test.values, y_prob_old)
+    print(f"\nOld RF model:")
+    print(f"  Accuracy : {acc_old:.4f}")
+    print(f"  AUC-ROC  : {auc_old:.4f}")
+    print(f"  Brier    : {brier_old:.4f}  (lower is better)")
+    print(f"  ECE      : {ece_old:.4f}  (lower is better)")
+    print(f"\nDelta (SURFACE_FIX minus old):")
+    print(f"  Accuracy : {accuracy - acc_old:+.4f}")
+    print(f"  AUC-ROC  : {auc - auc_old:+.4f}")
+    print(f"  Brier    : {brier_new - brier_old:+.4f}")
+    print(f"  ECE      : {ece_new - ece_old:+.4f}")
+else:
+    print("  (old random_forest_model.pkl not found for comparison)")
