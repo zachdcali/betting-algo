@@ -279,7 +279,7 @@ def calculate_temporal_features(df):
             if player_num == 1:
                 df_sorted.loc[row.name, 'Age_Diff'] = p1_age - p2_age
                 df_sorted.loc[row.name, 'Height_Diff'] = p1_height - p2_height
-            df_sorted.loc[row.name, f'{prefix[:-1]}_Peak_Age'] = 1 if 24 <= age <= 28 else 0
+            df_sorted.loc[row.name, f'Peak_Age_{prefix[:-1]}'] = 1 if 24 <= age <= 28 else 0
             
         # === PHASE 2: SURFACE-SPECIFIC FEATURES ===
         for player_num, player_id in enumerate([p1_id, p2_id], 1):

@@ -71,8 +71,8 @@ class NNWrapper(BaseEstimator, ClassifierMixin):
             outputs = outputs.reshape(-1, 1)
         return np.hstack((1 - outputs, outputs))  # Shape (n_samples, 2)
 
-# Exact 141 features the UNBIASED_TEMPORAL model was trained on
-# (same list as EXACT_141_FEATURES in analysis_scripts/apples_to_apples_verified.py)
+# Exact 143 features the SURFACE_FIX model was trained on
+# (141 original + P1_Peak_Age and P2_Peak_Age at indices 134-135)
 EXACT_141_FEATURES = [
     'P2_WinStreak_Current','P1_WinStreak_Current','P2_Surface_Matches_30d','Height_Diff',
     'P1_Surface_Matches_30d','Player2_Height','P1_Matches_30d','P2_Matches_30d',
@@ -109,25 +109,26 @@ EXACT_141_FEATURES = [
     'P2_Country_RUS','P1_Country_ARG','Level_C','P2_Semifinals_WinRate',
     'P2_Days_Since_Last','H2H_P1_WinRate',
     'P1_Country_Other','H2H_P1_Wins','P1_BigMatch_WinRate','P2_Rank_Change_90d',
-    'P2_BigMatch_WinRate','P2_Country_FRA'
+    'P2_BigMatch_WinRate','P2_Country_FRA',
+    'P1_Peak_Age','P2_Peak_Age',
 ]
 
 
 class TennisPredictor:
-    """Live tennis match predictor using NN-143 (UNBIASED_TEMPORAL) model"""
+    """Live tennis match predictor using NN-143 (SURFACE_FIX) model"""
 
     def __init__(self, model_dir: str = "../results/professional_tennis/Neural_Network"):
         self.model_dir = Path(model_dir)
         self.model = None
         self.scaler = None
-        self.feature_names = EXACT_141_FEATURES
+        self.feature_names = EXACT_141_FEATURES  # now 143 features
         self.is_loaded = False
 
     def load_model(self) -> bool:
-        """Load the UNBIASED_TEMPORAL NN model and scaler"""
+        """Load the SURFACE_FIX NN model and scaler"""
         try:
-            model_path = self.model_dir / "neural_network_model_UNBIASED_TEMPORAL.pth"
-            scaler_path = self.model_dir / "scaler_UNBIASED_TEMPORAL.pkl"
+            model_path = self.model_dir / "neural_network_model_SURFACE_FIX.pth"
+            scaler_path = self.model_dir / "scaler_SURFACE_FIX.pkl"
 
             if not model_path.exists():
                 print(f"❌ Model file not found: {model_path}")
@@ -172,7 +173,7 @@ class TennisPredictor:
                 return {"error": "Model not loaded"}
         
         try:
-            # Extract the 141 features in the exact order the model was trained on
+            # Extract the 143 features in the exact order the model was trained on
             feature_values = [float(features_dict.get(f, 0.0)) for f in EXACT_141_FEATURES]
 
             X = np.array(feature_values).reshape(1, -1)
@@ -185,7 +186,7 @@ class TennisPredictor:
                 "player1_win_prob": raw_prob,
                 "player2_win_prob": 1.0 - raw_prob,
                 "raw_prob": raw_prob,
-                "model_version": "NN-UNBIASED_TEMPORAL",
+                "model_version": "NN-SURFACE_FIX",
             }
             
         except Exception as e:
