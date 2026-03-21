@@ -83,9 +83,10 @@ class KellyStakeCalculator:
         # Group matches by specified method
         if grouping == 'day':
             # Group all matches happening on same day, handling unknown times
-            match_times = matches_df.get('match_time', 'today')
-            # Replace 'Unknown' with today's date
-            match_times = match_times.replace('Unknown', 'today')
+            if 'match_time' in matches_df.columns:
+                match_times = matches_df['match_time'].fillna('today').replace('Unknown', 'today')
+            else:
+                match_times = pd.Series(['today'] * len(matches_df), index=matches_df.index)
             matches_df['group_key'] = pd.to_datetime(match_times, errors='coerce').dt.date
         elif grouping == 'event':
             # Group by tournament event

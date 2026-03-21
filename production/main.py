@@ -6,6 +6,7 @@ Coordinates odds fetching, feature extraction, model inference, and stake calcul
 
 import argparse
 import sys
+import re
 import pandas as pd
 import json
 from pathlib import Path
@@ -22,6 +23,7 @@ from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
+from scraping.atp_rankings_scraper import fetch_atp_rankings, save_rankings
 
 class LiveBettingOrchestrator:
     """Main orchestrator for live tennis betting system"""
@@ -199,6 +201,7 @@ class LiveBettingOrchestrator:
             # Use exact match date from Bovada where available
             match_date = self.parse_match_date(row.get('match_time', ''))
 
+            has_defaulted = False
             try:
                 features = self.feature_engine.build_143_features(
                     player1_name=p1,
@@ -212,17 +215,24 @@ class LiveBettingOrchestrator:
                     persist=False,
                     session_cache=session_cache
                 )
+                # features_complete=False if ANY meaningful feature was defaulted
+                # (includes ATP points fallback, round=None, structural defaults)
+                has_defaulted = bool(features.get('_defaulted_features', ''))
                 status = "ok"
             except Exception as e:
                 print(f"      ⚠️ Feature extraction failed: {e}")
                 features = {}
                 status = "skip"
 
-            # Ordered 141 features for the model
+            # Ordered 141 features for the model — flag any that are absent from the returned dict
+            missing_from_dict = [k for k in EXACT_141_FEATURES if k not in features]
+            if missing_from_dict and status == "ok":
+                print(f"      ⚠️  MISSING FROM FEATURE DICT (filled 0): {missing_from_dict}")
             ordered_features = {k: features.get(k, 0.0) for k in EXACT_141_FEATURES}
 
             # Metadata (not fed to model)
             ordered_features.update({
+                '_has_defaulted_features': has_defaulted,
                 'match_id': idx,
                 'player1_raw': row.get('player1_raw', p1),
                 'player2_raw': row.get('player2_raw', p2),
@@ -232,7 +242,9 @@ class LiveBettingOrchestrator:
                 'status': status,
                 'meta_level_input': tournament_level,
                 'meta_surface_input': surface,
-                'meta_round_input': round_code or '',
+                'meta_round_input': features.get('_resolved_round_code') or round_code or '',
+                'meta_match_date': features.get('_resolved_match_date') or '',
+                'meta_defaulted_features': features.get('_defaulted_features') or '',
                 'meta_draw_input': draw_size,
                 'meta_resolver_source': resolver_source
             })
@@ -349,8 +361,10 @@ class LiveBettingOrchestrator:
             print()
     
     def _log_all_predictions(self, predictions_df, odds_df, features_df):
-        """Log every prediction (win or skip) to prediction_log.csv for later accuracy tracking."""
+        """Log every prediction to prediction_log.csv for later accuracy tracking."""
         try:
+            today = datetime.now().date().isoformat()
+
             for _, pred_row in predictions_df.iterrows():
                 p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
                 p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
@@ -359,6 +373,13 @@ class LiveBettingOrchestrator:
                     continue
                 model_p2 = 1.0 - float(model_p1)
 
+                # features_complete: False if the calculator reported any noisy defaults
+                features_complete = not bool(pred_row.get('_has_defaulted_features', False))
+                if not features_complete:
+                    defaulted = pred_row.get('meta_defaulted_features', '')
+                    print(f"  ⛔ Skipping prediction log for {p1} vs {p2} — incomplete features: {defaulted}")
+                    continue
+
                 # Try to get market odds from odds_df
                 match_odds = odds_df[
                     (odds_df['player1_normalized'].str.lower() == str(p1).lower()) |
@@ -366,29 +387,57 @@ class LiveBettingOrchestrator:
                 ]
                 if not match_odds.empty:
                     o_row = match_odds.iloc[0]
-                    mkt_p1 = float(o_row.get('player1_implied_prob', 0.5))
-                    mkt_p2 = float(o_row.get('player2_implied_prob', 0.5))
+                    mkt_p1_raw = float(o_row.get('player1_implied_prob', 0.5))
+                    mkt_p2_raw = float(o_row.get('player2_implied_prob', 0.5))
+                    # De-vig: normalize so probs sum to 1.0
+                    mkt_total = mkt_p1_raw + mkt_p2_raw
+                    mkt_p1 = mkt_p1_raw / mkt_total if mkt_total > 0 else 0.5
+                    mkt_p2 = mkt_p2_raw / mkt_total if mkt_total > 0 else 0.5
                     o1 = o_row.get('player1_odds_american')
                     o2 = o_row.get('player2_odds_american')
                     tournament = o_row.get('tourney_name', '')
-                    surface = o_row.get('surface', features_df.get('meta_surface_input', ['Hard'])[0] if not features_df.empty else 'Hard')
-                    level = o_row.get('tourney_level', '')
+                    surface = pred_row.get('meta_surface_input', o_row.get('surface', 'Hard'))
+                    level = pred_row.get('meta_level_input', o_row.get('tourney_level', ''))
                     match_time = o_row.get('match_time', '')
                 else:
                     mkt_p1, mkt_p2, o1, o2 = 0.5, 0.5, None, None
-                    tournament, surface, level, match_time = '', 'Hard', '', ''
+                    tournament = ''
+                    surface = pred_row.get('meta_surface_input', 'Hard')
+                    level = pred_row.get('meta_level_input', '')
+                    match_time = ''
 
+                # Use TA-inferred match date (tourney_start + round_offset) — Bovada only gives clock time
+                match_date = pred_row.get('meta_match_date') or today
                 log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
-                    round_code=pred_row.get('meta_round_input', ''),
-                    match_date=match_time or datetime.now().date(),
+                    round_code=pred_row.get('meta_round_input', '') or None,
+                    match_date=match_date,
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
                     p1_odds_american=o1, p2_odds_american=o2,
+                    features_complete=features_complete,
+                    defaulted_features=pred_row.get('meta_defaulted_features', ''),
                 )
         except Exception as e:
             print(f"  ⚠️ Prediction logging failed (non-fatal): {e}")
+            import traceback; traceback.print_exc()
+
+    def _refresh_atp_rankings(self):
+        """Fetch and cache current ATP rankings (rank + points) from atptour.com."""
+        print("📊 Refreshing ATP rankings...")
+        try:
+            df = fetch_atp_rankings(headless=True)
+            if df.empty:
+                print("  ⚠️  ATP rankings scrape returned no data — Rank_Points will default to 500")
+                return
+            save_rankings(df)
+            # Reload into feature engine so it uses the freshly scraped data
+            self.feature_engine._atp_rankings = df
+            print(f"  ✅ Loaded {len(df)} ranked players")
+        except Exception as e:
+            print(f"  ⚠️  ATP rankings refresh failed (non-fatal): {e}")
+            print("       Rank_Points will default to 500 for this run")
 
     def run_full_pipeline(self, start_session: bool = True) -> bool:
         """Run the complete betting pipeline with bet tracking"""
@@ -408,6 +457,9 @@ class LiveBettingOrchestrator:
                     bankroll, kelly_mult, f"Auto session {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
             
+            # Step 0: Refresh ATP rankings (rank + points)
+            self._refresh_atp_rankings()
+
             # Step 1: Fetch odds
             odds_df = self.fetch_odds()
             if odds_df.empty:
@@ -469,6 +521,7 @@ def main():
     parser.add_argument('--kelly-multiplier', type=float, help='Override Kelly multiplier')
     parser.add_argument('--edge-threshold', type=float, help='Override edge threshold')
     parser.add_argument('--dry-run', action='store_true', help='Run without actually placing bets')
+    parser.add_argument('--skip-rankings-refresh', action='store_true', help='Skip ATP rankings scrape (use cached data/atp_rankings.csv)')
 
     args = parser.parse_args()
 
@@ -482,6 +535,10 @@ def main():
         orchestrator.config['kelly_multiplier'] = args.kelly_multiplier
     if args.edge_threshold:
         orchestrator.config['edge_threshold'] = args.edge_threshold
+    # Patch refresh flag onto orchestrator
+    if args.skip_rankings_refresh:
+        orchestrator._refresh_atp_rankings = lambda: print("📊 ATP rankings refresh skipped (--skip-rankings-refresh)")
+
     # Run pipeline
     success = orchestrator.run_full_pipeline()
     

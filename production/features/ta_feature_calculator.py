@@ -16,6 +16,7 @@ import sys
 # Import TA scraper
 sys.path.insert(0, str(Path(__file__).parent.parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
+from atp_rankings_scraper import load_rankings, get_player_points, get_player_rank
 
 # Import schema contract
 import json
@@ -34,6 +35,10 @@ class TAFeatureCalculator:
     def __init__(self, ta_scraper: Optional[TennisAbstractScraper] = None):
         self.scraper = ta_scraper or TennisAbstractScraper()
         self.player_slug_map = self._load_player_mapping()
+        self._atp_rankings = load_rankings()  # None if not yet scraped
+        if self._atp_rankings is None:
+            print("WARNING: data/atp_rankings.csv not found — Rank_Points will default to 500. "
+                  "Run: python scraping/atp_rankings_scraper.py")
 
     def _load_player_mapping(self) -> Dict[str, str]:
         """Load player name -> TA slug mapping from CSV"""
@@ -155,12 +160,16 @@ class TAFeatureCalculator:
         return self._laplace(int(wins), len(m))
 
     def _winrate_lastN_within(self, df: pd.DataFrame, ref: datetime, N: int, days: int) -> float:
-        """Last N matches within window win rate — Laplace smoothed (alpha=3)."""
+        """Last N matches within window win rate — Laplace smoothed (alpha=3).
+        Matches training: cutoff <= date < ref, sorted newest-first, capped at N."""
         if df.empty:
             return 0.5
         cut = ref - timedelta(days=days)
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        m = df[df['date'] >= cut].head(N)
+        dates = pd.to_datetime(df['date'], errors='coerce')
+        mask = (dates >= cut) & (dates < ref)
+        m = df[mask].copy()
+        m['_date'] = dates[mask]
+        m = m.sort_values('_date', ascending=False).head(N)
         wins = (m['result'].astype(str).str.upper() == 'W').sum()
         return self._laplace(int(wins), len(m))
 
@@ -701,13 +710,30 @@ class TAFeatureCalculator:
             if profile.get('current_rank') is None:
                 raise RuntimeError(f"{label} rank is None (not ranked / not found on TA) for slug: {profile.get('slug','unknown')}")
 
+        _semantic_defaults: list = []  # Track meaningful defaults that bypass _default_for()
+
+        def _atp_points(display_name: str, ta_rank: float, player_label: str) -> float:
+            """Look up ATP points from rankings cache with rank cross-validation."""
+            pts = get_player_points(display_name, self._atp_rankings)
+            if pts is not None:
+                atp_rank = get_player_rank(display_name, self._atp_rankings)
+                if atp_rank is not None and abs(atp_rank - ta_rank) > 20:
+                    print(f"  RANK MISMATCH for {display_name}: TA={int(ta_rank)}, ATP={atp_rank} (using TA rank, ATP points={pts})")
+                return float(pts)
+            print(f"  ATP points not found for '{display_name}' — defaulting to 500")
+            _semantic_defaults.append(f'{player_label}_Rank_Points=500(not_found)')
+            return 500.0
+
+        p1_display = profile1.get('name', slug1)
+        p2_display = profile2.get('name', slug2)
+
         s1 = {
             'height': profile1.get('height_cm'),
             'age': _fractional_age(profile1, when),
             'hand': profile1.get('hand'),
             'country': profile1.get('country'),
             'rank': float(profile1['current_rank']),
-            'rank_points': 500,  # only remaining gap — not available on TA
+            'rank_points': _atp_points(p1_display, float(profile1['current_rank']), 'P1'),
         }
         s2 = {
             'height': profile2.get('height_cm'),
@@ -715,8 +741,46 @@ class TAFeatureCalculator:
             'hand': profile2.get('hand'),
             'country': profile2.get('country'),
             'rank': float(profile2['current_rank']),
-            'rank_points': 500,
+            'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
         }
+
+        # Round-to-day offsets derived from jeffsackmann_ml_ready_AUDIT.csv.
+        # Training used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
+        # (+ 5-min match_num spacing within round, ignored here).
+        # We must match this so temporal windows count the same intra-tournament matches.
+        #
+        # TODO (next retraining cycle): make this dynamic based on number of qualifying rounds.
+        # e.g. Miami Open only has Q1+Q2 qualifiers → Q1=-2, Q2=-1 (not -3/-2).
+        # Logic: if max_qual_round == 2: Q1=-2, Q2=-1. if max_qual_round == 3: Q1=-3, Q2=-2, Q3=-1.
+        # Derive max_qual_round from draw_size or tournament metadata at inference time.
+        # Current hardcoded medians are off by 1 day for 2-round-qualifying tournaments.
+        _ROUND_DAY_OFFSET = {
+            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
+            'R128': 0,
+            'R64': 2, 'R32': 3, 'RR': 3,
+            'R16': 4, 'QF': 5, 'SF': 6, 'F': 7, 'BR': 7,
+        }
+
+        # Get TA tournament start date + round BEFORE temporal features.
+        # TA (like Sackmann CSV) stores tournament START DATE for all rounds.
+        _upcoming = self.scraper.get_upcoming_match(slug1, p2_display, session_cache=session_cache)
+        if _upcoming:
+            if not round_code and _upcoming.get('round'):
+                round_code = _upcoming['round']
+                print(f"      📋 Round from TA: {round_code} (upcoming match listing)")
+            _ta_date_str = str(_upcoming.get('date', ''))
+            if len(_ta_date_str) == 8 and _ta_date_str.isdigit():
+                try:
+                    from datetime import timedelta as _td
+                    _tourney_start = datetime.strptime(_ta_date_str, '%Y%m%d')
+                    _day_offset = _ROUND_DAY_OFFSET.get(round_code or '', 0)
+                    when = _tourney_start + _td(days=_day_offset)
+                    print(f"      📅 inferred_match_dt: {_tourney_start.date()} + {_day_offset}d ({round_code}) = {when.date()}")
+                except Exception:
+                    pass
+            _ta_surface = _upcoming.get('surface', '')
+            if _ta_surface and _ta_surface.lower() != surface.lower():
+                print(f"      ⚠️  Surface mismatch: resolver={surface}, TA upcoming={_ta_surface} — using resolver")
 
         # Calculate temporal features
         def temporal(df):
@@ -900,16 +964,53 @@ class TAFeatureCalculator:
 
         # Ensure all 143 features exist in correct order
         final = {}
+        defaulted = []
         for k in EXACT_143_FEATURES:
             if k in features and pd.notna(features[k]):
                 final[k] = float(features[k]) if isinstance(features[k], (int, float, np.floating)) else features[k]
             else:
-                final[k] = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                final[k] = default_val
+                defaulted.append((k, default_val))
 
         # Guard against NaNs
         for k, v in list(final.items()):
             if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-                final[k] = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                final[k] = default_val
+                defaulted.append((k, default_val))
+
+        # Skip one-hot / surface / round / season / country / hand features — those defaulting to 0 is expected
+        _SILENT_PREFIXES = (
+            'Surface_', 'Season_', 'Level_', 'Round_', 'Country_', 'Hand_',
+            'Handedness_', 'P1_Country_', 'P2_Country_', 'P1_Hand_', 'P2_Hand_',
+        )
+        noisy_defaults = [
+            (k, v) for k, v in defaulted
+            if not any(k.startswith(pfx) for pfx in _SILENT_PREFIXES)
+        ]
+        if noisy_defaults:
+            p1_slug = profile1.get('slug', slug1)
+            p2_slug = profile2.get('slug', slug2)
+            print(f"  ⚠️  DEFAULTED FEATURES for {p1_slug} vs {p2_slug}:")
+            for k, v in noisy_defaults:
+                print(f"       {k} -> {v}")
+
+        # Track round missing as a semantic default
+        if not round_code:
+            _semantic_defaults.append('round_code=None')
+
+        # Combine all defaults: structural (_default_for) + semantic (ATP points, round)
+        all_defaults = noisy_defaults + [(k, None) for k in _semantic_defaults]
+        self._last_noisy_defaults = all_defaults  # used by main.py for features_complete
+
+        # Expose defaulted feature names as comma-separated string for logging
+        all_default_names = [k for k, _ in noisy_defaults] + _semantic_defaults
+        final['_defaulted_features'] = ','.join(all_default_names) if all_default_names else ''
+
+        # Expose resolved round_code and inferred match date so caller (main.py) can log correctly
+        final['_resolved_round_code'] = round_code or ''
+        final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
 
         return final
 

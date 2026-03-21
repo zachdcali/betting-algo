@@ -17,7 +17,7 @@ import pandas as pd
 import ast
 
 # Rate limiting
-DEFAULT_DELAY = 3.0  # Increased to 3 seconds to avoid 429 errors
+DEFAULT_DELAY = 4.0  # 4s between requests to avoid 429 errors
 MAX_RETRIES = 3
 
 # Cache directories
@@ -48,12 +48,26 @@ class TennisAbstractScraper:
 
     def _fetch_with_retry(self, url: str, retries: int = MAX_RETRIES) -> Optional[str]:
         """Fetch URL with retries and rate limiting"""
+        import requests as _requests
         for attempt in range(retries):
             try:
                 self._rate_limit()
                 response = self.session.get(url, timeout=15)
                 response.raise_for_status()
                 return response.text
+            except _requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 429:
+                    wait = 30 + (attempt * 15)  # 30s, 45s, 60s
+                    print(f"  429 rate limited — waiting {wait}s before retry {attempt + 1}/{retries}...")
+                    time.sleep(wait)
+                    if attempt == retries - 1:
+                        print(f"Failed to fetch {url} after {retries} attempts: {e}")
+                        return None
+                else:
+                    if attempt == retries - 1:
+                        print(f"Failed to fetch {url} after {retries} attempts: {e}")
+                        return None
+                    time.sleep(2 ** attempt)
             except Exception as e:
                 if attempt == retries - 1:
                     print(f"Failed to fetch {url} after {retries} attempts: {e}")
@@ -420,6 +434,53 @@ class TennisAbstractScraper:
             matches_cache[cache_key] = df_normalized
 
         return df_normalized
+
+    def get_upcoming_match(
+        self,
+        slug: str,
+        opp_name: str,
+        session_cache: Optional[Dict] = None
+    ) -> Optional[Dict]:
+        """
+        Look for an upcoming match (result='U') in the player's matchmx against opp_name.
+        Uses cached HTML so no extra HTTP request if get_player_matches was already called.
+
+        Returns dict with keys: round, surface, event, date (all strings) or None.
+        """
+        html = self._get_cached_html(slug, force_refresh=False, session_cache=session_cache)
+        if not html:
+            return None
+
+        matchhead = self._extract_js_array(html, 'matchhead')
+        matchmx = self._extract_js_array(html, 'matchmx')
+        if not matchhead or not matchmx:
+            return None
+
+        if matchmx and len(matchmx[0]) > len(matchhead):
+            for i in range(len(matchmx[0]) - len(matchhead)):
+                matchhead.append(f'_extra_{i}')
+
+        df = pd.DataFrame(matchmx, columns=matchhead)
+
+        # Only upcoming rows
+        wl_col = df.get('wl', pd.Series(dtype=str))
+        upcoming = df[wl_col.str.upper() == 'U'].copy()
+        if upcoming.empty:
+            return None
+
+        # Match opponent name (last-name fallback)
+        opp_last = opp_name.lower().split()[-1] if opp_name else ''
+        for _, row in upcoming.iterrows():
+            ta_opp = str(row.get('opp', '')).lower()
+            if opp_last and opp_last in ta_opp:
+                return {
+                    'round': str(row.get('round', '')),
+                    'surface': str(row.get('surf', '')).title(),
+                    'event': str(row.get('tourn', '')),
+                    'date': str(row.get('date', '')),
+                }
+
+        return None
 
     @staticmethod
     def name_to_slug(name: str) -> str:
