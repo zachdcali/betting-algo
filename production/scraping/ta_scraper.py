@@ -182,8 +182,11 @@ class TennisAbstractScraper:
         Get player HTML with caching to avoid duplicate requests.
         Both profile and matches use the same HTML.
         """
-        # Check session cache for HTML first
-        if session_cache is not None:
+        # Session cache avoids duplicate fetches within one pipeline run.
+        # Only use the cache when NOT force-refreshing — a stale hit from an
+        # earlier futures/outright row for the same player must not corrupt
+        # the main H2H feature fetch later in the same run.
+        if not force_refresh and session_cache is not None:
             html_cache = session_cache.setdefault('html', {})
             if slug in html_cache:
                 return html_cache[slug]
@@ -192,8 +195,9 @@ class TennisAbstractScraper:
         url = f"https://www.tennisabstract.com/cgi-bin/player-classic.cgi?p={slug}&f=ACareerqq"
         html = self._fetch_with_retry(url)
 
-        # Cache the HTML for reuse
+        # Store in session cache so subsequent non-refresh calls reuse this fetch
         if html and session_cache is not None:
+            html_cache = session_cache.setdefault('html', {})
             html_cache[slug] = html
 
         return html
