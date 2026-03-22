@@ -37,7 +37,7 @@ def log_prediction(
     model_p1_prob: float, model_p2_prob: float,
     market_p1_prob: float, market_p2_prob: float,
     p1_odds_american: float = None, p2_odds_american: float = None,
-    model_version: str = 'laplace_20260315',
+    model_version: str = 'NN-SURFACE_FIX',
     actual_winner: int = None, score: str = None,
     features_complete: bool = True,
     defaulted_features: str = '',
@@ -113,9 +113,16 @@ def log_prediction(
             )
             if mask.any():
                 idx = df[mask].index[0]
+                # Preserve original market odds — opening lines are less efficient
+                # and more valuable for edge analysis than lines closer to match time.
+                PRESERVE_IF_SET = {'market_p1_prob', 'market_p2_prob',
+                                   'p1_odds_american', 'p2_odds_american'}
                 for col, val in row.items():
-                    if col in df.columns:
-                        df.at[idx, col] = val
+                    if col not in df.columns:
+                        continue
+                    if col in PRESERVE_IF_SET and pd.notna(df.at[idx, col]):
+                        continue  # keep original market odds
+                    df.at[idx, col] = val
                 df.to_csv(LOG_PATH, index=False)
                 return
 

@@ -636,8 +636,8 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                         # ----- doubles guard: skip saving, but count once for expected adjustment -----
                         if names_look_doubles(p1, p2):
                             # de-dup doubles seen so we don't subtract twice if the row is discovered via two paths
-                            when_el = host.locator("time.clock")
-                            match_time = when_el.first.inner_text().strip() if when_el.count() else parse_match_time(host.inner_text())
+                            # Always use full host text so date (e.g. "3/22/26 8:00 AM") is captured for upcoming matches
+                            match_time = parse_match_time(host.inner_text())
                             dbl_key = dedupe_key(title, p1, p2, match_time, None)
                             if dbl_key not in doubles_keys_seen:
                                 doubles_keys_seen.add(dbl_key)
@@ -684,16 +684,16 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                         row_bettable = any(m is not None for m in markets.values())
                         if not row_bettable:
                             # count once toward the "subtract from expected" bucket accounting, like doubles
-                            when_el = host.locator("time.clock")
-                            match_time = when_el.first.inner_text().strip() if when_el.count() else parse_match_time(host.inner_text())
+                            match_time = parse_match_time(host.inner_text())
                             sus_key = dedupe_key(title, p1, p2, match_time, None)
                             if sus_key not in doubles_keys_seen:  # reuse the "seen once" set so we don't subtract twice
                                 doubles_keys_seen.add(sus_key)
                                 doubles_here += 1  # reuse same counter so adjusted expected = raw - doubles/suspended
                             continue
 
-                        when_el = host.locator("time.clock")
-                        match_time = when_el.first.inner_text().strip() if when_el.count() else parse_match_time(host.inner_text())
+                        # Use full host text so upcoming matches get their date (e.g. "3/22/26 8:00 AM")
+                        # parse_match_time extracts date+time when present, falls back to time-only for live matches
+                        match_time = parse_match_time(host.inner_text())
 
                         # row acceptance policy
                         if REQUIRE_WIN and markets["WIN"] is None:

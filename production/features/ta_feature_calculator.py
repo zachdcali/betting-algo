@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
 from atp_rankings_scraper import load_rankings, get_player_points, get_player_rank
+from atp_height_scraper import batch_get_heights
 
 # Import schema contract
 import json
@@ -80,23 +81,34 @@ class TAFeatureCalculator:
         s = re.sub(r'[^a-z\s\-]', '', s)
         return re.sub(r'\s+', ' ', s).strip()
 
+    # Suffixes TA omits from player names
+    _NAME_SUFFIXES = {'jr', 'sr', 'ii', 'iii', 'iv'}
+
+    @staticmethod
+    def _strip_name_suffixes(name: str) -> str:
+        """Remove trailing generational suffixes TA doesn't include in slugs."""
+        parts = name.strip().split()
+        clean = [p for p in parts if p.lower().rstrip('.') not in TAFeatureCalculator._NAME_SUFFIXES]
+        return ' '.join(clean) if len(clean) >= 2 else name
+
     def find_slug(self, player_name: str) -> Optional[str]:
         """
         Find TA slug for player name.
-        Priority: 1) explicit mapping CSV  2) CamelCase derivation  3) TA HTTP search
+        Priority: 1) explicit mapping CSV  2) CamelCase derivation (suffix-stripped)
+                  3) TA HTTP search
         """
         normalized = self._norm(player_name)
         if normalized in self.player_slug_map:
             return self.player_slug_map[normalized]
 
-        # Derive slug from name (works for most players without a network request)
-        derived = self.scraper.name_to_slug(player_name)
-        # Cache and return derived slug — the caller will validate via HTTP when fetching profile
+        # Strip Jr/Sr/II/III before deriving slug — TA omits these
+        clean_name = self._strip_name_suffixes(player_name)
+        derived = self.scraper.name_to_slug(clean_name)
         if derived:
             self.player_slug_map[normalized] = derived
             return derived
 
-        # Last resort: try HTTP search
+        # Last resort: HTTP search
         slug = self.scraper.search_player(player_name)
         if slug:
             self.player_slug_map[normalized] = slug
@@ -543,7 +555,8 @@ class TAFeatureCalculator:
         round_code: Optional[str] = None,
         force_refresh: bool = True,
         persist: bool = False,
-        session_cache: Optional[Dict] = None
+        session_cache: Optional[Dict] = None,
+        match_date_is_explicit: bool = False,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract data.
@@ -558,6 +571,8 @@ class TAFeatureCalculator:
             tournament_level: Level code (G/M/A/C/25/15)
             draw_size: Tournament draw size
             round_code: Round code (R32/QF/SF/F/etc)
+            match_date_is_explicit: If True, match_date came from a reliable source (e.g. Bovada
+                absolute date) and should not be overridden by the TA round-offset heuristic.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -615,7 +630,8 @@ class TAFeatureCalculator:
             round_code=round_code,
             force_refresh=force_refresh,
             persist=persist,
-            session_cache=session_cache
+            session_cache=session_cache,
+            match_date_is_explicit=match_date_is_explicit,
         )
 
     def build_143_features_from_slugs(
@@ -629,7 +645,8 @@ class TAFeatureCalculator:
         round_code: Optional[str] = None,
         force_refresh: bool = True,
         persist: bool = False,
-        session_cache: Optional[Dict] = None
+        session_cache: Optional[Dict] = None,
+        match_date_is_explicit: bool = False,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract slugs.
@@ -727,8 +744,27 @@ class TAFeatureCalculator:
         p1_display = profile1.get('name', slug1)
         p2_display = profile2.get('name', slug2)
 
+        # ATP height fallback: if TA is missing height for either player, try ATP bio page
+        h1 = profile1.get('height_cm')
+        h2 = profile2.get('height_cm')
+        if h1 is None or h2 is None:
+            missing = []
+            if h1 is None:
+                missing.append(p1_display)
+            if h2 is None:
+                missing.append(p2_display)
+            atp_heights = batch_get_heights(missing, verbose=False)
+            if h1 is None:
+                h1 = atp_heights.get(p1_display)
+                if h1 is not None:
+                    print(f"  ATP height fallback: {p1_display} → {h1}cm")
+            if h2 is None:
+                h2 = atp_heights.get(p2_display)
+                if h2 is not None:
+                    print(f"  ATP height fallback: {p2_display} → {h2}cm")
+
         s1 = {
-            'height': profile1.get('height_cm'),
+            'height': h1,
             'age': _fractional_age(profile1, when),
             'hand': profile1.get('hand'),
             'country': profile1.get('country'),
@@ -736,7 +772,7 @@ class TAFeatureCalculator:
             'rank_points': _atp_points(p1_display, float(profile1['current_rank']), 'P1'),
         }
         s2 = {
-            'height': profile2.get('height_cm'),
+            'height': h2,
             'age': _fractional_age(profile2, when),
             'hand': profile2.get('hand'),
             'country': profile2.get('country'),
@@ -774,8 +810,13 @@ class TAFeatureCalculator:
                     from datetime import timedelta as _td
                     _tourney_start = datetime.strptime(_ta_date_str, '%Y%m%d')
                     _day_offset = _ROUND_DAY_OFFSET.get(round_code or '', 0)
-                    when = _tourney_start + _td(days=_day_offset)
-                    print(f"      📅 inferred_match_dt: {_tourney_start.date()} + {_day_offset}d ({round_code}) = {when.date()}")
+                    _ta_inferred = _tourney_start + _td(days=_day_offset)
+                    if match_date_is_explicit:
+                        # Bovada gave us a real date — trust it, don't override with heuristic
+                        print(f"      📅 TA inferred {_ta_inferred.date()} but using explicit Bovada date {when.date()}")
+                    else:
+                        when = _ta_inferred
+                        print(f"      📅 inferred_match_dt: {_tourney_start.date()} + {_day_offset}d ({round_code}) = {when.date()}")
                 except Exception:
                     pass
             _ta_surface = _upcoming.get('surface', '')

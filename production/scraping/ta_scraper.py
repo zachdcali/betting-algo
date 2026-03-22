@@ -513,6 +513,17 @@ class TennisAbstractScraper:
         first_initial = parts[0][0].upper() + self.name_to_slug(' '.join(parts[1:]))
         candidates = [camel, first_initial]
 
+        # Strip common name suffixes (Jr, Sr, II, III) and retry
+        _SUFFIXES = {'jr', 'sr', 'ii', 'iii', 'iv'}
+        clean_parts = [p for p in parts if p.lower().rstrip('.') not in _SUFFIXES]
+        if len(clean_parts) < len(parts) and len(clean_parts) >= 2:
+            clean_name = ' '.join(clean_parts)
+            camel_clean = self.name_to_slug(clean_name)
+            first_initial_clean = clean_parts[0][0].upper() + self.name_to_slug(' '.join(clean_parts[1:]))
+            for c in (camel_clean, first_initial_clean):
+                if c not in candidates:
+                    candidates.append(c)
+
         for slug in candidates:
             url = f"https://www.tennisabstract.com/cgi-bin/player-classic.cgi?p={slug}"
             html = self._fetch_with_retry(url)

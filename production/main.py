@@ -199,7 +199,12 @@ class LiveBettingOrchestrator:
                 round_code = self.parse_round_from_text(row.get('event', ''))
 
             # Use exact match date from Bovada where available
-            match_date = self.parse_match_date(row.get('match_time', ''))
+            match_time_str = row.get('match_time', '')
+            match_date = self.parse_match_date(match_time_str)
+            # Flag whether Bovada gave us a real absolute date (e.g. "3/22/26 8:00 AM")
+            # vs. just a time or no date (defaults to today)
+            import re as _re2
+            match_date_is_explicit = bool(_re2.search(r'\d{1,2}/\d{1,2}/\d{2,4}', match_time_str))
 
             has_defaulted = False
             try:
@@ -213,7 +218,8 @@ class LiveBettingOrchestrator:
                     round_code=round_code,
                     force_refresh=True,
                     persist=False,
-                    session_cache=session_cache
+                    session_cache=session_cache,
+                    match_date_is_explicit=match_date_is_explicit,
                 )
                 # features_complete=False if ANY meaningful feature was defaulted
                 # (includes ATP points fallback, round=None, structural defaults)
@@ -380,10 +386,19 @@ class LiveBettingOrchestrator:
                     print(f"  ⛔ Skipping prediction log for {p1} vs {p2} — incomplete features: {defaulted}")
                     continue
 
-                # Try to get market odds from odds_df
+                # Try to get market odds from odds_df — match BOTH players to avoid
+                # picking up futures/outright lines (e.g. Alcaraz vs The Field)
+                # instead of the correct H2H matchup.
+                p1_lower = str(p1).lower()
+                p2_lower = str(p2).lower()
                 match_odds = odds_df[
-                    (odds_df['player1_normalized'].str.lower() == str(p1).lower()) |
-                    (odds_df['player2_normalized'].str.lower() == str(p1).lower())
+                    (
+                        (odds_df['player1_normalized'].str.lower() == p1_lower) &
+                        (odds_df['player2_normalized'].str.lower() == p2_lower)
+                    ) | (
+                        (odds_df['player1_normalized'].str.lower() == p2_lower) &
+                        (odds_df['player2_normalized'].str.lower() == p1_lower)
+                    )
                 ]
                 if not match_odds.empty:
                     o_row = match_odds.iloc[0]
@@ -408,6 +423,7 @@ class LiveBettingOrchestrator:
 
                 # Use TA-inferred match date (tourney_start + round_offset) — Bovada only gives clock time
                 match_date = pred_row.get('meta_match_date') or today
+                model_version = pred_row.get('model_version', 'NN-SURFACE_FIX')
                 log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
@@ -416,6 +432,7 @@ class LiveBettingOrchestrator:
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
                     p1_odds_american=o1, p2_odds_american=o2,
+                    model_version=model_version,
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
                 )
