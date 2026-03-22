@@ -278,16 +278,24 @@ def run(dry_run: bool = False, stats_only: bool = False):
         df.at[idx, 'score'] = result['score']
         df.at[idx, 'settled_at'] = result['settled_at']
 
-        model_p1 = float(row['model_p1_prob'])
+        import math
+        model_p1_raw = row['model_p1_prob']
         market_p1 = float(row['market_p1_prob'])
         w = result['actual_winner']
-        model_correct = int((w == 1 and model_p1 > 0.5) or (w == 2 and model_p1 < 0.5))
+        # Only score model_correct if there was actually a model prediction
+        if pd.isna(model_p1_raw) or (isinstance(model_p1_raw, float) and math.isnan(model_p1_raw)):
+            model_correct = float('nan')
+        else:
+            model_p1 = float(model_p1_raw)
+            model_correct = int((w == 1 and model_p1 > 0.5) or (w == 2 and model_p1 < 0.5))
         market_correct = int((w == 1 and market_p1 > 0.5) or (w == 2 and market_p1 < 0.5))
-        df.at[idx, 'model_correct'] = model_correct
+        if not pd.isna(model_correct):
+            df.at[idx, 'model_correct'] = model_correct
         df.at[idx, 'market_correct'] = market_correct
 
         winner_name = p1 if w == 1 else p2
-        print(f"  ✓ Settled: {winner_name} won | Model {'✓' if model_correct else '✗'} | Market {'✓' if market_correct else '✗'}")
+        model_str = ('✓' if model_correct else '✗') if not (isinstance(model_correct, float) and math.isnan(model_correct)) else 'N/A'
+        print(f"  ✓ Settled: {winner_name} won | Model {model_str} | Market {'✓' if market_correct else '✗'}")
         newly_settled += 1
 
         # Rate limit between players
