@@ -474,7 +474,15 @@ class LiveBettingOrchestrator:
                     bankroll, kelly_mult, f"Auto session {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
             
-            # Step 0: Refresh ATP rankings (rank + points)
+            # Step 0a: Auto-settle any pending predictions with known results
+            try:
+                from auto_settle import run as auto_settle_run
+                print("\n📋 Auto-settling pending predictions...")
+                auto_settle_run(dry_run=False)
+            except Exception as e:
+                print(f"  ⚠️  Auto-settle failed (non-fatal): {e}")
+
+            # Step 0b: Refresh ATP rankings (rank + points)
             self._refresh_atp_rankings()
 
             # Step 1: Fetch odds
