@@ -410,12 +410,23 @@ class LiveBettingOrchestrator:
                     mkt_p2 = mkt_p2_raw / mkt_total if mkt_total > 0 else 0.5
                     o1 = o_row.get('player1_odds_american')
                     o2 = o_row.get('player2_odds_american')
+                    od1 = o_row.get('player1_odds_decimal')
+                    od2 = o_row.get('player2_odds_decimal')
+                    sph = o_row.get('spread_handicap')
+                    sp1 = o_row.get('spread_odds_p1')
+                    sp2 = o_row.get('spread_odds_p2')
+                    tg = o_row.get('total_games')
+                    tov = o_row.get('total_odds_over')
+                    tun = o_row.get('total_odds_under')
                     tournament = o_row.get('tourney_name', '')
                     surface = pred_row.get('meta_surface_input', o_row.get('surface', 'Hard'))
                     level = pred_row.get('meta_level_input', o_row.get('tourney_level', ''))
                     match_time = o_row.get('match_time', '')
                 else:
                     mkt_p1, mkt_p2, o1, o2 = 0.5, 0.5, None, None
+                    od1, od2 = None, None
+                    sph, sp1, sp2 = None, None, None
+                    tg, tov, tun = None, None, None
                     tournament = ''
                     surface = pred_row.get('meta_surface_input', 'Hard')
                     level = pred_row.get('meta_level_input', '')
@@ -432,6 +443,9 @@ class LiveBettingOrchestrator:
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
                     p1_odds_american=o1, p2_odds_american=o2,
+                    p1_odds_decimal=od1, p2_odds_decimal=od2,
+                    spread_handicap=sph, spread_odds_p1=sp1, spread_odds_p2=sp2,
+                    total_games=tg, total_odds_over=tov, total_odds_under=tun,
                     model_version=model_version,
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
