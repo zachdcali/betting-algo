@@ -37,7 +37,7 @@ def log_prediction(
     model_p1_prob: float, model_p2_prob: float,
     market_p1_prob: float, market_p2_prob: float,
     p1_odds_american: float = None, p2_odds_american: float = None,
-    model_version: str = 'NN-SURFACE_FIX',
+    model_version: str = None,
     actual_winner: int = None, score: str = None,
     features_complete: bool = True,
     defaulted_features: str = '',
@@ -53,6 +53,16 @@ def log_prediction(
     features_complete=False marks predictions that used defaulted feature values
     and should be excluded from accuracy analysis.
     """
+    # Default model_version from registry if not provided
+    if model_version is None:
+        try:
+            import json
+            registry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'model_registry.json')
+            with open(registry_path) as _f:
+                model_version = json.load(_f).get('current_version', 'unknown')
+        except Exception:
+            model_version = 'unknown'
+
     match_date_str = _parse_match_date(match_date)
 
     settled_at = datetime.now().isoformat() if actual_winner is not None else None

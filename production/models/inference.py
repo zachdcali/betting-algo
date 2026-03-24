@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Model Inference for Live Tennis Betting
-Loads NN-143 model and generates calibrated predictions
+Loads NN-141 model and generates calibrated predictions
 """
 
 import pandas as pd
@@ -9,10 +9,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 import pickle
+import json
 from pathlib import Path
 from typing import Tuple, Dict, Optional
 import warnings
 from sklearn.base import BaseEstimator, ClassifierMixin
+
+# Load model version from registry
+_REGISTRY_PATH = Path(__file__).parent / "model_registry.json"
+if _REGISTRY_PATH.exists():
+    with open(_REGISTRY_PATH) as _f:
+        _REGISTRY = json.load(_f)
+    MODEL_VERSION = _REGISTRY.get("current_version", "unknown")
+else:
+    MODEL_VERSION = "unknown"
 from sklearn.utils import Bunch
 warnings.filterwarnings('ignore')
 
@@ -71,8 +81,7 @@ class NNWrapper(BaseEstimator, ClassifierMixin):
             outputs = outputs.reshape(-1, 1)
         return np.hstack((1 - outputs, outputs))  # Shape (n_samples, 2)
 
-# Exact 143 features the SURFACE_FIX model was trained on
-# (141 original + P1_Peak_Age and P2_Peak_Age at indices 134-135)
+# Exact 141 features for NN-141 model (Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
 EXACT_141_FEATURES = [
     'P2_WinStreak_Current','P1_WinStreak_Current','P2_Surface_Matches_30d','Height_Diff',
     'P1_Surface_Matches_30d','Player2_Height','P1_Matches_30d','P2_Matches_30d',
@@ -101,27 +110,29 @@ EXACT_141_FEATURES = [
     'Handedness_Matchup_LR','P1_Country_CZE','P2_Country_SUI','Surface_Grass',
     'H2H_Total_Matches','Level_O','P1_Hand_A','P1_Finals_WinRate',
     'Rank_Momentum_Diff_90d','P2_Finals_WinRate',
-    'Round_Q4','Peak_Age_P1','Level_G','Round_ER','Level_S','Round_BR','Peak_Age_P2',
+    'Round_Q4','Level_G','Round_ER','Level_S','Round_BR',
     'Round_Q3','Rank_Ratio','P1_Country_SUI','Clay_Season','P1_Country_GER',
     'P2_Rank_Change_30d','P1_Country_ESP','P2_Hand_A','H2H_Recent_P1_Advantage',
     'P2_Country_AUS','P2_Country_SRB','P2_Country_GBR','P2_Country_ARG',
     'Handedness_Matchup_RR','P1_Rank_Change_30d','P2_Country_GER','Handedness_Matchup_LL',
     'P2_Country_RUS','P1_Country_ARG','Level_C','P2_Semifinals_WinRate',
-    'P2_Days_Since_Last','H2H_P1_WinRate',
+    'P2_Days_Since_Last','P1_Peak_Age','P2_Peak_Age','H2H_P1_WinRate',
     'P1_Country_Other','H2H_P1_Wins','P1_BigMatch_WinRate','P2_Rank_Change_90d',
     'P2_BigMatch_WinRate','P2_Country_FRA',
-    'P1_Peak_Age','P2_Peak_Age',
 ]
 
 
 class TennisPredictor:
-    """Live tennis match predictor using NN-143 (SURFACE_FIX) model"""
+    """Live tennis match predictor using NN-141 model"""
 
-    def __init__(self, model_dir: str = "../results/professional_tennis/Neural_Network"):
+    def __init__(self, model_dir: str = None):
+        if model_dir is None:
+            # Resolve relative to this file: production/models/ -> ../../results/...
+            model_dir = str(Path(__file__).parent.parent.parent / "results" / "professional_tennis" / "Neural_Network")
         self.model_dir = Path(model_dir)
         self.model = None
         self.scaler = None
-        self.feature_names = EXACT_141_FEATURES  # now 143 features
+        self.feature_names = EXACT_141_FEATURES
         self.is_loaded = False
 
     def load_model(self) -> bool:
@@ -163,7 +174,7 @@ class TennisPredictor:
         Predict match probability for a single match
         
         Args:
-            features_dict: Dictionary with 143 features
+            features_dict: Dictionary with 141 features
             
         Returns:
             Dictionary with predictions and metadata
@@ -173,7 +184,7 @@ class TennisPredictor:
                 return {"error": "Model not loaded"}
         
         try:
-            # Extract the 143 features in the exact order the model was trained on
+            # Extract the 141 features in the exact order the model was trained on
             feature_values = [float(features_dict.get(f, 0.0)) for f in EXACT_141_FEATURES]
 
             X = np.array(feature_values).reshape(1, -1)
@@ -186,7 +197,7 @@ class TennisPredictor:
                 "player1_win_prob": raw_prob,
                 "player2_win_prob": 1.0 - raw_prob,
                 "raw_prob": raw_prob,
-                "model_version": "NN-SURFACE_FIX",
+                "model_version": MODEL_VERSION,
             }
             
         except Exception as e:

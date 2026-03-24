@@ -1,0 +1,67 @@
+{
+  "current_version": "v1.2.1",
+  "models": {
+    "v1.0.0": {
+      "name": "NN-98",
+      "date": "2025-07-26",
+      "features": 98,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": null,
+      "test_auc": null,
+      "notes": "Initial neural network model with 98 features from JeffSackmann data.",
+      "model_file": "neural_network_model.pth",
+      "scaler_file": "scaler.pkl",
+      "archived": true
+    },
+    "v1.1.0": {
+      "name": "NN-143",
+      "date": "2025-08-24",
+      "features": 143,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": null,
+      "test_auc": null,
+      "notes": "Expanded to 143 features: added 60+ temporal features (form trends, surface adaptation, H2H, fatigue metrics). Major feature engineering overhaul.",
+      "model_file": "neural_network_143_features.pth",
+      "scaler_file": "scaler_143_features.pkl",
+      "archived": true
+    },
+    "v1.1.1": {
+      "name": "NN-143-SURFACE_FIX",
+      "date": "2026-03-18",
+      "features": 143,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6638,
+      "test_auc": 0.7268,
+      "notes": "Fixed surface experience cap bug and Peak_Age column naming mismatch. Static round-day offset heuristic (assumed Monday start for all tournaments). Production accuracy: 22/34 (64.7%) vs market 55.9%.",
+      "model_file": "neural_network_model_SURFACE_FIX_v1.1.1.pth",
+      "scaler_file": "scaler_SURFACE_FIX_v1.1.1.pkl",
+      "archived": true
+    },
+    "v1.2.0": {
+      "name": "NN-141-DYNAMIC_OFFSETS",
+      "date": "2026-03-23",
+      "features": 141,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6623,
+      "test_auc": 0.7280,
+      "notes": "Dynamic round-day offset heuristic (anchored on 'finals are Sunday', adapts to actual start dow). Removed duplicate Peak_Age_P1/P2 (143->141). Single source of truth for offsets in round_offsets.py. M/64 all treated as 1-week (bug — Madrid/Rome should be 2-week). Static qualifier offsets per level.",
+      "model_file": "archive/neural_network_model_v1.2.0.pth",
+      "scaler_file": "archive/scaler_v1.2.0.pkl",
+      "archived": true
+    },
+    "v1.2.1": {
+      "name": "NN-141-DYNAMIC_OFFSETS_v2",
+      "date": "2026-03-24",
+      "features": 141,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6639,
+      "test_auc": 0.7282,
+      "test_brier": 0.2104,
+      "test_ece": 0.0064,
+      "notes": "Fixed M/64 Masters detection: non-Monday start (Madrid/Rome/Shanghai) now correctly treated as 2-week events. Dynamic qualifier offsets: counts actual qualifier rounds per tournament in training data instead of using static per-level defaults. Verified against real Bovada dates for Miami 2026 (all rounds exact) and Zadar/Murcia CH 2026 (all rounds exact including Q1).",
+      "model_file": "neural_network_model_SURFACE_FIX.pth",
+      "scaler_file": "scaler_SURFACE_FIX.pkl",
+      "archived": false
+    }
+  }
+}

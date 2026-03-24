@@ -1,0 +1,852 @@
+{
+  "description": "Exact 141-feature schema for NN-141 model - MUST match training data",
+  "features": [
+    {
+      "name": "P2_WinStreak_Current",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 0
+    },
+    {
+      "name": "P1_WinStreak_Current",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 1
+    },
+    {
+      "name": "P2_Surface_Matches_30d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 2
+    },
+    {
+      "name": "Height_Diff",
+      "dtype": "float",
+      "fill_value": 180.0,
+      "index": 3
+    },
+    {
+      "name": "P1_Surface_Matches_30d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 4
+    },
+    {
+      "name": "Player2_Height",
+      "dtype": "float",
+      "fill_value": 180.0,
+      "index": 5
+    },
+    {
+      "name": "P1_Matches_30d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 6
+    },
+    {
+      "name": "P2_Matches_30d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 7
+    },
+    {
+      "name": "P2_Surface_Experience",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 8
+    },
+    {
+      "name": "P2_Form_Trend_30d",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 9
+    },
+    {
+      "name": "Player1_Height",
+      "dtype": "float",
+      "fill_value": 180.0,
+      "index": 10
+    },
+    {
+      "name": "P1_Form_Trend_30d",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 11
+    },
+    {
+      "name": "Round_R16",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 12
+    },
+    {
+      "name": "Surface_Transition_Flag",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 13
+    },
+    {
+      "name": "P1_Surface_Matches_90d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 14
+    },
+    {
+      "name": "P1_Surface_Experience",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 15
+    },
+    {
+      "name": "Rank_Diff",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 16
+    },
+    {
+      "name": "Round_R32",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 17
+    },
+    {
+      "name": "Rank_Points_Diff",
+      "dtype": "float",
+      "fill_value": 500.0,
+      "index": 18
+    },
+    {
+      "name": "P2_Level_WinRate_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 19
+    },
+    {
+      "name": "P2_Surface_Matches_90d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 20
+    },
+    {
+      "name": "P1_Level_WinRate_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 21
+    },
+    {
+      "name": "P2_Level_Matches_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 22
+    },
+    {
+      "name": "P2_WinRate_Last10_120d",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 23
+    },
+    {
+      "name": "Round_QF",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 24
+    },
+    {
+      "name": "Level_25",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 25
+    },
+    {
+      "name": "P1_Round_WinRate_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 26
+    },
+    {
+      "name": "P1_Surface_WinRate_90d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 27
+    },
+    {
+      "name": "Round_Q1",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 28
+    },
+    {
+      "name": "Player1_Rank",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 29
+    },
+    {
+      "name": "P1_Level_Matches_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 30
+    },
+    {
+      "name": "P2_Round_WinRate_Career",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 31
+    },
+    {
+      "name": "draw_size",
+      "dtype": "int",
+      "fill_value": 32,
+      "index": 32
+    },
+    {
+      "name": "P1_WinRate_Last10_120d",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 33
+    },
+    {
+      "name": "Age_Diff",
+      "dtype": "float",
+      "fill_value": 25.0,
+      "index": 34
+    },
+    {
+      "name": "Level_15",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 35
+    },
+    {
+      "name": "Player1_Rank_Points",
+      "dtype": "float",
+      "fill_value": 500.0,
+      "index": 36
+    },
+    {
+      "name": "Handedness_Matchup_RL",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 37
+    },
+    {
+      "name": "Player2_Rank",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 38
+    },
+    {
+      "name": "Avg_Age",
+      "dtype": "float",
+      "fill_value": 25.0,
+      "index": 39
+    },
+    {
+      "name": "P1_Country_RUS",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 40
+    },
+    {
+      "name": "Player2_Age",
+      "dtype": "float",
+      "fill_value": 25.0,
+      "index": 41
+    },
+    {
+      "name": "P2_vs_Lefty_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 42
+    },
+    {
+      "name": "Round_F",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 43
+    },
+    {
+      "name": "Surface_Clay",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 44
+    },
+    {
+      "name": "P2_Sets_14d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 45
+    },
+    {
+      "name": "Rank_Momentum_Diff_30d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 46
+    },
+    {
+      "name": "H2H_P2_Wins",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 47
+    },
+    {
+      "name": "Player2_Rank_Points",
+      "dtype": "float",
+      "fill_value": 500.0,
+      "index": 48
+    },
+    {
+      "name": "Player1_Age",
+      "dtype": "float",
+      "fill_value": 25.0,
+      "index": 49
+    },
+    {
+      "name": "P2_Rank_Volatility_90d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 50
+    },
+    {
+      "name": "P1_Days_Since_Last",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 51
+    },
+    {
+      "name": "Grass_Season",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 52
+    },
+    {
+      "name": "P1_Semifinals_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 53
+    },
+    {
+      "name": "Level_A",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 54
+    },
+    {
+      "name": "Level_D",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 55
+    },
+    {
+      "name": "P1_Country_USA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 56
+    },
+    {
+      "name": "P1_Country_GBR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 57
+    },
+    {
+      "name": "P1_Country_FRA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 58
+    },
+    {
+      "name": "P2_Matches_14d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 59
+    },
+    {
+      "name": "P2_Country_USA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 60
+    },
+    {
+      "name": "P2_Country_ITA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 61
+    },
+    {
+      "name": "Round_Q2",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 62
+    },
+    {
+      "name": "P2_Surface_WinRate_90d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 63
+    },
+    {
+      "name": "P1_Hand_L",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 64
+    },
+    {
+      "name": "P2_Hand_L",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 65
+    },
+    {
+      "name": "P1_Country_ITA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 66
+    },
+    {
+      "name": "P2_Rust_Flag",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 67
+    },
+    {
+      "name": "P1_Rank_Change_90d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 68
+    },
+    {
+      "name": "P1_Country_AUS",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 69
+    },
+    {
+      "name": "P1_Hand_U",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 70
+    },
+    {
+      "name": "P1_Hand_R",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 71
+    },
+    {
+      "name": "Round_RR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 72
+    },
+    {
+      "name": "Avg_Height",
+      "dtype": "float",
+      "fill_value": 180.0,
+      "index": 73
+    },
+    {
+      "name": "P1_Sets_14d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 74
+    },
+    {
+      "name": "P2_Country_Other",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 75
+    },
+    {
+      "name": "Round_SF",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 76
+    },
+    {
+      "name": "P1_vs_Lefty_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 77
+    },
+    {
+      "name": "Indoor_Season",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 78
+    },
+    {
+      "name": "Avg_Rank",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 79
+    },
+    {
+      "name": "P1_Rust_Flag",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 80
+    },
+    {
+      "name": "Avg_Rank_Points",
+      "dtype": "float",
+      "fill_value": 500.0,
+      "index": 81
+    },
+    {
+      "name": "Level_F",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 82
+    },
+    {
+      "name": "Round_R64",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 83
+    },
+    {
+      "name": "P2_Country_CZE",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 84
+    },
+    {
+      "name": "P2_Hand_R",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 85
+    },
+    {
+      "name": "Surface_Hard",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 86
+    },
+    {
+      "name": "P1_Matches_14d",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 87
+    },
+    {
+      "name": "Surface_Carpet",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 88
+    },
+    {
+      "name": "Round_R128",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 89
+    },
+    {
+      "name": "P1_Country_SRB",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 90
+    },
+    {
+      "name": "P2_Hand_U",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 91
+    },
+    {
+      "name": "P1_Rank_Volatility_90d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 92
+    },
+    {
+      "name": "Level_M",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 93
+    },
+    {
+      "name": "P2_Country_ESP",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 94
+    },
+    {
+      "name": "Handedness_Matchup_LR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 95
+    },
+    {
+      "name": "P1_Country_CZE",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 96
+    },
+    {
+      "name": "P2_Country_SUI",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 97
+    },
+    {
+      "name": "Surface_Grass",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 98
+    },
+    {
+      "name": "H2H_Total_Matches",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 99
+    },
+    {
+      "name": "Level_O",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 100
+    },
+    {
+      "name": "P1_Hand_A",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 101
+    },
+    {
+      "name": "P1_Finals_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 102
+    },
+    {
+      "name": "Rank_Momentum_Diff_90d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 103
+    },
+    {
+      "name": "P2_Finals_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 104
+    },
+    {
+      "name": "Round_Q4",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 105
+    },
+    {
+      "name": "Level_G",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 106
+    },
+    {
+      "name": "Round_ER",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 107
+    },
+    {
+      "name": "Level_S",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 108
+    },
+    {
+      "name": "Round_BR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 109
+    },
+    {
+      "name": "Round_Q3",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 110
+    },
+    {
+      "name": "Rank_Ratio",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 111
+    },
+    {
+      "name": "P1_Country_SUI",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 112
+    },
+    {
+      "name": "Clay_Season",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 113
+    },
+    {
+      "name": "P1_Country_GER",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 114
+    },
+    {
+      "name": "P2_Rank_Change_30d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 115
+    },
+    {
+      "name": "P1_Country_ESP",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 116
+    },
+    {
+      "name": "P2_Hand_A",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 117
+    },
+    {
+      "name": "H2H_Recent_P1_Advantage",
+      "dtype": "float",
+      "fill_value": 0.0,
+      "index": 118
+    },
+    {
+      "name": "P2_Country_AUS",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 119
+    },
+    {
+      "name": "P2_Country_SRB",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 120
+    },
+    {
+      "name": "P2_Country_GBR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 121
+    },
+    {
+      "name": "P2_Country_ARG",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 122
+    },
+    {
+      "name": "Handedness_Matchup_RR",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 123
+    },
+    {
+      "name": "P1_Rank_Change_30d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 124
+    },
+    {
+      "name": "P2_Country_GER",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 125
+    },
+    {
+      "name": "Handedness_Matchup_LL",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 126
+    },
+    {
+      "name": "P2_Country_RUS",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 127
+    },
+    {
+      "name": "P1_Country_ARG",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 128
+    },
+    {
+      "name": "Level_C",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 129
+    },
+    {
+      "name": "P2_Semifinals_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 130
+    },
+    {
+      "name": "P2_Days_Since_Last",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 131
+    },
+    {
+      "name": "P1_Peak_Age",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 132
+    },
+    {
+      "name": "P2_Peak_Age",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 133
+    },
+    {
+      "name": "H2H_P1_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 134
+    },
+    {
+      "name": "P1_Country_Other",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 135
+    },
+    {
+      "name": "H2H_P1_Wins",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 136
+    },
+    {
+      "name": "P1_BigMatch_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 137
+    },
+    {
+      "name": "P2_Rank_Change_90d",
+      "dtype": "float",
+      "fill_value": 100.0,
+      "index": 138
+    },
+    {
+      "name": "P2_BigMatch_WinRate",
+      "dtype": "float",
+      "fill_value": 0.5,
+      "index": 139
+    },
+    {
+      "name": "P2_Country_FRA",
+      "dtype": "int",
+      "fill_value": 0,
+      "index": 140
+    }
+  ],
+  "total_count": 141
+}

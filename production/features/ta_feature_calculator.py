@@ -2,7 +2,7 @@
 """
 Tennis Abstract Feature Calculator
 Mirrors LiveFeatureEngine logic but uses Tennis Abstract as data source.
-Returns the exact 143 features expected by NN-143 model.
+Returns the exact 141 features expected by NN-141 model.
 """
 
 import pandas as pd
@@ -19,12 +19,16 @@ from ta_scraper import TennisAbstractScraper
 from atp_rankings_scraper import load_rankings, get_player_points, get_player_rank
 from atp_height_scraper import batch_get_heights
 
+# Import shared round offset function (same directory)
+sys.path.insert(0, str(Path(__file__).parent))
+from round_offsets import get_round_day_offset, infer_draw_size
+
 # Import schema contract
 import json
-SCHEMA_PATH = Path(__file__).parent / "schema_143.json"
+SCHEMA_PATH = Path(__file__).parent / "schema_141.json"
 with open(SCHEMA_PATH) as f:
     SCHEMA = json.load(f)
-    EXACT_143_FEATURES = [feat["name"] for feat in SCHEMA["features"]]
+    EXACT_141_FEATURES = [feat["name"] for feat in SCHEMA["features"]]
 
 
 class TAFeatureCalculator:
@@ -138,12 +142,12 @@ class TAFeatureCalculator:
 
     @staticmethod
     def _count_period(df: pd.DataFrame, ref: datetime, days: int) -> int:
-        """Count matches in time window"""
+        """Count matches in time window [ref-days, ref). Matches training logic."""
         if df.empty or 'date' not in df.columns:
             return 0
-        cut = ref - timedelta(days=days)
+        cut = pd.Timestamp(ref) - timedelta(days=days)
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        return int((df['date'] >= cut).sum())
+        return int(((df['date'] >= cut) & (df['date'] < pd.Timestamp(ref))).sum())
 
     @staticmethod
     def _surface_mask(df: pd.DataFrame, surface: str) -> pd.Series:
@@ -153,21 +157,21 @@ class TAFeatureCalculator:
         return df['surface'].astype(str).str.lower() == (surface or '').lower()
 
     def _count_surface(self, df: pd.DataFrame, ref: datetime, surface: str, days: int) -> int:
-        """Count surface-specific matches in time window"""
+        """Count surface-specific matches in time window [ref-days, ref)."""
         if df.empty:
             return 0
-        cut = ref - timedelta(days=days)
+        cut = pd.Timestamp(ref) - timedelta(days=days)
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        m = (df['date'] >= cut) & self._surface_mask(df, surface)
+        m = (df['date'] >= cut) & (df['date'] < pd.Timestamp(ref)) & self._surface_mask(df, surface)
         return int(m.sum())
 
     def _surface_winrate(self, df: pd.DataFrame, ref: datetime, surface: str, days: int) -> float:
         """Surface-specific win rate — Laplace smoothed (alpha=3)."""
         if df.empty:
             return 0.5
-        cut = ref - timedelta(days=days)
+        cut = pd.Timestamp(ref) - timedelta(days=days)
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        m = df[(df['date'] >= cut) & self._surface_mask(df, surface)]
+        m = df[(df['date'] >= cut) & (df['date'] < pd.Timestamp(ref)) & self._surface_mask(df, surface)]
         wins = (m['result'].astype(str).str.upper() == 'W').sum()
         return self._laplace(int(wins), len(m))
 
@@ -233,7 +237,12 @@ class TAFeatureCalculator:
         return dt - pd.Timedelta(days=int(dt.weekday()))
 
     def _days_since_last_tournament(self, df: pd.DataFrame, ref: datetime) -> Optional[int]:
-        """Days since last tournament (week-based)"""
+        """Days since last tournament (week-based).
+
+        Matches training: training used inferred_match_dt (tourney_start + round_offset)
+        as the reference and computed days_since = ref - last_tournament_monday.
+        We do the same here so the value is consistent with the training distribution.
+        """
         if df.empty or 'date' not in df.columns:
             return None
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
@@ -246,7 +255,9 @@ class TAFeatureCalculator:
         if prev_weeks.empty:
             return None
         last_week = prev_weeks.max()
-        return int((current_week - last_week).days)
+        # Use (ref - last_week) not (current_week - last_week) to match training formula:
+        # training computed days_since = inferred_match_dt - last_tournament_monday
+        return int((pd.Timestamp(ref) - last_week).days)
 
     @staticmethod
     def _count_sets_from_score(score: str) -> int:
@@ -542,7 +553,7 @@ class TAFeatureCalculator:
 
     # ========== Main Feature Builder ==========
 
-    def build_143_features(
+    def build_141_features(
         self,
         player1_name: Optional[str] = None,
         player2_name: Optional[str] = None,
@@ -620,7 +631,7 @@ class TAFeatureCalculator:
                 raise RuntimeError(f"Could not resolve TA slug for: {player2_name}")
 
         # Build features from slugs, passing cache params through
-        return self.build_143_features_from_slugs(
+        return self.build_141_features_from_slugs(
             slug1=slug1,
             slug2=slug2,
             match_date=match_date,
@@ -634,7 +645,7 @@ class TAFeatureCalculator:
             match_date_is_explicit=match_date_is_explicit,
         )
 
-    def build_143_features_from_slugs(
+    def build_141_features_from_slugs(
         self,
         slug1: str,
         slug2: str,
@@ -780,26 +791,10 @@ class TAFeatureCalculator:
             'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
         }
 
-        # Round-to-day offsets derived from jeffsackmann_ml_ready_AUDIT.csv.
-        # Training used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
-        # (+ 5-min match_num spacing within round, ignored here).
-        # We must match this so temporal windows count the same intra-tournament matches.
-        #
-        # TODO (next retraining cycle): make this dynamic based on number of qualifying rounds.
-        # e.g. Miami Open only has Q1+Q2 qualifiers → Q1=-2, Q2=-1 (not -3/-2).
-        # Logic: if max_qual_round == 2: Q1=-2, Q2=-1. if max_qual_round == 3: Q1=-3, Q2=-2, Q3=-1.
-        # Derive max_qual_round from draw_size or tournament metadata at inference time.
-        # Current hardcoded medians are off by 1 day for 2-round-qualifying tournaments.
-        _ROUND_DAY_OFFSET = {
-            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
-            'R128': 0,
-            'R64': 2, 'R32': 3, 'RR': 3,
-            'R16': 4, 'QF': 5, 'SF': 6, 'F': 7, 'BR': 7,
-        }
-
         # Get TA tournament start date + round BEFORE temporal features.
         # TA (like Sackmann CSV) stores tournament START DATE for all rounds.
         _upcoming = self.scraper.get_upcoming_match(slug1, p2_display, session_cache=session_cache)
+        _tourney_start = None
         if _upcoming:
             if not round_code and _upcoming.get('round'):
                 round_code = _upcoming['round']
@@ -807,10 +802,9 @@ class TAFeatureCalculator:
             _ta_date_str = str(_upcoming.get('date', ''))
             if len(_ta_date_str) == 8 and _ta_date_str.isdigit():
                 try:
-                    from datetime import timedelta as _td
                     _tourney_start = datetime.strptime(_ta_date_str, '%Y%m%d')
-                    _day_offset = _ROUND_DAY_OFFSET.get(round_code or '', 0)
-                    _ta_inferred = _tourney_start + _td(days=_day_offset)
+                    _day_offset = get_round_day_offset(tournament_level, draw_size, round_code or '', tourney_date=_tourney_start)
+                    _ta_inferred = _tourney_start + timedelta(days=_day_offset)
                     if match_date_is_explicit:
                         # Bovada gave us a real date — trust it, don't override with heuristic
                         print(f"      📅 TA inferred {_ta_inferred.date()} but using explicit Bovada date {when.date()}")
@@ -822,6 +816,40 @@ class TAFeatureCalculator:
             _ta_surface = _upcoming.get('surface', '')
             if _ta_surface and _ta_surface.lower() != surface.lower():
                 print(f"      ⚠️  Surface mismatch: resolver={surface}, TA upcoming={_ta_surface} — using resolver")
+
+        # Apply round-day offsets to historical match data to match training methodology.
+        # Training (preprocess.py) used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
+        # for every match before computing temporal windows. TA stores tournament START DATE for
+        # all rounds (same as Sackmann), so without this step live features diverge from training.
+        def _apply_round_offsets(df: pd.DataFrame, ref: datetime = None) -> pd.DataFrame:
+            """Apply level+draw-aware round offsets to historical match dates.
+
+            If ref is provided (Bovada date), cap inferred dates to just before ref.
+            All historical matches happened before the upcoming match — any overshoot
+            (e.g. same-tournament R64 inferred to same day as R32) is a heuristic
+            artifact that should be corrected.
+            """
+            if df.empty or 'round' not in df.columns or 'date' not in df.columns:
+                return df
+            df = df.copy()
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            ref_cap = pd.Timestamp(ref) - pd.Timedelta(seconds=1) if ref else None
+            def _infer_date(row):
+                lvl = str(row.get('level', '')) if pd.notna(row.get('level')) else ''
+                evt = str(row.get('event', '')) if pd.notna(row.get('event')) else ''
+                draw = infer_draw_size(evt, lvl)
+                rnd = str(row.get('round', ''))
+                offset = get_round_day_offset(lvl, draw, rnd, tourney_date=row['date'])
+                inferred = row['date'] + pd.Timedelta(days=offset) if pd.notna(row['date']) else row['date']
+                # Cap: historical match can't be at or after the upcoming match
+                if ref_cap is not None and pd.notna(inferred) and inferred >= ref_cap:
+                    return ref_cap
+                return inferred
+            df['date'] = df.apply(_infer_date, axis=1)
+            return df
+
+        matches1 = _apply_round_offsets(matches1, ref=when)
+        matches2 = _apply_round_offsets(matches2, ref=when)
 
         # Calculate temporal features
         def temporal(df):
@@ -951,10 +979,8 @@ class TAFeatureCalculator:
         })
 
         # Peak age flags
-        features['Peak_Age_P1'] = 1 if 24 <= float(s1['age']) <= 28 else 0
-        features['Peak_Age_P2'] = 1 if 24 <= float(s2['age']) <= 28 else 0
-        features['P1_Peak_Age'] = features['Peak_Age_P1']
-        features['P2_Peak_Age'] = features['Peak_Age_P2']
+        features['P1_Peak_Age'] = 1 if 24 <= float(s1['age']) <= 28 else 0
+        features['P2_Peak_Age'] = 1 if 24 <= float(s2['age']) <= 28 else 0
 
         # Surfaces
         features.update({
@@ -1006,7 +1032,7 @@ class TAFeatureCalculator:
         # Ensure all 143 features exist in correct order
         final = {}
         defaulted = []
-        for k in EXACT_143_FEATURES:
+        for k in EXACT_141_FEATURES:
             if k in features and pd.notna(features[k]):
                 final[k] = float(features[k]) if isinstance(features[k], (int, float, np.floating)) else features[k]
             else:
@@ -1089,7 +1115,7 @@ class TAFeatureCalculator:
 
     def _defaults_143(self) -> Dict[str, float]:
         """Return dict of all 143 features with default values"""
-        return {k: self._default_for(k) for k in EXACT_143_FEATURES}
+        return {k: self._default_for(k) for k in EXACT_141_FEATURES}
 
 
 def main():
@@ -1097,7 +1123,7 @@ def main():
     calc = TAFeatureCalculator()
 
     # Test with two players
-    features = calc.build_143_features(
+    features = calc.build_141_features(
         player1_name="Arthur Cazaux",
         player2_name="Mackenzie McDonald",
         match_date=datetime(2025, 10, 13),
@@ -1109,11 +1135,11 @@ def main():
 
     print(f"✅ Built {len(features)} features from Tennis Abstract")
     print("\nFirst 10 features:")
-    for i, k in enumerate(EXACT_143_FEATURES[:10]):
+    for i, k in enumerate(EXACT_141_FEATURES[:10]):
         print(f"  {k}: {features[k]}")
 
     print(f"\n✅ All 143 features present: {len(features) == 143}")
-    print(f"✅ Feature names match schema: {list(features.keys()) == EXACT_143_FEATURES}")
+    print(f"✅ Feature names match schema: {list(features.keys()) == EXACT_141_FEATURES}")
 
 
 if __name__ == "__main__":

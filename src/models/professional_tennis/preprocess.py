@@ -1,93 +1,18 @@
 import pandas as pd
 import numpy as np
 import os
+import sys
 from datetime import datetime
 from collections import defaultdict, deque
+
+# Import shared round offset function
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'production', 'features'))
+from round_offsets import get_round_day_offset
 
 def laplace(wins: int, total: int, alpha: float = 3.0) -> float:
     """Bayesian (Laplace) smoothing: (wins + α/2) / (total + α). Returns 0.5 when total=0."""
     return (wins + alpha / 2.0) / (total + alpha)
 
-
-def get_round_day_offset(tourney_level, draw_size, round_code):
-    """
-    Estimate the day offset from tourney_date for a given round.
-
-    Sackmann data stores tourney_date as the tournament start date (first day of
-    main-draw play, typically Monday). Qualifiers have negative offsets.
-
-    Offsets vary by tournament level and draw size because:
-      - Grand Slams: 2-week event, early rounds span 2 calendar days each
-      - Masters 1000 large (IW/Miami, draw>=96): ~12-day event, similar 2-day early rounds
-      - Masters 1000 medium (64-draw): 9-day event, 1 day per round
-      - Masters 1000 small (48/56-draw): 7-day event
-      - ATP 500/250, Challengers, ITF: 7-day event, 1 day per round
-    """
-    level = str(tourney_level).strip().upper() if pd.notna(tourney_level) else ''
-    try:
-        draw = int(draw_size)
-    except (TypeError, ValueError):
-        draw = 32
-    rnd = str(round_code).strip().upper() if pd.notna(round_code) else 'R32'
-
-    # Grand Slam (G) — 2-week, 2-day rounds, qualifiers the week before
-    if level == 'G':
-        offsets = {
-            'Q1': -7, 'Q2': -5, 'Q3': -3, 'Q4': -3,
-            'R128': 0, 'R64': 2, 'R32': 4, 'R16': 7,
-            'QF': 9, 'SF': 11, 'F': 13, 'BR': 13,
-        }
-    # Masters 1000 large draw (Indian Wells / Miami: 96 or 128 players, ~12-day event)
-    elif level == 'M' and draw >= 96:
-        offsets = {
-            'Q1': -2, 'Q2': -1,
-            'R128': 0, 'R64': 4, 'R32': 6, 'R16': 8,
-            'QF': 10, 'SF': 11, 'F': 13, 'BR': 13,
-        }
-    # Masters 1000 medium draw (64: Madrid, Rome, Canada, Cincinnati, Shanghai — 9-10 day)
-    elif level == 'M' and draw == 64:
-        offsets = {
-            'Q1': -2, 'Q2': -1,
-            'R64': 0, 'R32': 2, 'R16': 4,
-            'QF': 6, 'SF': 8, 'F': 9, 'BR': 9,
-        }
-    # Masters 1000 small draw (48/56: Monte Carlo, Paris Bercy — 7-8 day)
-    elif level == 'M':
-        offsets = {
-            'Q1': -2, 'Q2': -1,
-            'R64': 0, 'R32': 1, 'R16': 3,
-            'QF': 4, 'SF': 5, 'F': 7, 'BR': 7,
-        }
-    # Tour Finals / Year-End Championship (O level) — round-robin + knockout
-    elif level == 'O':
-        offsets = {
-            'RR': 1, 'SF': 6, 'F': 7,
-        }
-    # Davis Cup / team events (D) — best-of-5 rubbers over 3 days
-    elif level == 'D':
-        offsets = {
-            'RR': 0, 'QF': 0, 'SF': 0, 'F': 2, 'BR': 2,
-        }
-    # ATP 500 / ATP 250 / Other ATP (A) — 7-day event (Mon–Sun)
-    elif level == 'A':
-        offsets = {
-            'Q1': -2, 'Q2': -1,
-            'R32': 0, 'R16': 2, 'QF': 4, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
-        }
-    # Challenger (C) — 7-day event
-    elif level == 'C':
-        offsets = {
-            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
-            'R32': 0, 'R16': 2, 'QF': 3, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
-        }
-    # ITF Futures M15 (S), M25 (F level code), and anything else — 7-day event
-    else:
-        offsets = {
-            'Q1': -3, 'Q2': -2, 'Q3': -1, 'Q4': -1,
-            'R32': 0, 'R16': 2, 'QF': 3, 'SF': 5, 'F': 6, 'BR': 6, 'RR': 1,
-        }
-
-    return offsets.get(rnd, 0)
 
 def get_feature_columns(df):
     """
@@ -162,7 +87,7 @@ def calculate_temporal_features(df):
         'P1_Sets_14d', 'P2_Sets_14d',
         
         # PHASE 1: Age/Physical advantages
-        'Age_Diff', 'Height_Diff', 'Peak_Age_P1', 'Peak_Age_P2',
+        'Age_Diff', 'Height_Diff',
         
         # PHASE 2: Surface-Specific Form (high value)
         'P1_Surface_Matches_30d', 'P2_Surface_Matches_30d',
@@ -279,7 +204,7 @@ def calculate_temporal_features(df):
             if player_num == 1:
                 df_sorted.loc[row.name, 'Age_Diff'] = p1_age - p2_age
                 df_sorted.loc[row.name, 'Height_Diff'] = p1_height - p2_height
-            df_sorted.loc[row.name, f'Peak_Age_{prefix[:-1]}'] = 1 if 24 <= age <= 28 else 0
+            df_sorted.loc[row.name, f'{prefix}Peak_Age'] = 1 if 24 <= age <= 28 else 0
             
         # === PHASE 2: SURFACE-SPECIFIC FEATURES ===
         for player_num, player_id in enumerate([p1_id, p2_id], 1):
@@ -838,12 +763,27 @@ def preprocess_jeffsackmann_data_for_ml():
     # Sackmann stores tournament START DATE for every round. We derive an estimated
     # actual match date so that within-tournament rounds are processed in the correct
     # chronological order and rolling windows (30d/90d) are computed accurately.
+
+    # Pre-compute number of qualifier rounds per tournament so qualifier offsets are accurate.
+    # e.g. if a tournament only has Q1,Q2 → Q1=-2,Q2=-1 (not Q1=-3,Q2=-2,Q3=-1)
+    _qual_rounds_per_tourney = df.groupby('tourney_id')['round'].apply(
+        lambda rounds: sum(1 for r in rounds.unique()
+                           if str(r).upper().startswith('Q') and str(r).upper() not in ('QF',))
+    ).to_dict()
+    df['_num_qual_rounds'] = df['tourney_id'].map(_qual_rounds_per_tourney).fillna(0).astype(int)
+    print(f"   Qualifier rounds per tournament: min={df['_num_qual_rounds'].min()}, "
+          f"max={df['_num_qual_rounds'].max()}, "
+          f"mean={df['_num_qual_rounds'].mean():.1f}")
+
     df['inferred_match_date'] = df.apply(
         lambda row: row['tourney_date'] + pd.Timedelta(days=get_round_day_offset(
-            row.get('tourney_level'), row.get('draw_size'), row.get('round')
+            row.get('tourney_level'), row.get('draw_size'), row.get('round'),
+            tourney_date=row['tourney_date'],
+            num_qual_rounds=row.get('_num_qual_rounds') or None
         )),
         axis=1
     )
+    df.drop(columns=['_num_qual_rounds'], inplace=True)
     print(f"   Sample inferred dates (first 3 rows):")
     for _, r in df[['tourney_name', 'round', 'tourney_date', 'inferred_match_date']].head(3).iterrows():
         print(f"     {r['tourney_name']} {r['round']}: {r['tourney_date'].date()} -> {r['inferred_match_date'].date()}")

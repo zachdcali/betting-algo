@@ -208,8 +208,8 @@ if hand_cols:
 else:
     print("   - Handedness: not found in dataset")
 
-# Use the exact 143 features from the feature importance analysis (in order of importance)
-exact_143_features = [
+# Use the exact 141 features (in order of importance; Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
+exact_141_features = [
     'P2_WinStreak_Current', 'P1_WinStreak_Current', 'P2_Surface_Matches_30d', 'Height_Diff',
     'P1_Surface_Matches_30d', 'Player2_Height', 'P1_Matches_30d', 'P2_Matches_30d',
     'P2_Surface_Experience', 'P2_Form_Trend_30d', 'Player1_Height', 'P1_Form_Trend_30d',
@@ -237,8 +237,8 @@ exact_143_features = [
     'Handedness_Matchup_LR', 'P1_Country_CZE', 'P2_Country_SUI', 'Surface_Grass',
     'H2H_Total_Matches', 'Level_O', 'P1_Hand_A', 'P1_Finals_WinRate',
     'Rank_Momentum_Diff_90d', 'P2_Finals_WinRate',
-    # Zero importance features (7 total)
-    'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2',
+    # Zero importance features (5 total — Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
+    'Round_Q4', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR',
     # Negative importance features (31 total)
     'Round_Q3', 'Rank_Ratio', 'P1_Country_SUI', 'Clay_Season', 'P1_Country_GER',
     'P2_Rank_Change_30d', 'P1_Country_ESP', 'P2_Hand_A', 'H2H_Recent_P1_Advantage',
@@ -251,12 +251,12 @@ exact_143_features = [
 ]
 
 # Filter to only features that exist in the dataset
-feature_cols = [col for col in exact_143_features if col in ml_df.columns]
+feature_cols = [col for col in exact_141_features if col in ml_df.columns]
 
-print(f"   Features for training: {len(feature_cols)} (exact 143-feature model from importance analysis)")
-if len(feature_cols) != 143:
-    print(f"   WARNING: Expected 143 features but got {len(feature_cols)} - some features may be missing from dataset")
-    missing_features = [col for col in exact_143_features if col not in ml_df.columns]
+print(f"   Features for training: {len(feature_cols)} (exact 141-feature model from importance analysis)")
+if len(feature_cols) != 141:
+    print(f"   WARNING: Expected 141 features but got {len(feature_cols)} - some features may be missing from dataset")
+    missing_features = [col for col in exact_141_features if col not in ml_df.columns]
     if missing_features:
         print(f"   Missing features: {missing_features[:10]}...")  # Show first 10 missing
 

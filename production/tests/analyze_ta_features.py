@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Analyze what features from schema_143.json can be extracted from Tennis Abstract
+Analyze what features from schema_141.json can be extracted from Tennis Abstract
 """
 import json
 from pathlib import Path
 
 # Load schema
-schema_path = Path(__file__).parent.parent / "features" / "schema_143.json"
+schema_path = Path(__file__).parent.parent / "features" / "schema_141.json"
 with open(schema_path) as f:
     schema = json.load(f)
 
@@ -131,7 +131,7 @@ print("""
    - _calculate_form_features(matches_df, windows)
    - _get_h2h_stats(player_slug, opponent_slug)
    - _onehot_encode(surface, level, round, hand, country)
-   - build_143_features(player1_slug, player2_slug, match_context)
+   - build_141_features(player1_slug, player2_slug, match_context)
 3. Build player name→slug mapping CSV
 4. Add routing in main.py (ATP/Challenger→TA, ITF→UTR)
 """)

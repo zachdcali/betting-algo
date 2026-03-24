@@ -2,7 +2,7 @@
 """
 Live Feature Engineering System for Tennis Betting
 Combines static features (JeffSackmann ML-ready) with live temporal features (UTR CSVs)
-and returns the exact 143 features expected by NN-143 in the correct order.
+and returns the exact 141 features expected by NN-141 in the correct order.
 """
 
 import pandas as pd
@@ -19,7 +19,7 @@ class MissingData(RuntimeError):
         self.players = players
 
 class LiveFeatureEngine:
-    """Single source of truth for building the EXACT 143 live features."""
+    """Single source of truth for building the EXACT 141 live features."""
 
     def __init__(self, data_dir: str = "../../data", require_round: bool = False):
         self.data_dir = Path(data_dir)
@@ -29,7 +29,7 @@ class LiveFeatureEngine:
         self.matches_dir = self.data_dir / "matches"
         self.ratings_dir = self.data_dir / "ratings"
 
-        self.EXACT_143_FEATURES = [
+        self.EXACT_141_FEATURES = [
             'P2_WinStreak_Current','P1_WinStreak_Current','P2_Surface_Matches_30d','Height_Diff',
             'P1_Surface_Matches_30d','Player2_Height','P1_Matches_30d','P2_Matches_30d',
             'P2_Surface_Experience','P2_Form_Trend_30d','Player1_Height','P1_Form_Trend_30d',
@@ -57,7 +57,7 @@ class LiveFeatureEngine:
             'Handedness_Matchup_LR','P1_Country_CZE','P2_Country_SUI','Surface_Grass',
             'H2H_Total_Matches','Level_O','P1_Hand_A','P1_Finals_WinRate',
             'Rank_Momentum_Diff_90d','P2_Finals_WinRate',
-            'Round_Q4','Peak_Age_P1','Level_G','Round_ER','Level_S','Round_BR','Peak_Age_P2',
+            'Round_Q4','Level_G','Round_ER','Level_S','Round_BR',
             'Round_Q3','Rank_Ratio','P1_Country_SUI','Clay_Season','P1_Country_GER',
             'P2_Rank_Change_30d','P1_Country_ESP','P2_Hand_A','H2H_Recent_P1_Advantage',
             'P2_Country_AUS','P2_Country_SRB','P2_Country_GBR','P2_Country_ARG',
@@ -657,7 +657,7 @@ class LiveFeatureEngine:
         strict: bool = True
     ) -> Dict[str, float]:
         """
-        Returns dict of exactly 143 features in the right order (we'll re-order at the end).
+        Returns dict of exactly 141 features in the right order (we'll re-order at the end).
         """
         when = match_date or datetime.utcnow()
         surface = (surface or "Hard").strip().title()
@@ -677,7 +677,7 @@ class LiveFeatureEngine:
                 raise MissingData("mapping", missing_players)
         
         if not p1_id or not p2_id:
-            return self._defaults_143()
+            return self._defaults_141()
 
         # primary names for static datasets
         p1_primary = self._primary_name_for(p1_id, player1_name)
@@ -868,11 +868,9 @@ class LiveFeatureEngine:
             'Surface_Transition_Flag': st_flag,
         })
 
-        # Add missing Peak_Age features (both naming conventions)
-        features['Peak_Age_P1'] = 1 if 24 <= float(s1['age']) <= 28 else 0
-        features['Peak_Age_P2'] = 1 if 24 <= float(s2['age']) <= 28 else 0
-        features['P1_Peak_Age'] = features['Peak_Age_P1']
-        features['P2_Peak_Age'] = features['Peak_Age_P2']
+        # Peak age flags
+        features['P1_Peak_Age'] = 1 if 24 <= float(s1['age']) <= 28 else 0
+        features['P2_Peak_Age'] = 1 if 24 <= float(s2['age']) <= 28 else 0
 
         # surfaces
         features.update({
@@ -919,7 +917,7 @@ class LiveFeatureEngine:
 
         # ensure all required keys exist; fill safe defaults for any still missing
         final = {}
-        for k in self.EXACT_143_FEATURES:
+        for k in self.EXACT_141_FEATURES:
             if k in features and pd.notna(features[k]):
                 final[k] = float(features[k]) if isinstance(features[k], (int,float,np.floating)) else features[k]
             else:
@@ -963,8 +961,8 @@ class LiveFeatureEngine:
             return 0.0
         return 0.0
 
-    def _defaults_143(self) -> Dict[str, float]:
-        return {k: self._default_for(k) for k in self.EXACT_143_FEATURES}
+    def _defaults_141(self) -> Dict[str, float]:
+        return {k: self._default_for(k) for k in self.EXACT_141_FEATURES}
 
 
 def main():
@@ -979,7 +977,7 @@ def main():
     )
     print("✅ Features built:", len(f))
     # print a small subset deterministically
-    keys = engine.EXACT_143_FEATURES[:10]
+    keys = engine.EXACT_141_FEATURES[:10]
     for k in keys:
         print(k, "=", f[k])
 
@@ -1013,7 +1011,7 @@ def _contract_test():
         'Handedness_Matchup_LR','P1_Country_CZE','P2_Country_SUI','Surface_Grass',
         'H2H_Total_Matches','Level_O','P1_Hand_A','P1_Finals_WinRate',
         'Rank_Momentum_Diff_90d','P2_Finals_WinRate',
-        'Round_Q4','Peak_Age_P1','Level_G','Round_ER','Level_S','Round_BR','Peak_Age_P2',
+        'Round_Q4','Level_G','Round_ER','Level_S','Round_BR',
         'Round_Q3','Rank_Ratio','P1_Country_SUI','Clay_Season','P1_Country_GER',
         'P2_Rank_Change_30d','P1_Country_ESP','P2_Hand_A','H2H_Recent_P1_Advantage',
         'P2_Country_AUS','P2_Country_SRB','P2_Country_GBR','P2_Country_ARG',
@@ -1025,13 +1023,13 @@ def _contract_test():
     ]
 
     engine = LiveFeatureEngine()
-    assert engine.EXACT_143_FEATURES == exact_from_train, "⚠️ Name/order drift from training!"
+    assert engine.EXACT_141_FEATURES == exact_from_train, "⚠️ Name/order drift from training!"
     
     try:
         from datetime import datetime
         v = engine.build_match_features("Novak Djokovic", "Rafael Nadal", datetime.utcnow(), "Hard", "ATP", 64, "R32")
         assert set(v.keys()) == set(exact_from_train), f"Missing features: {set(exact_from_train) - set(v.keys())}"
-        print("✅ Contract test passed - all 143 features present and accounted for!")
+        print("✅ Contract test passed - all 141 features present and accounted for!")
         
         # Sanity ranges for rates/flags
         for k in exact_from_train:

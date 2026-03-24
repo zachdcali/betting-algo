@@ -44,11 +44,11 @@ def test_odds_fetching():
 def test_feature_extraction():
     print("🧪 Testing feature extraction...")
     try:
-        from features.extract_features import EXACT_143_FEATURES, LiveFeatureExtractor
+        from features.extract_features import EXACT_141_FEATURES, LiveFeatureExtractor
         extractor = LiveFeatureExtractor()
         sample = extractor._get_default_features()
-        if len(sample) == 143 and set(sample.keys()).issuperset(set(EXACT_143_FEATURES)):
-            print(f"✅ Feature extraction test passed - 143 features")
+        if len(sample) == 141 and set(sample.keys()).issuperset(set(EXACT_141_FEATURES)):
+            print(f"✅ Feature extraction test passed - 141 features")
             return sample
         print(f"❌ Feature extraction test failed - got {len(sample)}")
         return {}
@@ -60,12 +60,12 @@ def test_model_inference():
     print("🧪 Testing model inference...")
     try:
         from models.inference import TennisPredictor
-        from features.extract_features import EXACT_143_FEATURES
+        from features.extract_features import EXACT_141_FEATURES
         pred = TennisPredictor()
         if not pred.load_model():
             print("❌ Model loading failed")
             return False
-        rnd = {f: np.random.rand() for f in EXACT_143_FEATURES}
+        rnd = {f: np.random.rand() for f in EXACT_141_FEATURES}
         out = pred.predict_match_probability(rnd)
         if "error" in out:
             print(f"❌ Inference error: {out['error']}")

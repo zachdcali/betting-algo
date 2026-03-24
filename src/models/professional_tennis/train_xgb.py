@@ -75,8 +75,8 @@ if hand_cols:
 else:
     print("   - Handedness: not found in dataset")
 
-# Use the exact same 143 features as the Neural Network model (excludes leaky advantage features)
-exact_143_features = [
+# Use the exact same 141 features as the Neural Network model (excludes leaky advantage features)
+exact_141_features = [
     'P2_WinStreak_Current', 'P1_WinStreak_Current', 'P2_Surface_Matches_30d', 'Height_Diff',
     'P1_Surface_Matches_30d', 'Player2_Height', 'P1_Matches_30d', 'P2_Matches_30d',
     'P2_Surface_Experience', 'P2_Form_Trend_30d', 'Player1_Height', 'P1_Form_Trend_30d',
@@ -104,9 +104,7 @@ exact_143_features = [
     'Handedness_Matchup_LR', 'P1_Country_CZE', 'P2_Country_SUI', 'Surface_Grass',
     'H2H_Total_Matches', 'Level_O', 'P1_Hand_A', 'P1_Finals_WinRate',
     'Rank_Momentum_Diff_90d', 'P2_Finals_WinRate',
-    # Zero importance features (7 total)
-    'Round_Q4', 'Peak_Age_P1', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR', 'Peak_Age_P2',
-    # Negative importance features (31 total) 
+    'Round_Q4', 'Level_G', 'Round_ER', 'Level_S', 'Round_BR',
     'Round_Q3', 'Rank_Ratio', 'P1_Country_SUI', 'Clay_Season', 'P1_Country_GER',
     'P2_Rank_Change_30d', 'P1_Country_ESP', 'P2_Hand_A', 'H2H_Recent_P1_Advantage',
     'P2_Country_AUS', 'P2_Country_SRB', 'P2_Country_GBR', 'P2_Country_ARG',
@@ -117,13 +115,13 @@ exact_143_features = [
     'P2_BigMatch_WinRate', 'P2_Country_FRA'
 ]
 
-# Filter to only features that exist in the dataset  
-feature_cols = [col for col in exact_143_features if col in ml_df.columns]
+# Filter to only features that exist in the dataset
+feature_cols = [col for col in exact_141_features if col in ml_df.columns]
 
-print(f"   Features for training: {len(feature_cols)} (same 143-feature set as Neural Network)")
-if len(feature_cols) != 143:
-    print(f"   WARNING: Expected 143 features but got {len(feature_cols)} - some features may be missing from dataset")
-    missing_features = [col for col in exact_143_features if col not in ml_df.columns]
+print(f"   Features for training: {len(feature_cols)} (same 141-feature set as Neural Network)")
+if len(feature_cols) != 141:
+    print(f"   WARNING: Expected 141 features but got {len(feature_cols)} - some features may be missing from dataset")
+    missing_features = [col for col in exact_141_features if col not in ml_df.columns]
     if missing_features:
         print(f"   Missing features: {missing_features[:5]}...")  # Show first 5 missing
 

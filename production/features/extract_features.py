@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Live Feature Extraction for Tennis Betting Models
-Extracts the 143 features needed for NN-143 model from UTR + static data.
+Extracts the 141 features needed for NN-141 model from UTR + static data.
 
 This module delegates all core logic to LiveFeatureEngine so both paths
 (offline batch vs. live slate) stay perfectly consistent.
@@ -13,7 +13,7 @@ from pathlib import Path
 import hashlib
 
 # Keep the canonical list in ONE place (engine); we still define here to enforce order in tests.
-EXACT_143_FEATURES = [
+EXACT_141_FEATURES = [
     'P2_WinStreak_Current','P1_WinStreak_Current','P2_Surface_Matches_30d','Height_Diff',
     'P1_Surface_Matches_30d','Player2_Height','P1_Matches_30d','P2_Matches_30d',
     'P2_Surface_Experience','P2_Form_Trend_30d','Player1_Height','P1_Form_Trend_30d',
@@ -41,7 +41,7 @@ EXACT_143_FEATURES = [
     'Handedness_Matchup_LR','P1_Country_CZE','P2_Country_SUI','Surface_Grass',
     'H2H_Total_Matches','Level_O','P1_Hand_A','P1_Finals_WinRate',
     'Rank_Momentum_Diff_90d','P2_Finals_WinRate',
-    'Round_Q4','Peak_Age_P1','Level_G','Round_ER','Level_S','Round_BR','Peak_Age_P2',
+    'Round_Q4','Level_G','Round_ER','Level_S','Round_BR',
     'Round_Q3','Rank_Ratio','P1_Country_SUI','Clay_Season','P1_Country_GER',
     'P2_Rank_Change_30d','P1_Country_ESP','P2_Hand_A','H2H_Recent_P1_Advantage',
     'P2_Country_AUS','P2_Country_SRB','P2_Country_GBR','P2_Country_ARG',
@@ -53,7 +53,7 @@ EXACT_143_FEATURES = [
 ]
 
 # Compute SHA1 fingerprint of feature schema for parity tracking
-FEATURE_SCHEMA_SHA = hashlib.sha1('|'.join(EXACT_143_FEATURES).encode('utf-8')).hexdigest()
+FEATURE_SCHEMA_SHA = hashlib.sha1('|'.join(EXACT_141_FEATURES).encode('utf-8')).hexdigest()
 
 # Import from sibling module (ensure production/features is on path)
 import sys
@@ -96,7 +96,7 @@ def extract_features_for_slate(odds_df: pd.DataFrame) -> pd.DataFrame:
             missing_category = e.category
             missing_players = ",".join(e.players)
 
-        ordered = {k: features.get(k, None) for k in EXACT_143_FEATURES}
+        ordered = {k: features.get(k, None) for k in EXACT_141_FEATURES}
         ordered.update({
             'match_id': idx,
             'player1_raw': r['player1_raw'],
@@ -113,7 +113,7 @@ def extract_features_for_slate(odds_df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(rows)
     # Print SHA for verification
     print(f"\n📊 Feature Schema SHA1: {FEATURE_SCHEMA_SHA}")
-    print(f"   (143 features in canonical order)")
+    print(f"   (141 features in canonical order)")
     # Don't raise on missing columns here—downstream will filter status=="ok"
     return out
 
@@ -135,7 +135,7 @@ def main():
     df = extract_features_for_slate(sample)
     print("✅ Feature extraction test completed")
     print("Shape:", df.shape)
-    print("First 5 of 143:", df[[EXACT_143_FEATURES[i] for i in range(5)]].head())
+    print("First 5 of 143:", df[[EXACT_141_FEATURES[i] for i in range(5)]].head())
 
 
 if __name__ == "__main__":

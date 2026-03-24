@@ -173,12 +173,12 @@ logged_at,match_date,tournament,surface,level,round,p1,p2,model_p1_prob,model_p2
 2026-03-21 04:10:45.746891,2026-03-20,Miami,Hard,M,R64,Frances Tiafoe,Arthur Cazaux,0.7354,0.2646,0.6322,0.3678,-195,+160,0.1032,NN-SURFACE_FIX,True,,1.0,7-6(1) 6-1,2026-03-22T02:56:59.576974,1.0,1.0
 2026-03-21 04:10:45.750836,2026-03-20,Miami,Hard,M,R64,Ben Shelton,Alexander Shevchenko,0.8133,0.1867,0.8533,0.1467,-850,+550,-0.04,NN-SURFACE_FIX,True,,2.0,6-7(3) 7-6(3) 6-3,2026-03-22T02:57:02.908686,0.0,0.0
 2026-03-21 04:10:45.754977,2026-03-21,Miami,Hard,M,,Martin Damm Jr,Alexander Zverev,,,0.1193,0.8807,+700,-1200,,NN-SURFACE_FIX,True,,2.0,6-2 6-4,2026-03-22T02:57:06.330545,,1.0
-2026-03-22T01:16:23.486366,2026-03-22,Miami,Hard,M,R32,Arthur Fils,Stefanos Tsitsipas,0.6384,0.3616,0.6581,0.3419,-220,+180,0.0444,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.481186,2026-03-22,Miami,Hard,M,R32,Matteo Berrettini,Valentin Vacherot,0.4913,0.5087,0.5745,0.4255,-150,+125,-0.065,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.467617,2026-03-22,Miami,Hard,M,R32,Tommy Paul,Raphael Collignon,0.6637,0.3363,0.6465,0.3535,-210,+170,-0.0275,NN-SURFACE_FIX,True,,,,,,
+2026-03-22T01:16:23.486366,2026-03-22,Miami,Hard,M,R32,Arthur Fils,Stefanos Tsitsipas,0.6384,0.3616,0.6581,0.3419,-220,+180,0.0444,NN-SURFACE_FIX,True,,1.0,6-0 6-1,2026-03-22T23:02:45.662385,1.0,1.0
+2026-03-22T01:16:23.481186,2026-03-22,Miami,Hard,M,R32,Matteo Berrettini,Valentin Vacherot,0.4913,0.5087,0.5745,0.4255,-150,+125,-0.065,NN-SURFACE_FIX,True,,2.0,7-6(5) 6-4,2026-03-22T23:02:48.980418,1.0,0.0
+2026-03-22T01:16:23.467617,2026-03-22,Miami,Hard,M,R32,Tommy Paul,Raphael Collignon,0.6637,0.3363,0.6465,0.3535,-210,+170,-0.0275,NN-SURFACE_FIX,True,,1.0,6-2 3-6 7-6(5),2026-03-22T23:02:52.297219,1.0,1.0
 2026-03-22T01:16:23.471409,2026-03-22,Miami,Hard,M,R32,Carlos Alcaraz,Sebastian Korda,0.9899,0.0101,0.8533,0.1467,-850,+550,0.1366,NN-SURFACE_FIX,True,,2.0,3-6 7-5 4-6,2026-03-22T14:35:18.090592,0.0,0.0
 2026-03-22T01:16:23.456224,2026-03-22,Miami,Hard,M,R32,Ethan Quinn,Jiri Lehecka,0.4944,0.5056,0.4436,0.5564,+115,-140,0.06,NN-SURFACE_FIX,True,,2.0,3-6 6-7(6),2026-03-22T14:35:18.090592,1.0,1.0
-2026-03-22T01:16:23.476255,2026-03-22,Miami,Hard,M,R32,Martin Landaluce,Karen Khachanov,0.3873,0.6127,0.3476,0.6524,+175,-215,0.0691,NN-SURFACE_FIX,True,,,,,,
+2026-03-22T01:16:23.476255,2026-03-22,Miami,Hard,M,R32,Martin Landaluce,Karen Khachanov,0.3873,0.6127,0.3476,0.6524,+175,-215,0.0691,NN-SURFACE_FIX,True,,1.0,6-3 7-6(2),2026-03-22T23:02:55.652775,0.0,0.0
 2026-03-22T01:16:23.463829,2026-03-22,Miami,Hard,M,R32,Reilly Opelka,Taylor Fritz,0.2749,0.7251,0.2817,0.7183,+240,-300,-0.0433,NN-SURFACE_FIX,True,,2.0,3-6 4-6,2026-03-22T14:35:18.090592,1.0,1.0
 2026-03-21 04:10:45.794566,2026-03-22,Murcia,Clay,C,SF,Pablo Carreno-Busta,Kimmer Coppejans,0.6926,0.3074,0.7162,0.2838,-325,+230,-0.0236,NN-SURFACE_FIX,True,,1.0,6-2 6-3,2026-03-22T02:58:00.887075,1.0,1.0
 2026-03-21 04:10:45.798729,2026-03-21,Zadar,Clay,C,SF,Arthur Gea,Kyrian Jacquet,0.5643,0.4357,0.4279,0.5721,+120,-155,0.1365,NN-SURFACE_FIX,True,,1.0,unknown,2026-03-22T01:47:41.112242,1.0,0.0
@@ -190,33 +190,124 @@ logged_at,match_date,tournament,surface,level,round,p1,p2,model_p1_prob,model_p2
 2026-03-21 04:10:45.824537,2026-03-21,ITF Men Toulouse,Hard,15,,Raphael Perot,Gauthier Onclin,,,0.3361,0.6639,+175,-255,,NN-SURFACE_FIX,True,,,,,,
 2026-03-21 04:10:45.828324,2026-03-21,ITF Men Bakersfield,Carpet,A,,Gianluca Brunkow,Michael Antonius,,,0.6516,0.3484,-240,+165,,NN-SURFACE_FIX,True,,,,,,
 2026-03-22T01:16:23.460057,2026-03-22,Miami,Hard,M,R32,Rafael Jodar,Tomas Martin Etcheverry,0.6545,0.3455,0.5564,0.4436,-140,+115,0.0982,NN-SURFACE_FIX,True,,2.0,5-7 4-6,2026-03-22T14:35:18.090592,0.0,0.0
-2026-03-22T01:16:23.492157,2026-03-23,Miami,Hard,M,R32,Marin Cilic,Alexander Zverev,0.2193,0.7807,0.1364,0.8636,+600,-950,0.0829,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.497007,2026-03-23,Miami,Hard,M,R32,Alejandro Tabilo,Alex Michelsen,0.5227,0.4773,0.3614,0.6386,+165,-200,0.1549,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.501920,2026-03-23,Miami,Hard,M,R32,Alexander Shevchenko,Ugo Humbert,0.3721,0.6279,0.2817,0.7183,+240,-300,0.0905,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.506863,2026-03-23,Miami,Hard,M,R32,Corentin Moutet,Jannik Sinner,0.1172,0.8828,0.0531,0.9469,+1700,-10000,0.064,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.511755,2026-03-23,Miami,Hard,M,R32,Felix Auger-Aliassime,Terence Atmane,0.7642,0.2358,0.7335,0.2665,-325,+260,0.0306,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.516627,2026-03-23,Miami,Hard,M,R32,Frances Tiafoe,Jakub Mensik,0.4668,0.5332,0.417,0.583,+130,-155,0.0498,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.521440,2026-03-23,Miami,Hard,M,R32,Francisco Cerundolo,Daniil Medvedev,0.3499,0.6501,0.2381,0.7619,+300,-400,0.1118,NN-SURFACE_FIX,True,,,,,,
-2026-03-22T01:16:23.526071,2026-03-23,Miami,Hard,M,R32,Quentin Halys,Kamil Majchrzak,0.5832,0.4168,0.4783,0.5217,EVEN,-120,0.1049,NN-SURFACE_FIX,True,,,,,,
+2026-03-23T05:32:46.817844,2026-03-23,Miami,Hard,A,R32,Marin Cilic,Alexander Zverev,0.2419,0.7581,0.1364,0.8636,+600,-950,0.0601,v1.2.0,True,,2.0,6-2 5-7 6-4,2026-03-24T12:26:59.293908,1.0,1.0
+2026-03-23T05:32:46.813497,2026-03-23,Miami,Hard,A,R32,Alejandro Tabilo,Alex Michelsen,0.4259,0.5741,0.3614,0.6386,+165,-200,0.0276,v1.2.0,True,,2.0,3-6 6-3 6-4,2026-03-24T12:27:02.687830,1.0,1.0
+2026-03-23T05:32:46.789729,2026-03-23,Miami,Hard,A,R32,Alexander Shevchenko,Ugo Humbert,0.3656,0.6344,0.2817,0.7183,+240,-300,0.1275,v1.2.0,True,,2.0,6-4 7-6(2),2026-03-24T12:27:06.010142,1.0,1.0
+2026-03-23T05:32:46.826229,2026-03-23,Miami,Hard,A,R32,Corentin Moutet,Jannik Sinner,0.1363,0.8637,0.0531,0.9469,+1700,-10000,0.0945,v1.2.0,True,,2.0,6-1 6-4,2026-03-24T12:27:09.339396,1.0,1.0
+2026-03-23T05:32:46.802999,2026-03-23,Miami,Hard,A,R32,Felix Auger-Aliassime,Terence Atmane,0.7619,0.2381,0.7335,0.2665,-325,+260,0.0284,v1.2.0,True,,2.0,6-3 1-6 6-3,2026-03-24T12:27:12.702021,0.0,0.0
+2026-03-23T05:32:46.808303,2026-03-23,Miami,Hard,A,R32,Frances Tiafoe,Jakub Mensik,0.3977,0.6023,0.417,0.583,+130,-155,-0.0193,v1.2.0,True,,1.0,7-6(4) 4-6 7-6(11),2026-03-24T12:27:16.048267,0.0,0.0
+2026-03-23T05:32:46.797511,2026-03-23,Miami,Hard,A,R32,Francisco Cerundolo,Daniil Medvedev,0.2831,0.7169,0.2381,0.7619,+300,-400,0.0278,v1.2.0,True,,1.0,6-0 4-6 7-5,2026-03-24T12:27:19.363491,0.0,0.0
+2026-03-23T05:32:46.822125,2026-03-23,Miami,Hard,A,R32,Quentin Halys,Kamil Majchrzak,0.4706,0.5294,0.4783,0.5217,EVEN,-120,0.0133,v1.2.0,True,,1.0,7-6(4) 6-1,2026-03-24T12:27:22.865069,0.0,0.0
 2026-03-22T01:16:23.437770,2026-03-22,,Hard,G,,Carlos Alcaraz,The ‪Field,,,0.5,0.5,,,,,True,,,,,,
 2026-03-22T01:16:23.443653,2026-03-22,Men's Singles,Hard,G,,Carlos Alcaraz,The Field,,,0.4436,0.5564,+115,-140,,,True,,,,,,
 2026-03-22T01:16:23.452194,2026-03-22,French Open Men's Singles,Hard,G,,Jannik Sinner,The Field,,,0.3836,0.6164,+150,-180,,,True,,,,,,
 2026-03-22T01:16:23.530595,2026-03-22,,Hard,C,,Ben Jones (MIN),Oleksii Krutykh,,,0.5,0.5,,,,,True,,,,,,
 2026-03-22T01:16:23.534913,2026-03-22,Split,Hard,C,,Luka Eres,Gerard Campana Lee,,,0.0483,0.9517,+1900,-7000,,,True,,,,,,
-2026-03-22T01:16:23.538921,2026-03-22,Naples,Clay,C,,Fabrizio Karol Pio Osti,Enrico Dalla Valle,,,0.0596,0.9404,+1500,-7000,,,True,,,,,,
-2026-03-22T01:16:23.542859,2026-03-22,Naples,Clay,C,,Mariano Tammaro,Gianmarco Ferrari,,,0.234,0.766,+300,-450,,,True,,,,,,
-2026-03-22T01:16:23.546760,2026-03-22,Naples,Clay,C,,Giovanni Ciocca,Federico Bondioli,,,0.0734,0.9266,+1200,-3300,,,True,,,,,,
-2026-03-22T01:16:23.550598,2026-03-22,Naples,Clay,C,,Lorenzo Rottoli,Luca Potenza,,,0.5101,0.4899,-120,-110,,,True,,,,,,
-2026-03-22T01:16:23.554530,2026-03-22,Morelia,Hard,C,,Facundo Mena,Alan Sau Franco,,,0.9136,0.0864,-2500,+1000,,,True,,,,,,
-2026-03-22T01:16:23.558459,2026-03-22,Morelia,Hard,C,,Dan Martin,Alafia Ayeni,,,0.4592,0.5408,+105,-135,,,True,,,,,,
+2026-03-22T01:16:23.538921,2026-03-22,Naples,Clay,C,,Fabrizio Karol Pio Osti,Enrico Dalla Valle,,,0.0596,0.9404,+1500,-7000,,,True,,2.0,6-2 6-2,2026-03-22T23:05:16.981669,,1.0
+2026-03-22T01:16:23.542859,2026-03-22,Naples,Clay,C,,Mariano Tammaro,Gianmarco Ferrari,,,0.234,0.766,+300,-450,,,True,,1.0,2-6 6-4 6-2,2026-03-22T23:05:50.277509,,0.0
+2026-03-22T01:16:23.546760,2026-03-22,Naples,Clay,C,,Giovanni Ciocca,Federico Bondioli,,,0.0734,0.9266,+1200,-3300,,,True,,2.0,6-2 6-0,2026-03-22T23:05:53.478516,,1.0
+2026-03-22T01:16:23.550598,2026-03-22,Naples,Clay,C,,Lorenzo Rottoli,Luca Potenza,,,0.5101,0.4899,-120,-110,,,True,,1.0,5-7 6-4 6-4,2026-03-22T23:05:56.779789,,1.0
+2026-03-22T01:16:23.554530,2026-03-22,Morelia,Hard,C,,Facundo Mena,Alan Sau Franco,,,0.9136,0.0864,-2500,+1000,,,True,,1.0,6-2 6-4,2026-03-22T23:06:30.230532,,1.0
+2026-03-22T01:16:23.558459,2026-03-22,Morelia,Hard,C,,Dan Martin,Alafia Ayeni,,,0.4592,0.5408,+105,-135,,,True,,2.0,2-6 6-3 7-6(4),2026-03-22T23:06:33.487513,,1.0
 2026-03-22T01:16:23.562946,2026-03-22,Morelia,Hard,C,,Manuel Sanchez Montemayor,Maxwell McKennon,,,0.1348,0.8652,+600,-1100,,,True,,,,,,
 2026-03-22T01:16:23.566912,2026-03-22,Murcia,Clay,C,F,Roberto Carballes Baena,Pablo Carreno-Busta,0.5165,0.4835,0.336,0.664,+180,-240,0.1805,NN-SURFACE_FIX,True,,2.0,4-6 3-6,2026-03-22T14:35:18.090592,0.0,1.0
-2026-03-22T01:16:23.570801,2026-03-22,Zadar,Clay,C,F,Stefano Travaglia,Arthur Gea,0.7379,0.2621,0.5,0.5,-115,-115,0.2379,NN-SURFACE_FIX,True,,,,,,
+2026-03-22T01:16:23.570801,2026-03-22,Zadar,Clay,C,F,Stefano Travaglia,Arthur Gea,0.7379,0.2621,0.5,0.5,-115,-115,0.2379,NN-SURFACE_FIX,True,,1.0,2-1 RET,2026-03-22T23:06:39.861877,1.0,0.0
 2026-03-22T01:16:23.574664,2026-03-22,Sao Paulo,Clay,C,,Connor Huertas del Pino,Eric Martins,,,0.8889,0.1111,-1600,+750,,,True,,,,,,
-2026-03-22T01:16:23.578573,2026-03-22,Sao Paulo,Clay,C,,Joao Eduardo Schiessl,Luka Bojicic Ono,,,0.9205,0.0795,-2800,+1100,,,True,,,,,,
+2026-03-22T01:16:23.578573,2026-03-22,Sao Paulo,Clay,C,,Joao Eduardo Schiessl,Luka Bojicic Ono,,,0.9205,0.0795,-2800,+1100,,,True,,1.0,6-0 6-0,2026-03-22T23:06:46.083793,,1.0
 2026-03-22T01:16:23.582464,2026-03-22,Sao Paulo,Clay,C,,Arklon Huertas del Pino Cordova,Ryan Augusto dos Santos,,,0.7798,0.2202,-500,+325,,,True,,,,,,
-2026-03-22T01:16:23.586332,2026-03-22,Sao Paulo,Clay,C,,Jose Pereira,Henrique Ortenblad Nogueira,,,0.8819,0.1181,-1400,+700,,,True,,,,,,
-2026-03-22T01:16:23.590237,2026-03-22,Sao Paulo,Clay,C,,Tomas Dummer Macedo,Rafael Tosetto,,,0.2202,0.7798,+325,-500,,,True,,,,,,
+2026-03-22T01:16:23.586332,2026-03-22,Sao Paulo,Clay,C,,Jose Pereira,Henrique Ortenblad Nogueira,,,0.8819,0.1181,-1400,+700,,,True,,1.0,6-3 6-2,2026-03-22T23:06:52.375943,,1.0
+2026-03-22T01:16:23.590237,2026-03-22,Sao Paulo,Clay,C,,Tomas Dummer Macedo,Rafael Tosetto,,,0.2202,0.7798,+325,-500,,,True,,2.0,6-2 6-1,2026-03-22T23:06:55.642883,,1.0
 2026-03-22T01:16:23.594138,2026-03-22,Sao Paulo,Clay,C,,Pedro Henrique Chabalgoity,Johannes Ingildsen,,,0.2687,0.7313,+250,-350,,,True,,,,,,
 2026-03-22T01:16:23.598038,2026-03-22,Sao Paulo,Clay,C,,Andre Souza Pinto de Camargo e Silva,Joao Vitor Goncalves Ceolin,,,0.1111,0.8889,+750,-1600,,,True,,,,,,
 2026-03-22T01:16:23.602196,2026-03-22,ITF Men Bakersfield,Carpet,A,,Michael Antonius,Andrew Fenty,,,0.2894,0.7106,+220,-330,,,True,,,,,,
+2026-03-24T12:50:09.070297,2026-03-24,Miami,Hard,A,R16,Tomas Martin Etcheverry,Tommy Paul,0.4109,0.5891,0.2665,0.7335,+260,-325,0.1292,v1.2.1,True,,,,,,
+2026-03-23T05:32:46.830875,2026-03-24,Miami,Hard,A,R16,Sebastian Korda,Martin Landaluce,0.7487,0.2513,0.7335,0.2665,-325,+260,-0.0132,v1.2.0,True,,2.0,2-6 7-6(6) 6-4,2026-03-24T12:29:02.323543,0.0,0.0
+2026-03-23T05:32:46.834987,2026-03-24,Miami,Hard,A,R16,Jiri Lehecka,Taylor Fritz,0.4099,0.5901,0.3614,0.6386,+165,-200,0.0333,v1.2.0,True,,,,,,
+2026-03-22T23:15:21.937768,2026-03-23,Naples,Clay,C,Q2,David Jorda Sanchis,Enrico Dalla Valle,0.4075,0.5925,0.4085,0.5915,+130,-170,-0.0009,NN-SURFACE_FIX,True,,2.0,6-3 6-3,2026-03-23T04:44:18.539075,1.0,1.0
+2026-03-22T23:15:21.941797,2026-03-23,Naples,Clay,C,Q2,John Sperle,Jakub Paul,0.3936,0.6064,0.3544,0.6456,+165,-220,0.0392,NN-SURFACE_FIX,True,,2.0,5-7 7-6(2) 6-2,2026-03-24T12:29:08.710909,1.0,1.0
+2026-03-22T23:15:21.945807,2026-03-22,Naples,Clay,C,,Michele Ribecai,Mariano Tammaro,,,0.8652,0.1348,-1100,+600,,,True,,1.0,6-0 6-1,2026-03-23T04:44:24.764096,,1.0
+2026-03-22T23:15:21.949828,2026-03-23,Naples,Clay,C,Q2,Andrea Guerrieri,Federico Bondioli,0.4456,0.5544,0.5306,0.4694,-130,EVEN,-0.085,NN-SURFACE_FIX,True,,2.0,6-2 7-6(6),2026-03-24T12:29:12.068915,1.0,0.0
+2026-03-22T23:15:21.953781,2026-03-23,Naples,Clay,C,Q2,Lorenzo Carboni,Francesco Forti,0.4015,0.5985,0.4797,0.5203,-105,-125,-0.0781,NN-SURFACE_FIX,True,,2.0,4-6 6-3 6-4,2026-03-24T12:29:15.323031,1.0,1.0
+2026-03-22T23:15:21.957857,2026-03-22,Naples,Clay,C,,Hynek Barton,Lorenzo Rottoli,,,0.8212,0.1788,-700,+425,,,True,,1.0,6-1 6-3,2026-03-24T12:29:18.635749,,1.0
+2026-03-22T23:15:21.962894,2026-03-23,Split,Hard,C,Q2,Dusan Obradovic,Ergi Kirkin,0.3301,0.6699,0.4459,0.5541,+110,-145,-0.1158,NN-SURFACE_FIX,True,,2.0,6-3 6-4,2026-03-23T04:45:07.047939,1.0,1.0
+2026-03-22T23:15:21.968005,2026-03-23,Split,Hard,C,Q2,Eero Vasa,Oleksii Krutykh,0.4221,0.5779,0.4165,0.5835,+125,-165,0.0056,NN-SURFACE_FIX,True,,2.0,6-3 6-2,2026-03-23T04:45:40.310034,1.0,1.0
+2026-03-22T23:15:21.973189,2026-03-23,Split,Hard,C,Q2,Filippo Romano,Giuseppe La Vela,0.7178,0.2822,0.7108,0.2892,-310,+225,0.0071,NN-SURFACE_FIX,True,,1.0,3-6 6-3 7-6(6),2026-03-24T12:29:21.891950,1.0,1.0
+2026-03-22T23:15:21.978313,2026-03-23,Split,Hard,C,Q2,Mirza Basic,Juan Cruz Martin Manzano,0.6928,0.3072,0.5408,0.4592,-135,+105,0.1521,NN-SURFACE_FIX,True,,2.0,4-6 6-1 6-0,2026-03-24T12:29:25.367336,0.0,0.0
+2026-03-22T23:15:21.983458,2026-03-23,Alicante,Hard,C,Q2,Abedallah Shelbayh,Svyatoslav Gulin,0.7395,0.2605,0.5,0.5,-115,-115,0.2395,NN-SURFACE_FIX,True,,2.0,6-7(3) 7-6(3) 6-1,2026-03-24T12:29:28.640383,0.0,0.0
+2026-03-22T23:15:21.988606,2026-03-23,Alicante,Hard,C,Q2,Benjamin Hassan,Dali Blanch,0.4349,0.5651,0.6379,0.3621,-210,+160,-0.2029,NN-SURFACE_FIX,True,,2.0,6-1 6-1,2026-03-24T12:29:32.033316,1.0,0.0
+2026-03-23T05:32:46.849208,2026-03-23,Alicante,Hard,C,Q2,Christoph Negritu,Ilya Ivashka,0.605,0.395,0.6091,0.3909,-185,+140,-0.0041,v1.2.0,True,,2.0,4-6 7-6(6) 6-2,2026-03-24T12:29:35.446914,0.0,0.0
+2026-03-22T23:15:21.998958,2026-03-22,Alicante,Hard,C,,Tiago Pereira,Rudolf Molleker,,,0.4367,0.5633,+115,-150,,,True,,1.0,4-6 6-2 6-0,2026-03-24T12:29:38.814350,,0.0
+2026-03-23T05:32:46.844674,2026-03-24,Miami,Hard,A,R16,Valentin Vacherot,Arthur Fils,0.4243,0.5757,0.2988,0.7012,+220,-275,0.1255,v1.2.0,True,,,,,,
+2026-03-23T05:32:46.853372,2026-03-23,Alicante,Hard,C,R32,Zdenek Kolar,Alejandro Moro Canas,0.3581,0.6419,0.5408,0.4592,-135,+105,-0.1826,v1.2.0,True,,2.0,6-4 2-6 6-0,2026-03-24T12:29:45.158024,1.0,0.0
+2026-03-23T05:32:46.857882,2026-03-23,Alicante,Hard,C,R32,Edas Butvilas,Pol Martin Tiffon,0.6175,0.3825,0.4592,0.5408,+105,-135,0.1583,v1.2.0,True,,1.0,6-3 6-3,2026-03-24T12:29:48.720640,1.0,0.0
+2026-03-23T05:32:46.862440,2026-03-23,,Hard,C,,Elmer Møller,Pablo Llamas Ruiz,,,0.5,0.5,,,,,True,,,,,,
+2026-03-23T05:32:46.866994,2026-03-23,Alicante,Hard,C,R32,Sebastian Ofner,Timofey Skatov,0.7054,0.2946,0.7162,0.2838,-325,+230,-0.0108,v1.2.0,True,,1.0,6-3 6-4,2026-03-24T12:29:55.110144,1.0,1.0
+2026-03-23T05:32:46.871747,2026-03-23,Split,Hard,C,R32,Jacopo Berrettini,Sascha Gueymard Wayenburg,0.4518,0.5482,0.4899,0.5101,-110,-120,-0.0381,v1.2.0,True,,2.0,6-1 6-0,2026-03-24T12:29:58.400851,1.0,1.0
+2026-03-23T05:32:46.876030,2026-03-23,Split,Hard,C,R32,Andrej Nedic,Jelle Sels,0.5042,0.4958,0.6875,0.3125,-275,+200,-0.1833,v1.2.0,True,,1.0,6-1 6-4,2026-03-24T12:30:01.744934,1.0,1.0
+2026-03-23T05:32:46.880533,2026-03-23,Split,Hard,C,R32,Martin Krumich,Felix Gill,0.4022,0.5978,0.4165,0.5835,+125,-165,-0.0143,v1.2.0,True,,2.0,6-3 7-5,2026-03-24T12:30:05.324732,1.0,1.0
+2026-03-23T05:32:46.885409,2026-03-23,Split,Hard,C,R32,Tom Gentzsch,Jonas Forejtek,0.5301,0.4699,0.3544,0.6456,+165,-220,0.1757,v1.2.0,True,,1.0,7-5 6-1,2026-03-24T12:30:08.763519,1.0,0.0
+2026-03-23T05:32:46.890069,2026-03-23,Naples,Hard,C,R32,Geoffrey Blancaneaux,Vitaliy Sachko,0.5756,0.4244,0.4592,0.5408,+105,-135,0.1164,v1.2.0,True,,2.0,6-2 6-1,2026-03-24T12:30:12.322049,0.0,1.0
+2026-03-23T05:32:46.894645,2026-03-23,Naples,Hard,C,R32,Sumit Nagal,Henri Squire,0.3564,0.6436,0.5541,0.4459,-145,+110,-0.1978,v1.2.0,True,,1.0,7-5 3-6 6-4,2026-03-24T12:30:15.657119,0.0,1.0
+2026-03-23T05:32:46.899290,2026-03-23,Naples,Hard,C,R32,Andrea Pellegrino,Filip Cristian Jianu,0.5778,0.4222,0.6768,0.3232,-260,+190,-0.099,v1.2.0,True,,1.0,6-1 6-4,2026-03-24T12:30:19.115630,1.0,1.0
+2026-03-23T05:32:46.904300,2026-03-23,Sao Paulo,Hard,C,Q2,Jose Pereira,Joao Vitor Goncalves Ceolin,0.6295,0.3705,0.5721,0.4279,-155,+120,0.0574,v1.2.0,True,,2.0,5-7 6-2 6-4,2026-03-24T12:30:22.545387,0.0,0.0
+2026-03-23T05:32:46.908917,2026-03-23,Sao Paulo,Hard,C,,Victor Braga,Breno Braga,,,0.7162,0.2838,-325,+230,,,True,,1.0,3-6 6-2 6-3,2026-03-24T12:30:25.772937,,1.0
+2026-03-23T05:32:46.913483,2026-03-23,Sao Paulo,Hard,C,Q2,Wilson Leite,Johannes Ingildsen,0.6485,0.3515,0.4367,0.5633,+115,-150,0.2118,v1.2.0,True,,2.0,6-0 6-4,2026-03-24T12:30:29.117272,0.0,1.0
+2026-03-23T05:32:46.918715,2026-03-23,Sao Paulo,Hard,C,R32,Juan Carlos Prado Angelo,Daniel Dutra da Silva,0.7837,0.2163,0.664,0.336,-240,+180,0.1197,v1.2.0,True,,1.0,3-6 6-3 6-2,2026-03-24T12:30:32.414622,1.0,1.0
+2026-03-23T05:32:46.923092,2026-03-23,Sao Paulo,Hard,C,,Juan Bautista Torres,Murkel Dellien,,,0.6571,0.3429,-230,+175,,,True,,,,,,
+2026-03-23T05:32:46.927738,2026-03-23,Sao Paulo,Hard,C,R32,Pedro Sakamoto,Thiago Monteiro,0.2811,0.7189,0.1636,0.8364,+475,-800,0.1174,v1.2.0,True,,2.0,6-4 4-6 6-4,2026-03-24T12:30:38.772054,1.0,1.0
+2026-03-23T05:32:46.932408,2026-03-23,Sao Paulo,Hard,C,R32,Gustavo Heide,Roman Andres Burruchaga,0.3978,0.6022,0.3909,0.6091,+140,-185,0.0068,v1.2.0,True,,2.0,1-6 7-6(5) 6-4,2026-03-24T12:30:42.906038,1.0,1.0
+2026-03-23T05:32:46.937018,2026-03-24,Sao Paulo,Hard,C,R32,Lautaro Midon,Alvaro Guillen Meza,0.4895,0.5105,0.4459,0.5541,+110,-145,0.0436,v1.2.0,True,,2.0,6-3 7-6(5),2026-03-24T12:30:46.198249,1.0,1.0
+2026-03-23T05:32:46.941576,2026-03-23,Bucaramanga,Hard,C,Q2,Matteo Covato,Christopher Li,0.6887,0.3113,0.2941,0.7059,+220,-300,0.3946,v1.2.0,True,,2.0,7-6(3) 0-6 6-2,2026-03-24T12:30:49.416047,0.0,1.0
+2026-03-23T05:32:46.946159,2026-03-23,Bucaramanga,Hard,C,,Maximo Zeitune,Daniel Salazar Martinez,,,0.766,0.234,-450,+300,,,True,,2.0,6-4 6-7(3) 6-1,2026-03-24T12:30:52.709609,,0.0
+2026-03-23T05:32:46.950472,2026-03-23,Bucaramanga,Hard,C,,Natan Rodrigues,Nicolas Villalon Valdes,,,0.4797,0.5203,-105,-125,,,True,,,,,,
+2026-03-23T05:32:46.955261,2026-03-23,Bucaramanga,Hard,C,Q2,Benjamin Torrealba,Noah Schachter,0.4969,0.5031,0.7434,0.2566,-385,+265,-0.2465,v1.2.0,True,,1.0,2-2 RET,2026-03-24T12:30:58.982564,0.0,1.0
+2026-03-23T05:32:46.960185,2026-03-23,Bucaramanga,Hard,C,Q2,Joao Victor Couto Loureiro,Benjamin Thomas George,0.4613,0.5387,0.5203,0.4797,-125,-105,-0.059,v1.2.0,True,,2.0,6-2 6-1,2026-03-24T12:31:02.243984,1.0,0.0
+2026-03-23T05:32:46.964786,2026-03-23,Morelia,Hard,C,,Alafia Ayeni,Guillermo Tunas,,,0.5,0.5,,,,,True,,,,,,
+2026-03-23T05:32:46.969204,2026-03-23,Morelia,Hard,C,Q2,Patrick Zahraj,Miguel Tobon,0.5572,0.4428,0.4694,0.5306,EVEN,-130,0.0878,v1.2.0,True,,2.0,7-5 5-7 6-3,2026-03-24T12:31:08.510361,0.0,1.0
+2026-03-23T05:32:46.973619,2026-03-23,French Open Men's Singles,Hard,G,,Carlos Alcaraz,The Field,,,0.406,0.594,+135,-165,,,True,,,,,,
+2026-03-23T05:32:46.982415,2026-03-23,French Open Men's Singles,Hard,G,,Jannik Sinner,The Field,,,0.3836,0.6164,+150,-180,,,True,,,,,,
+2026-03-23T05:32:46.986599,2026-03-23,,Hard,G,,Carlos Alcaraz,The ‪Field,,,0.5,0.5,,,,,True,,,,,,
+2026-03-24T12:50:09.077449,2026-03-24,Miami,Hard,A,R16,Alex Michelsen,Jannik Sinner,0.1303,0.8697,0.0734,0.9266,+1200,-3300,0.0569,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.082465,2026-03-24,Miami,Hard,A,R16,Terence Atmane,Frances Tiafoe,0.3676,0.6324,0.3535,0.6465,+170,-210,0.0142,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.087524,2026-03-24,Miami,Hard,A,R16,Ugo Humbert,Francisco Cerundolo,0.5028,0.4972,0.5108,0.4892,-115,-105,-0.008,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.092506,2026-03-24,Miami,Hard,A,R16,Quentin Halys,Alexander Zverev,0.12,0.88,0.1589,0.8411,+500,-750,-0.0388,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.097488,2026-03-24,Morelia,Hard,C,R32,Luka Pavlovic,Adam Walton,0.2891,0.7109,0.1788,0.8212,+425,-700,0.1103,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.102149,2026-03-24,Morelia,Hard,C,R32,Bu Yunchaokete,Max Wiskandt,0.6944,0.3056,0.8553,0.1447,-1000,+550,-0.1609,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.107404,2026-03-24,Morelia,Hard,C,R32,Robin Catry,Tristan Schoolkate,0.3922,0.6078,0.1875,0.8125,+400,-650,0.2047,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.112260,2026-03-24,Morelia,Hard,C,,Rodrigo Pacheco Mendez,Alafia Ayeni,,,0.7769,0.2231,-485,+320,,,True,,,,,,
+2026-03-24T12:50:09.117263,2026-03-24,Morelia,Hard,C,,Alex Hernandez,Andres Andrade,,,0.2258,0.7742,+315,-475,,,True,,,,,,
+2026-03-24T12:50:09.122083,2026-03-24,Bucaramanga,Hard,C,R32,Benjamin Thomas George,Ivan Marrero Curbelo,0.441,0.559,0.336,0.664,+180,-240,0.1051,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.128060,2026-03-24,Bucaramanga,Hard,C,R32,Franco Roncadelli,Samuel Heredia,0.6591,0.3409,0.8212,0.1788,-700,+425,-0.1621,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.133477,2026-03-24,Bucaramanga,Hard,C,R32,Cannon Kingsley,Adria Soriano Barrera,0.5639,0.4361,0.5,0.5,-115,-115,0.0639,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.138731,2026-03-24,Sao Paulo,Hard,C,R32,Joao Vitor Goncalves Ceolin,Jaime Faria,0.1126,0.8874,0.095,0.905,+900,-2000,0.0175,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.146544,2026-03-24,Sao Paulo,Hard,C,,Juan Pablo Varillas,Luis Guto Miguel,,,0.6315,0.3685,-205,+155,,,True,,,,,,
+2026-03-24T12:50:09.153199,2026-03-24,Sao Paulo,Hard,C,,Alex Barrena,Igor Marcondes,,,0.4165,0.5835,+125,-165,,,True,,,,,,
+2026-03-24T12:50:09.162161,2026-03-24,Yokkaichi,Hard,C,R16,Soon Woo Kwon,August Holmgren,0.5536,0.4464,0.7434,0.2566,-385,+265,-0.1898,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.170335,2026-03-24,Yokkaichi,Hard,C,R16,Yasutaka Uchiyama,Dan Added,0.4096,0.5904,0.5101,0.4899,-120,-110,-0.1006,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.178304,2026-03-24,Yokkaichi,Hard,C,R16,Fajing Sun,Masamichi Imamura,0.5244,0.4756,0.6161,0.3839,-190,+145,-0.0917,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.183599,2026-03-24,Yokkaichi,Hard,C,R16,James McCabe,Hayato Matsuoka,0.5951,0.4049,0.625,0.375,-200,+150,-0.0299,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.189034,2026-03-25,Split,Hard,C,R16,Andrej Nedic,Dimitar Kuzmanov,0.3452,0.6548,0.4592,0.5408,+105,-135,-0.114,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.195261,2026-03-25,Split,Hard,C,R16,Frederico Ferreira Silva,Sascha Gueymard Wayenburg,0.5226,0.4774,0.5306,0.4694,-130,EVEN,-0.008,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.200878,2026-03-25,Split,Hard,C,R16,Matej Dodig,Sandro Kopp,0.7202,0.2798,0.6515,0.3485,-225,+170,0.0688,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.206346,2026-03-25,Split,Hard,C,R16,Mili Poljicak,Felix Gill,0.3326,0.6674,0.4085,0.5915,+130,-170,-0.0759,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.212037,2026-03-25,Split,Hard,C,R16,Tom Gentzsch,Filippo Romano,0.6148,0.3852,0.5915,0.4085,-170,+130,0.0233,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.217932,2026-03-25,Alicante,Hard,C,R16,Lloyd Harris,Marco Cecchinato,0.6396,0.3604,0.5541,0.4459,-145,+110,0.0855,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.227996,2026-03-25,Alicante,Hard,C,R16,Edas Butvilas,Jesper de Jong,0.3841,0.6159,0.3125,0.6875,+200,-275,0.0716,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.235765,2026-03-25,Alicante,Hard,C,R16,Pablo Llamas Ruiz,Dali Blanch,0.628,0.372,0.7798,0.2202,-500,+325,-0.1519,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.247475,2026-03-25,Naples,Hard,C,R16,Federico Cina,Francesco Forti,0.7514,0.2486,0.7108,0.2892,-310,+225,0.0406,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.254411,2026-03-25,Naples,Hard,C,R16,Sumit Nagal,Federico Bondioli,0.497,0.503,0.6379,0.3621,-210,+160,-0.1409,v1.2.1,True,,,,,,
+2026-03-24T12:50:09.262035,2026-03-24,ITF Men Swan Hill,Hard,A,,Nikolas Baker,Zachary Adam-Gedge,,,0.4615,0.5385,EVEN,-140,,,True,,,,,,
+2026-03-24T12:50:09.268424,2026-03-24,ITF Men Swan Hill,Hard,A,,Jun Hao Luo,Ashton McLeod,,,0.4484,0.5516,+105,-150,,,True,,,,,,
+2026-03-24T12:50:09.274246,2026-03-24,,Hard,A,,Pavle Marinkov,Benjamin O'Connell,,,0.5,0.5,,,,,True,,,,,,
+2026-03-24T12:50:09.280663,2026-03-24,ITF Men Swan Hill,Hard,A,,Stefan Storch,Alec Braund,,,0.8225,0.1775,-750,+425,,,True,,,,,,
+2026-03-24T12:50:09.287510,2026-03-24,ITF Men Swan Hill,Hard,A,,Adrian Arcon,Joshua Charlton,,,0.1099,0.8901,+750,-2000,,,True,,,,,,
+2026-03-24T12:50:09.294158,2026-03-24,ITF Men Swan Hill,Hard,A,,Oliver Clark Anderson,Enzo Aguiard,,,0.3556,0.6444,+160,-230,,,True,,,,,,
+2026-03-24T12:50:09.301332,2026-03-24,ITF Men Swan Hill,Hard,A,,Ren Nakamura,Petar Jovic,,,0.6869,0.3131,-290,+195,,,True,,,,,,
+2026-03-24T12:50:09.307811,2026-03-24,ITF Men Swan Hill,Hard,A,,Scott Jones,Jack Bruce-Smith,,,0.8225,0.1775,-750,+425,,,True,,,,,,
+2026-03-24T12:50:09.315258,2026-03-24,ITF Men Punta del Este,Hard,A,,Juan Bautista Otegui,Dario Acosta,,,0.9151,0.0849,-5000,+1000,,,True,,,,,,
+2026-03-24T12:50:09.321850,2026-03-24,ITF Men Punta del Este,Hard,A,,Bastian Malla,Gabriel Schenekenberg,,,0.8964,0.1036,-2500,+800,,,True,,,,,,
+2026-03-24T12:50:09.328454,2026-03-24,ITF Men Punta del Este,Hard,A,,Fernando Cavallo,Valentin Guadagno,,,0.8451,0.1549,-1000,+500,,,True,,,,,,
+2026-03-24T12:50:09.335163,2026-03-24,ITF Men Maanshan,Hard,A,,Linang Xiao,Zurui Zhang,,,0.9565,0.0435,-100000,+2100,,,True,,,,,,
+2026-03-24T12:50:09.342289,2026-03-24,French Open Men's Singles,Hard,G,,Carlos Alcaraz,The Field,,,0.406,0.594,+135,-165,,,True,,,,,,
+2026-03-24T12:50:09.354817,2026-03-24,French Open Men's Singles,Hard,G,,Jannik Sinner,The Field,,,0.3836,0.6164,+150,-180,,,True,,,,,,
+2026-03-24T12:50:09.360776,2026-03-24,,Hard,G,,Carlos Alcaraz,The ‪Field,,,0.5,0.5,,,,,True,,,,,,

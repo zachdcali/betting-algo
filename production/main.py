@@ -208,7 +208,7 @@ class LiveBettingOrchestrator:
 
             has_defaulted = False
             try:
-                features = self.feature_engine.build_143_features(
+                features = self.feature_engine.build_141_features(
                     player1_name=p1,
                     player2_name=p2,
                     match_date=match_date,

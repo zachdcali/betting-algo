@@ -55,7 +55,7 @@ for p1, p2, tourney, level, surface, o1, o2 in all_matches:
         'Market_P2_ImpliedProb': round(to_prob(o2), 4),
     }
     try:
-        f = calc.build_143_features(
+        f = calc.build_141_features(
             player1_name=p1, player2_name=p2,
             match_date=match_date, surface=surface,
             tournament_level=level, draw_size=96,
