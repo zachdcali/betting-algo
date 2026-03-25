@@ -167,6 +167,15 @@ class LiveBettingOrchestrator:
         # Shared session cache: avoids duplicate TA requests within a single run
         session_cache = {}
 
+        # Filter out futures/outrights before feature extraction
+        odds_df = odds_df[~odds_df.apply(
+            lambda r: 'field' in str(r.get('player1_raw', '')).lower()
+                   or 'field' in str(r.get('player2_raw', '')).lower()
+                   or 'futures' in str(r.get('event', '')).lower()
+                   or 'outright' in str(r.get('event', '')).lower(),
+            axis=1
+        )].copy()
+
         feature_rows = []
         for idx, row in odds_df.iterrows():
             p1 = row.get('player1_normalized') or row.get('player1_raw', '')
@@ -374,6 +383,14 @@ class LiveBettingOrchestrator:
             for _, pred_row in predictions_df.iterrows():
                 p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
                 p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
+
+                # Skip futures/outrights ("vs The Field", "futures" in event name)
+                if 'field' in str(p2).lower() or 'field' in str(p1).lower():
+                    continue
+                event = str(pred_row.get('event', '') or '')
+                if 'futures' in event.lower() or 'outright' in event.lower():
+                    continue
+
                 model_p1 = pred_row.get('player1_win_prob') or pred_row.get('p1_win_prob')
                 if model_p1 is None:
                     continue
