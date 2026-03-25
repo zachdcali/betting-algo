@@ -452,6 +452,18 @@ class LiveBettingOrchestrator:
                 # Use TA-inferred match date (tourney_start + round_offset) — Bovada only gives clock time
                 match_date = pred_row.get('meta_match_date') or today
                 model_version = pred_row.get('model_version', 'NN-SURFACE_FIX')
+                # Get ranks from features
+                p1_rank = pred_row.get('Player1_Rank')
+                p2_rank = pred_row.get('Player2_Rank')
+                if pd.notna(p1_rank) and float(p1_rank) > 0:
+                    p1_rank = float(p1_rank)
+                else:
+                    p1_rank = None
+                if pd.notna(p2_rank) and float(p2_rank) > 0:
+                    p2_rank = float(p2_rank)
+                else:
+                    p2_rank = None
+
                 log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
@@ -459,6 +471,7 @@ class LiveBettingOrchestrator:
                     match_date=match_date,
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
+                    p1_rank=p1_rank, p2_rank=p2_rank,
                     p1_odds_american=o1, p2_odds_american=o2,
                     p1_odds_decimal=od1, p2_odds_decimal=od2,
                     spread_handicap=sph, spread_odds_p1=sp1, spread_odds_p2=sp2,
