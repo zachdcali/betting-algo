@@ -141,10 +141,15 @@ def log_prediction(
             )
             if mask.any():
                 idx = df[mask].index[0]
-                # Preserve original market odds — opening lines are less efficient
+                # Preserve original odds + model probs — opening lines are less efficient
                 # and more valuable for edge analysis than lines closer to match time.
-                PRESERVE_IF_SET = {'market_p1_prob', 'market_p2_prob',
-                                   'p1_odds_american', 'p2_odds_american'}
+                PRESERVE_IF_SET = {'model_p1_prob', 'model_p2_prob',
+                                   'market_p1_prob', 'market_p2_prob',
+                                   'p1_odds_american', 'p2_odds_american',
+                                   'p1_odds_decimal', 'p2_odds_decimal',
+                                   'spread_handicap', 'spread_odds_p1', 'spread_odds_p2',
+                                   'total_games', 'total_odds_over', 'total_odds_under',
+                                   'edge_p1', 'model_version', 'p1_rank', 'p2_rank'}
                 for col, val in row.items():
                     if col not in df.columns:
                         continue
