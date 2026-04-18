@@ -193,6 +193,9 @@ class KellyStakeCalculator:
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'event': stake_info.get('event', 'Unknown Event'),
                 'match': f"{stake_info['player1_raw']} vs {stake_info['player2_raw']}",
+                'match_uid': stake_info.get('match_uid'),
+                'feature_snapshot_id': stake_info.get('feature_snapshot_id'),
+                'run_id': stake_info.get('run_id'),
                 'bet_on': stake_info['bet_player'],
                 'bet_on_player1': stake_info['bet_on_player1'],
                 'odds_decimal': stake_info['bet_odds'],
@@ -207,6 +210,8 @@ class KellyStakeCalculator:
                 'group_key': stake_info['group_key'],
                 'bankroll': stake_info['bankroll_snapshot'],
                 'model_version': stake_info.get('model_version', 'NN-143'),
+                'match_date': stake_info.get('meta_match_date', stake_info.get('match_date', '')),
+                'match_start_time': stake_info.get('match_time', ''),
                 'status': 'pending'
             }
             bet_slips.append(bet_slip)

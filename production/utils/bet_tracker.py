@@ -11,6 +11,29 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 
+from logging_utils import ensure_csv_columns, normalize_name
+
+
+BETS_COLUMNS = [
+    'bet_id', 'session_id', 'timestamp', 'event', 'match', 'match_uid', 'feature_snapshot_id',
+    'run_id', 'bet_on', 'bet_on_player1', 'odds_decimal', 'stake', 'stake_fraction',
+    'model_prob', 'market_prob', 'edge', 'kelly_fraction', 'potential_profit',
+    'potential_loss', 'bankroll_before', 'model_version', 'status', 'outcome',
+    'actual_profit', 'bankroll_after', 'settled_timestamp', 'match_date',
+    'match_start_time', 'notes'
+]
+
+BANKROLL_COLUMNS = [
+    'timestamp', 'session_id', 'bankroll', 'change_amount', 'change_reason',
+    'total_staked', 'num_pending_bets', 'num_settled_bets'
+]
+
+SESSION_COLUMNS = [
+    'session_id', 'start_time', 'end_time', 'initial_bankroll', 'final_bankroll',
+    'total_bets_placed', 'total_staked', 'total_profit_loss', 'win_rate',
+    'avg_odds', 'avg_edge', 'kelly_multiplier_used', 'notes'
+]
+
 class BetTracker:
     """Track bets, settle results, and maintain bankroll history"""
     
@@ -28,33 +51,9 @@ class BetTracker:
     
     def _initialize_files(self):
         """Initialize tracking files with headers"""
-        # All bets file
-        if not self.bets_file.exists():
-            bets_columns = [
-                'bet_id', 'session_id', 'timestamp', 'event', 'match', 'bet_on', 'bet_on_player1',
-                'odds_decimal', 'stake', 'stake_fraction', 'model_prob', 'market_prob', 'edge',
-                'kelly_fraction', 'potential_profit', 'potential_loss', 'bankroll_before',
-                'model_version', 'status', 'outcome', 'actual_profit', 'bankroll_after',
-                'settled_timestamp', 'match_date', 'notes'
-            ]
-            pd.DataFrame(columns=bets_columns).to_csv(self.bets_file, index=False)
-        
-        # Bankroll history file
-        if not self.bankroll_file.exists():
-            bankroll_columns = [
-                'timestamp', 'session_id', 'bankroll', 'change_amount', 'change_reason',
-                'total_staked', 'num_pending_bets', 'num_settled_bets'
-            ]
-            pd.DataFrame(columns=bankroll_columns).to_csv(self.bankroll_file, index=False)
-        
-        # Sessions file
-        if not self.session_file.exists():
-            session_columns = [
-                'session_id', 'start_time', 'end_time', 'initial_bankroll', 'final_bankroll',
-                'total_bets_placed', 'total_staked', 'total_profit_loss', 'win_rate',
-                'avg_odds', 'avg_edge', 'kelly_multiplier_used', 'notes'
-            ]
-            pd.DataFrame(columns=session_columns).to_csv(self.session_file, index=False)
+        ensure_csv_columns(self.bets_file, BETS_COLUMNS).to_csv(self.bets_file, index=False)
+        ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS).to_csv(self.bankroll_file, index=False)
+        ensure_csv_columns(self.session_file, SESSION_COLUMNS).to_csv(self.session_file, index=False)
     
     def start_session(self, initial_bankroll: float, kelly_multiplier: float, notes: str = "") -> str:
         """Start a new betting session"""
@@ -106,6 +105,9 @@ class BetTracker:
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'event': bet['event'],
                 'match': bet['match'],
+                'match_uid': bet.get('match_uid'),
+                'feature_snapshot_id': bet.get('feature_snapshot_id'),
+                'run_id': bet.get('run_id'),
                 'bet_on': bet['bet_on'],
                 'bet_on_player1': bet['bet_on_player1'],
                 'odds_decimal': bet['odds_decimal'],
@@ -124,13 +126,14 @@ class BetTracker:
                 'actual_profit': None,
                 'bankroll_after': None,
                 'settled_timestamp': None,
-                'match_date': bet.get('match_time', ''),
+                'match_date': bet.get('match_date', ''),
+                'match_start_time': bet.get('match_start_time', ''),
                 'notes': ''
             }
             bet_records.append(bet_record)
         
         # Append to all bets file
-        all_bets_df = pd.read_csv(self.bets_file)
+        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
         new_bets_df = pd.DataFrame(bet_records)
         all_bets_df = pd.concat([all_bets_df, new_bets_df], ignore_index=True)
         all_bets_df.to_csv(self.bets_file, index=False)
@@ -140,6 +143,7 @@ class BetTracker:
         new_bankroll = current_bankroll  # Bankroll doesn't decrease until bet settles
         self.log_bankroll_change(session_id, new_bankroll, -total_staked, 
                                 f"Placed {len(bet_records)} bets")
+        self._refresh_session_record(session_id)
         
         print(f"📝 Logged {len(bet_records)} new bets")
         print(f"   Total stakes: ${total_staked:.2f}")
@@ -147,6 +151,9 @@ class BetTracker:
     def settle_bet(self, bet_id: str, won: bool, notes: str = "") -> float:
         """Settle a specific bet and return profit/loss"""
         all_bets_df = pd.read_csv(self.bets_file)
+        for col in ['status', 'outcome', 'settled_timestamp', 'notes']:
+            if col in all_bets_df.columns:
+                all_bets_df[col] = all_bets_df[col].astype(object)
         
         # Find the bet
         bet_idx = all_bets_df[all_bets_df['bet_id'] == bet_id].index
@@ -188,6 +195,7 @@ class BetTracker:
         session_id = bet['session_id']
         result_desc = f"Settled bet: {bet['match']} ({'WIN' if won else 'LOSS'})"
         self.log_bankroll_change(session_id, new_bankroll, actual_profit, result_desc)
+        self._refresh_session_record(session_id)
         
         print(f"✅ Settled bet {bet_id}: {outcome.upper()}")
         print(f"   Profit/Loss: ${actual_profit:+.2f}")
@@ -273,9 +281,78 @@ class BetTracker:
             summary['roi'] = (summary['total_profit_loss'] / summary['total_staked']) * 100
         
         return summary
+
+    def _refresh_session_record(self, session_id: str):
+        """Synchronize cached session summary columns with the underlying bets file."""
+        summary = self.get_session_summary(session_id)
+        if 'error' in summary:
+            return
+
+        sessions_df = pd.read_csv(self.session_file)
+        if 'end_time' in sessions_df.columns:
+            sessions_df['end_time'] = sessions_df['end_time'].astype(object)
+        session_idx = sessions_df[sessions_df['session_id'] == session_id].index
+        if len(session_idx) == 0:
+            return
+
+        idx = session_idx[0]
+        sessions_df.loc[idx, 'total_bets_placed'] = summary['total_bets']
+        sessions_df.loc[idx, 'total_staked'] = summary['total_staked']
+        sessions_df.loc[idx, 'total_profit_loss'] = summary['total_profit_loss']
+        sessions_df.loc[idx, 'win_rate'] = summary['win_rate']
+        sessions_df.loc[idx, 'avg_odds'] = summary['avg_odds']
+        sessions_df.loc[idx, 'avg_edge'] = summary['avg_edge']
+
+        if summary['pending_bets'] == 0 and summary['settled_bets'] > 0:
+            sessions_df.loc[idx, 'end_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            sessions_df.loc[idx, 'final_bankroll'] = self.get_current_bankroll()
+
+        sessions_df.to_csv(self.session_file, index=False)
+
+    def settle_pending_bets_for_match(
+        self,
+        match_uid: str = None,
+        p1: str = None,
+        p2: str = None,
+        actual_winner: int = None,
+        notes: str = "",
+    ) -> int:
+        """Auto-settle any pending bets linked to a finished match."""
+        if actual_winner not in (1, 2):
+            return 0
+
+        pending = self.get_pending_bets()
+        if pending.empty:
+            return 0
+
+        candidates = pd.DataFrame()
+        if match_uid and 'match_uid' in pending.columns:
+            candidates = pending[pending['match_uid'].fillna('') == match_uid]
+
+        if candidates.empty and p1 and p2:
+            p1_norm = normalize_name(p1)
+            p2_norm = normalize_name(p2)
+
+            def _match_pair(match_text: str) -> bool:
+                parts = [normalize_name(part) for part in str(match_text).split(' vs ')]
+                if len(parts) != 2:
+                    return False
+                return parts == [p1_norm, p2_norm] or parts == [p2_norm, p1_norm]
+
+            candidates = pending[pending['match'].apply(_match_pair)]
+
+        settled = 0
+        auto_note = notes or "Auto-settled from Tennis Abstract"
+        for _, bet in candidates.iterrows():
+            won = bool((actual_winner == 1 and bool(bet['bet_on_player1'])) or (actual_winner == 2 and not bool(bet['bet_on_player1'])))
+            self.settle_bet(bet['bet_id'], won=won, notes=auto_note)
+            settled += 1
+
+        return settled
     
     def end_session(self, session_id: str) -> Dict:
         """End a betting session and update summary"""
+        self._refresh_session_record(session_id)
         summary = self.get_session_summary(session_id)
         
         # Update sessions file

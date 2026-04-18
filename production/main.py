@@ -18,11 +18,12 @@ sys.path.append(str(Path(__file__).parent))
 
 from odds.fetch_bovada import fetch_bovada_tennis_odds, save_odds_data
 from features.ta_feature_calculator import TAFeatureCalculator
-from models.inference import TennisPredictor, calculate_betting_edges, EXACT_141_FEATURES
+from models.inference import TennisPredictor, XGBoostPredictor, RandomForestPredictor, calculate_betting_edges, EXACT_141_FEATURES
 from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
+from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
 from scraping.atp_rankings_scraper import fetch_atp_rankings, save_rankings
 
 class LiveBettingOrchestrator:
@@ -31,6 +32,8 @@ class LiveBettingOrchestrator:
     def __init__(self, config_path: str = None):
         self.config = self._load_config(config_path)
         self.predictor = TennisPredictor()
+        self.xgb_predictor = XGBoostPredictor()
+        self.rf_predictor = RandomForestPredictor()
         self.calculator = KellyStakeCalculator(
             kelly_multiplier=self.config.get('kelly_multiplier', 0.18),
             edge_threshold=self.config.get('edge_threshold', 0.02),
@@ -41,10 +44,18 @@ class LiveBettingOrchestrator:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.bet_tracker = BetTracker(str(self.logs_dir))
         self.feature_engine = TAFeatureCalculator()
+        self.run_id = None
+        self.run_started_at = None
 
         # Tournament resolver for surface/level/draw/round
         tournaments_map_path = Path(self.config.get('data_dir', '../data')) / 'tournaments_map.csv'
         self.tournament_resolver = TournamentResolver(str(tournaments_map_path)) if tournaments_map_path.exists() else None
+
+    def _start_run_context(self):
+        """Create per-run metadata shared across odds, features, and predictions."""
+        started = utc_now()
+        self.run_id = make_run_id(started)
+        self.run_started_at = started.replace(microsecond=0).isoformat()
 
     @staticmethod
     def parse_match_date(match_time_str: str) -> datetime:
@@ -162,6 +173,9 @@ class LiveBettingOrchestrator:
         if odds_df.empty:
             return pd.DataFrame()
 
+        if not self.run_id:
+            self._start_run_context()
+
         print("🔧 Extracting features from Tennis Abstract...")
 
         # Shared session cache: avoids duplicate TA requests within a single run
@@ -243,12 +257,49 @@ class LiveBettingOrchestrator:
             missing_from_dict = [k for k in EXACT_141_FEATURES if k not in features]
             if missing_from_dict and status == "ok":
                 print(f"      ⚠️  MISSING FROM FEATURE DICT (filled 0): {missing_from_dict}")
+                # Treat missing-from-dict features as defaulted too
+                existing_defaults = features.get('_defaulted_features', '')
+                missing_str = ','.join(missing_from_dict)
+                features['_defaulted_features'] = f"{existing_defaults},{missing_str}" if existing_defaults else missing_str
+                has_defaulted = True
             ordered_features = {k: features.get(k, 0.0) for k in EXACT_141_FEATURES}
+
+            resolved_round = features.get('_resolved_round_code') or round_code or ''
+            resolved_match_date = features.get('_resolved_match_date') or ''
+            if not resolved_match_date:
+                fallback_dt = pd.to_datetime(
+                    row.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    errors='coerce',
+                )
+                resolved_match_date = (
+                    fallback_dt.date().isoformat()
+                    if pd.notna(fallback_dt)
+                    else match_date.date().isoformat()
+                )
+
+            match_uid = build_match_uid(
+                row.get('player1_raw', p1),
+                row.get('player2_raw', p2),
+                resolved_match_date,
+                row.get('event', ''),
+                resolved_round,
+                surface,
+            )
+            feature_snapshot_id = build_feature_snapshot_id(
+                match_uid,
+                self.run_id,
+                row.get('player1_raw', p1),
+                row.get('player2_raw', p2),
+            )
 
             # Metadata (not fed to model)
             ordered_features.update({
+                'run_id': self.run_id,
+                'run_started_at': self.run_started_at,
                 '_has_defaulted_features': has_defaulted,
                 'match_id': idx,
+                'match_uid': match_uid,
+                'feature_snapshot_id': feature_snapshot_id,
                 'player1_raw': row.get('player1_raw', p1),
                 'player2_raw': row.get('player2_raw', p2),
                 'event': row.get('event', ''),
@@ -257,8 +308,8 @@ class LiveBettingOrchestrator:
                 'status': status,
                 'meta_level_input': tournament_level,
                 'meta_surface_input': surface,
-                'meta_round_input': features.get('_resolved_round_code') or round_code or '',
-                'meta_match_date': features.get('_resolved_match_date') or '',
+                'meta_round_input': resolved_round,
+                'meta_match_date': resolved_match_date,
                 'meta_defaulted_features': features.get('_defaulted_features') or '',
                 'meta_draw_input': draw_size,
                 'meta_resolver_source': resolver_source
@@ -278,16 +329,58 @@ class LiveBettingOrchestrator:
         return features_df
     
     def generate_predictions(self, features_df: pd.DataFrame) -> pd.DataFrame:
-        """Generate model predictions"""
+        """Generate model predictions (NN + XGBoost)"""
         if features_df.empty:
             return pd.DataFrame()
-            
+
         print("🎯 Generating predictions...")
         predictions_df = self.predictor.predict_slate(features_df)
-        
+
+        # Also run XGBoost on each match
+        if not self.xgb_predictor.is_loaded:
+            self.xgb_predictor.load_model()
+        if self.xgb_predictor.is_loaded:
+            xgb_p1_probs = []
+            xgb_p2_probs = []
+            for _, row in predictions_df.iterrows():
+                if row.get('prediction_status') != 'success':
+                    xgb_p1_probs.append(None)
+                    xgb_p2_probs.append(None)
+                    continue
+                xgb_result = self.xgb_predictor.predict_match_probability(row.to_dict())
+                if 'error' not in xgb_result:
+                    xgb_p1_probs.append(xgb_result['xgb_p1_prob'])
+                    xgb_p2_probs.append(xgb_result['xgb_p2_prob'])
+                else:
+                    xgb_p1_probs.append(None)
+                    xgb_p2_probs.append(None)
+            predictions_df['xgb_p1_prob'] = xgb_p1_probs
+            predictions_df['xgb_p2_prob'] = xgb_p2_probs
+
+        # Also run Random Forest on each match
+        if not self.rf_predictor.is_loaded:
+            self.rf_predictor.load_model()
+        if self.rf_predictor.is_loaded:
+            rf_p1_probs = []
+            rf_p2_probs = []
+            for _, row in predictions_df.iterrows():
+                if row.get('prediction_status') != 'success':
+                    rf_p1_probs.append(None)
+                    rf_p2_probs.append(None)
+                    continue
+                rf_result = self.rf_predictor.predict_match_probability(row.to_dict())
+                if 'error' not in rf_result:
+                    rf_p1_probs.append(rf_result['rf_p1_prob'])
+                    rf_p2_probs.append(rf_result['rf_p2_prob'])
+                else:
+                    rf_p1_probs.append(None)
+                    rf_p2_probs.append(None)
+            predictions_df['rf_p1_prob'] = rf_p1_probs
+            predictions_df['rf_p2_prob'] = rf_p2_probs
+
         if not predictions_df.empty:
             print(f"✅ Generated predictions for {len(predictions_df)} matches")
-        
+
         return predictions_df
     
     def calculate_edges_and_stakes(self, predictions_df: pd.DataFrame, odds_df: pd.DataFrame) -> pd.DataFrame:
@@ -439,6 +532,7 @@ class LiveBettingOrchestrator:
                     surface = pred_row.get('meta_surface_input', o_row.get('surface', 'Hard'))
                     level = pred_row.get('meta_level_input', o_row.get('tourney_level', ''))
                     match_time = o_row.get('match_time', '')
+                    odds_scraped_at = o_row.get('scrape_time_utc', '') or o_row.get('timestamp', '')
                 else:
                     mkt_p1, mkt_p2, o1, o2 = 0.5, 0.5, None, None
                     od1, od2 = None, None
@@ -448,6 +542,7 @@ class LiveBettingOrchestrator:
                     surface = pred_row.get('meta_surface_input', 'Hard')
                     level = pred_row.get('meta_level_input', '')
                     match_time = ''
+                    odds_scraped_at = ''
 
                 # Use TA-inferred match date (tourney_start + round_offset) — Bovada only gives clock time
                 match_date = pred_row.get('meta_match_date') or today
@@ -464,11 +559,32 @@ class LiveBettingOrchestrator:
                 else:
                     p2_rank = None
 
+                # XGBoost prediction (if available)
+                xgb_p1 = pred_row.get('xgb_p1_prob')
+                xgb_p2 = pred_row.get('xgb_p2_prob')
+                if pd.notna(xgb_p1):
+                    xgb_p1 = float(xgb_p1)
+                    xgb_p2 = float(xgb_p2)
+                else:
+                    xgb_p1, xgb_p2 = None, None
+
+                # Random Forest prediction (if available)
+                rf_p1 = pred_row.get('rf_p1_prob')
+                rf_p2 = pred_row.get('rf_p2_prob')
+                if pd.notna(rf_p1):
+                    rf_p1 = float(rf_p1)
+                    rf_p2 = float(rf_p2)
+                else:
+                    rf_p1, rf_p2 = None, None
+
                 log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
                     round_code=pred_row.get('meta_round_input', '') or None,
                     match_date=match_date,
+                    run_id=pred_row.get('run_id', self.run_id),
+                    match_uid=pred_row.get('match_uid'),
+                    feature_snapshot_id=pred_row.get('feature_snapshot_id'),
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
                     p1_rank=p1_rank, p2_rank=p2_rank,
@@ -476,7 +592,11 @@ class LiveBettingOrchestrator:
                     p1_odds_decimal=od1, p2_odds_decimal=od2,
                     spread_handicap=sph, spread_odds_p1=sp1, spread_odds_p2=sp2,
                     total_games=tg, total_odds_over=tov, total_odds_under=tun,
+                    xgb_p1_prob=xgb_p1, xgb_p2_prob=xgb_p2,
+                    rf_p1_prob=rf_p1, rf_p2_prob=rf_p2,
                     model_version=model_version,
+                    odds_scraped_at=odds_scraped_at,
+                    match_start_time=match_time,
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
                 )
@@ -504,6 +624,7 @@ class LiveBettingOrchestrator:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
         try:
+            self._start_run_context()
             print("🚀 Starting live tennis betting pipeline...")
             kelly_mult = self.config.get('kelly_multiplier', 0.18)
             bankroll = self.config.get('bankroll', 1000.0)

@@ -17,6 +17,13 @@ from utr_scraper import UTRScraper, logger
 # Global Playwright instance
 playwright = None
 
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
 def initialize_playwright():
     """Initialize the global Playwright instance"""
     global playwright
@@ -381,8 +388,8 @@ def run_full_collection(gender="men", limit=100, player_limit=None, years=None, 
         clean_data_folders(data_dir)
     
     # Setup credentials
-    email = os.environ.get("UTR_EMAIL") or "zachdodson12@gmail.com"
-    password = os.environ.get("UTR_PASSWORD") or "Thailand@123"
+    email = require_env("UTR_EMAIL")
+    password = require_env("UTR_PASSWORD")
     
     # Set default years if none provided
     if years is None:

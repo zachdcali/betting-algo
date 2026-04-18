@@ -1,8 +1,6 @@
 runtime: python39
 
 env_variables:
-  UTR_EMAIL: "zachdodson12@gmail.com"
-  UTR_PASSWORD: "Thailand@123"
   GOOGLE_CLOUD_PROJECT: "tennis-utr-scraper"
   MAX_PROCESSES: "16"
   TEST_SINGLE_PLAYER: "true"

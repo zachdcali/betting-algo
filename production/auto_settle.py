@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent / "scraping"))
 
 from ta_scraper import TennisAbstractScraper
 from features.ta_feature_calculator import TAFeatureCalculator
+from utils.bet_tracker import BetTracker
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
 SCRAPER = TennisAbstractScraper(rate_limit_delay=3.0)
@@ -133,12 +134,12 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 
     # TA stores the tournament START DATE for all rounds (same as Sackmann CSV),
     # not the actual match date. So we can't use a tight date filter.
-    # Instead: look back up to 21 days before the logged match_date (covers any
-    # tournament start), and forward 3 days (grace for in-progress matches).
+    # Use a wide window: 21 days before (covers tournament start offset)
+    # and 14 days after (covers delayed runs, rain delays, rescheduled matches).
     # Rely on opponent name matching to identify the specific match.
     matches['date'] = pd.to_datetime(matches['date'], errors='coerce')
     window_start = match_date - timedelta(days=21)
-    window_end   = match_date + timedelta(days=3)
+    window_end   = match_date + timedelta(days=14)
     recent = matches[
         (matches['date'] >= window_start) &
         (matches['date'] <= window_end)
@@ -154,6 +155,12 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
     if found.empty:
         print(f"    No result found yet vs '{p2}'")
         return None
+
+    # If multiple matches vs same opponent in window, pick closest to logged date
+    if len(found) > 1:
+        found = found.copy()
+        found['_date_diff'] = (found['date'] - match_date).abs()
+        found = found.sort_values('_date_diff')
 
     row = found.iloc[0]
     result = str(row.get('result', '')).upper()
@@ -188,9 +195,10 @@ def show_stats(df: pd.DataFrame):
         print("No settled predictions yet.")
         return
 
-    # Full stats (all settled, for reference)
     n_all = len(settled)
-    print(f"\n=== LIVE ACCURACY ===")
+    print(f"\n{'='*70}")
+    print(f"  LIVE ACCURACY REPORT")
+    print(f"{'='*70}")
     print(f"  Total settled: {n_all}  (includes ITF/no-model entries)")
 
     # Clean stats: only rows with complete features and a real model prediction
@@ -203,31 +211,63 @@ def show_stats(df: pd.DataFrame):
         print("  No complete-feature predictions settled yet.")
         return
 
-    n = len(clean)
-    model_acc  = clean['model_correct'].mean()
-    market_acc = clean['market_correct'].mean()
-    print(f"\n  [Complete features only — {n} matches]")
-    print(f"  Model:  {model_acc:.1%}  ({int(clean['model_correct'].sum())}/{n})")
-    print(f"  Market: {market_acc:.1%}  ({int(clean['market_correct'].sum())}/{n})")
+    # Exclude 50/50 market (market not making a pick) for fair comparison
+    has_market_pick = clean['market_p1_prob'] != 0.50
+    clean_no5050 = clean[has_market_pick]
+    n_5050 = len(clean) - len(clean_no5050)
+
+    n = len(clean_no5050)
+    model_acc  = clean_no5050['model_correct'].mean()
+    market_acc = clean_no5050['market_correct'].mean()
+    print(f"\n  [Complete features, market has pick — {n} matches]")
+    print(f"  (Excluded {n_5050} matches where market was 50/50)")
+    print(f"  Model:  {model_acc:.1%}  ({int(clean_no5050['model_correct'].sum())}/{n})")
+    print(f"  Market: {market_acc:.1%}  ({int(clean_no5050['market_correct'].sum())}/{n})")
     print(f"  Edge:   {model_acc - market_acc:+.1%}")
 
     # By model version
-    if 'model_version' in clean.columns:
-        print("\n  By model version:")
-        for ver, grp in clean.groupby('model_version'):
+    if 'model_version' in clean_no5050.columns:
+        print(f"\n  {'─'*66}")
+        print(f"  By model version:")
+        for ver, grp in clean_no5050.groupby('model_version'):
             if grp.empty:
                 continue
             ma = grp['model_correct'].mean()
             mk = grp['market_correct'].mean()
-            print(f"    {ver}: model {ma:.1%}  market {mk:.1%}  ({len(grp)} matches)")
+            edge = ma - mk
+            print(f"    {ver}: model {ma:.1%}  market {mk:.1%}  edge {edge:+.1%}  ({len(grp)} matches)")
 
     # By surface
-    if 'surface' in clean.columns and clean['surface'].notna().any():
-        print("\n  By surface:")
-        for surf, grp in clean.groupby('surface'):
+    if 'surface' in clean_no5050.columns and clean_no5050['surface'].notna().any():
+        print(f"\n  {'─'*66}")
+        print(f"  By surface:")
+        for surf, grp in clean_no5050.groupby('surface'):
             if grp.empty:
                 continue
-            print(f"    {surf}: model {grp['model_correct'].mean():.0%}  market {grp['market_correct'].mean():.0%}  ({len(grp)} matches)")
+            ma = grp['model_correct'].mean()
+            mk = grp['market_correct'].mean()
+            print(f"    {surf}: model {ma:.1%}  market {mk:.1%}  edge {ma-mk:+.1%}  ({len(grp)} matches)")
+
+    # Feature completeness summary
+    all_settled = df[df['actual_winner'].notna()]
+    incomplete = all_settled[all_settled['features_complete'].fillna(True).astype(bool) == False]
+    if len(incomplete) > 0:
+        print(f"\n  {'─'*66}")
+        print(f"  Feature completeness:")
+        print(f"    Complete: {len(all_settled) - len(incomplete)}  |  Incomplete (excluded): {len(incomplete)}")
+        # Show which features defaulted most
+        all_defaults = []
+        for _, r in incomplete.iterrows():
+            if pd.notna(r.get('defaulted_features', '')) and str(r.get('defaulted_features', '')).strip():
+                all_defaults.extend(str(r['defaulted_features']).split(','))
+        if all_defaults:
+            from collections import Counter
+            top = Counter(all_defaults).most_common(5)
+            print(f"    Top defaulted features:")
+            for feat, cnt in top:
+                print(f"      {feat.strip()}: {cnt}x")
+
+    print(f"{'='*70}")
 
 
 def run(dry_run: bool = False, stats_only: bool = False):
@@ -252,8 +292,10 @@ def run(dry_run: bool = False, stats_only: bool = False):
     # Load player mapping once
     calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
     calc.player_slug_map = TAFeatureCalculator._load_player_mapping(calc)
+    tracker = BetTracker(str(Path(__file__).parent / "logs"))
 
     newly_settled = 0
+    newly_settled_bets = 0
 
     for idx, row in pending.iterrows():
         p1 = str(row['p1'])
@@ -293,10 +335,39 @@ def run(dry_run: bool = False, stats_only: bool = False):
             df.at[idx, 'model_correct'] = model_correct
         df.at[idx, 'market_correct'] = market_correct
 
+        # Score XGBoost if prediction exists
+        xgb_p1_raw = row.get('xgb_p1_prob')
+        if 'xgb_correct' not in df.columns:
+            df['xgb_correct'] = None
+        if pd.notna(xgb_p1_raw) and not (isinstance(xgb_p1_raw, float) and math.isnan(xgb_p1_raw)):
+            xgb_p1 = float(xgb_p1_raw)
+            xgb_correct = int((w == 1 and xgb_p1 > 0.5) or (w == 2 and xgb_p1 < 0.5))
+            df.at[idx, 'xgb_correct'] = xgb_correct
+
+        # Score Random Forest if prediction exists
+        rf_p1_raw = row.get('rf_p1_prob')
+        if 'rf_correct' not in df.columns:
+            df['rf_correct'] = None
+        if pd.notna(rf_p1_raw) and not (isinstance(rf_p1_raw, float) and math.isnan(rf_p1_raw)):
+            rf_p1 = float(rf_p1_raw)
+            rf_correct = int((w == 1 and rf_p1 > 0.5) or (w == 2 and rf_p1 < 0.5))
+            df.at[idx, 'rf_correct'] = rf_correct
+
         winner_name = p1 if w == 1 else p2
         model_str = ('✓' if model_correct else '✗') if not (isinstance(model_correct, float) and math.isnan(model_correct)) else 'N/A'
         print(f"  ✓ Settled: {winner_name} won | Model {model_str} | Market {'✓' if market_correct else '✗'}")
         newly_settled += 1
+
+        settled_bets = tracker.settle_pending_bets_for_match(
+            match_uid=row.get('match_uid'),
+            p1=p1,
+            p2=p2,
+            actual_winner=w,
+            notes=f"Auto-settled from Tennis Abstract | score={result['score']}",
+        )
+        if settled_bets:
+            print(f"  💰 Auto-settled {settled_bets} pending bet(s)")
+            newly_settled_bets += settled_bets
 
         # Rate limit between players
         time.sleep(3.0)
@@ -304,6 +375,8 @@ def run(dry_run: bool = False, stats_only: bool = False):
     if not dry_run:
         df.to_csv(LOG_PATH, index=False)
         print(f"\nSaved {newly_settled} newly settled prediction(s) to prediction_log.csv")
+        if newly_settled_bets:
+            print(f"Auto-settled {newly_settled_bets} pending tracked bet(s)")
 
     show_stats(df)
 

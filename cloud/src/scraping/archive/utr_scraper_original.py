@@ -3220,10 +3220,13 @@ async def cross_reference_matches_with_ratings(self, max_days_diff=30):
 
 # Example usage
 if __name__ == "__main__":
-    email = "zachdodson12@gmail.com"
-    password = "Thailand@123"
+    email = os.environ.get("UTR_EMAIL", "")
+    password = os.environ.get("UTR_PASSWORD", "")
     
     async def main():
+        if not email or not password:
+            logger.error("Set UTR_EMAIL and UTR_PASSWORD before running this archive example")
+            return
         async with UTRScraper(email=email, password=password, headless=False) as scraper:
             if not await scraper.login():
                 logger.error("Failed to log in to UTR website")

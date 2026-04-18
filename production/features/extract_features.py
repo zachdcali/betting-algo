@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Live Feature Extraction for Tennis Betting Models
-Extracts the 141 features needed for NN-141 model from UTR + static data.
+Legacy live feature extraction path for tennis betting models.
+
+This file reflects the older UTR-based pipeline and is not the active
+production path. The current live system uses `ta_feature_calculator.py`.
 
 This module delegates all core logic to LiveFeatureEngine so both paths
 (offline batch vs. live slate) stay perfectly consistent.

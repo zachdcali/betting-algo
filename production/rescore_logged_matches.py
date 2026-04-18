@@ -42,13 +42,16 @@ for path in sorted(glob.glob(os.path.join(LOGS, "features_*.csv"))):
 all_features = pd.concat(dfs, ignore_index=True)
 print(f"Total rows across all feature logs: {len(all_features)}")
 
-# Deduplicate by match_id (keep last — most recent scrape is freshest)
-if "match_id" in all_features.columns:
+# Important: do NOT deduplicate by match_id. Older feature logs used the per-run
+# row index as match_id, so the same integer appears across many unrelated runs.
+if "feature_snapshot_id" in all_features.columns:
     before = len(all_features)
     all_features = all_features.sort_values("_source_file").drop_duplicates(
-        subset=["match_id"], keep="last"
+        subset=["feature_snapshot_id"], keep="last"
     )
-    print(f"After dedup by match_id: {len(all_features)} unique matches (removed {before - len(all_features)})")
+    print(f"After dedup by feature_snapshot_id: {len(all_features)} unique snapshots (removed {before - len(all_features)})")
+else:
+    print("No feature_snapshot_id column found — keeping all feature rows and using fallback matching")
 
 print(f"Date range from timestamps: {all_features['timestamp'].min()} → {all_features['timestamp'].max()}"
       if "timestamp" in all_features.columns else "")
@@ -153,18 +156,69 @@ if os.path.exists(pred_log_path):
     pred_log = pd.read_csv(pred_log_path)
     print(f"\nPrediction log: {len(pred_log)} rows")
 
-    # Try to join on match_id if present in pred_log, else on player names
-    if "match_id" in pred_log.columns and "match_id" in results.columns:
-        merged = pred_log.merge(results, on="match_id", how="left", suffixes=("_orig", "_new"))
+    def norm(s):
+        return str(s).lower().strip().replace("-", " ").replace(".", "")
+
+    results["_p1n"] = results["player1_raw"].apply(norm) if "player1_raw" in results.columns else ""
+    results["_p2n"] = results["player2_raw"].apply(norm) if "player2_raw" in results.columns else ""
+    results["_feature_ts"] = pd.to_datetime(results.get("timestamp"), errors="coerce")
+    if "meta_match_date" in results.columns:
+        results["_feature_match_date"] = pd.to_datetime(results["meta_match_date"], errors="coerce")
     else:
-        # Fuzzy join: normalise player names
-        def norm(s):
-            return str(s).lower().strip().replace("-", " ").replace(".", "")
-        results["_p1n"] = results["player1_raw"].apply(norm) if "player1_raw" in results.columns else ""
-        results["_p2n"] = results["player2_raw"].apply(norm) if "player2_raw" in results.columns else ""
-        pred_log["_p1n"] = pred_log["p1"].apply(norm)
-        pred_log["_p2n"] = pred_log["p2"].apply(norm)
-        merged = pred_log.merge(results, on=["_p1n", "_p2n"], how="left", suffixes=("_orig", "_new"))
+        results["_feature_match_date"] = pd.NaT
+
+    pred_log["_p1n"] = pred_log["p1"].apply(norm)
+    pred_log["_p2n"] = pred_log["p2"].apply(norm)
+    pred_log["_logged_ts"] = pd.to_datetime(
+        pred_log["odds_scraped_at"].fillna(pred_log["logged_at"]),
+        errors="coerce",
+    )
+    pred_log["_pred_match_date"] = pd.to_datetime(pred_log["match_date"], errors="coerce")
+
+    merged = pred_log.copy()
+    for col in results.columns:
+        if col not in merged.columns:
+            merged[col] = np.nan
+
+    matched_indices = set()
+
+    if "feature_snapshot_id" in pred_log.columns and "feature_snapshot_id" in results.columns:
+        exact = pred_log.merge(
+            results,
+            on="feature_snapshot_id",
+            how="left",
+            suffixes=("_orig", "_new"),
+        )
+        has_exact = exact["surface_fix_xgb_p1"].notna()
+        merged.loc[has_exact, exact.columns] = exact.loc[has_exact, exact.columns]
+        matched_indices.update(exact[has_exact].index.tolist())
+
+    for idx, row in merged.iterrows():
+        if idx in matched_indices and pd.notna(merged.at[idx, "surface_fix_xgb_p1"]):
+            continue
+
+        candidates = results[
+            (results["_p1n"] == row["_p1n"]) &
+            (results["_p2n"] == row["_p2n"])
+        ].copy()
+
+        if candidates.empty:
+            continue
+
+        if pd.notna(row["_pred_match_date"]) and candidates["_feature_match_date"].notna().any():
+            date_diff = (candidates["_feature_match_date"] - row["_pred_match_date"]).abs()
+            candidates = candidates[date_diff <= pd.Timedelta(days=3)]
+            if candidates.empty:
+                continue
+
+        if pd.notna(row["_logged_ts"]) and candidates["_feature_ts"].notna().any():
+            candidates["_delta"] = (candidates["_feature_ts"] - row["_logged_ts"]).abs()
+            best = candidates.sort_values("_delta").iloc[0]
+        else:
+            best = candidates.iloc[-1]
+
+        for col in results.columns:
+            merged.at[idx, col] = best.get(col)
 
     if "model_p1_prob" in merged.columns and "surface_fix_xgb_p1" in merged.columns:
         matched = merged["surface_fix_xgb_p1"].notna()

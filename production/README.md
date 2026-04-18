@@ -1,57 +1,62 @@
 # Production Pipeline
 
-Internal documentation for the live betting pipeline. Not intended for public consumption.
+Internal notes for the current live tennis pipeline.
 
-## Files
+## Current Architecture
 
-```
-main.py                  # End-to-end orchestrator — run this
-odds/
-  fetch_bovada.py        # Scrapes upcoming ATP/Challenger matches and moneyline odds
-features/
-  ta_feature_calculator.py  # Builds all 141 features from Tennis Abstract data
-models/
-  inference.py           # Loads NN model, runs predictions, exposes EXACT_141_FEATURES list
-utils/
-  stake_calculator.py    # Fractional Kelly criterion
-  bet_tracker.py         # Session and bet logging
-tournaments/
-  resolve_tournament.py  # Maps Bovada event names → surface/level/draw_size/round
-scraping/
-  ta_scraper.py          # Tennis Abstract HTTP scraper with session caching and rate limiting
-prediction_logger.py     # Appends every prediction to prediction_log.csv
-settle_predictions.py    # Run after matches complete to record outcomes and compute accuracy
-tests/
-  test_system.py         # Integration smoke tests
-```
+The active production path is:
 
-## Running
+1. Scrape Bovada odds with [fetch_bovada.py](/Users/zachdodson/Documents/betting-algo/production/odds/fetch_bovada.py)
+2. Resolve tournament metadata with `tournaments/resolve_tournament.py`
+3. Build live features from Tennis Abstract with `features/ta_feature_calculator.py`
+4. Run NN, XGBoost, and Random Forest inference with `models/inference.py`
+5. Calculate Kelly stakes with `utils/stake_calculator.py`
+6. Log predictions and odds history with `prediction_logger.py`
+7. Auto-settle results from Tennis Abstract with `auto_settle.py`
+
+## Logging Model
+
+There are now two logging layers:
+
+- `prediction_log.csv`
+  This is the operational, deduped match log. It preserves the opening snapshot for upcoming matches and tracks settlement.
+- `prediction_snapshots.csv`
+  This is append-only. Every logged prediction snapshot is preserved with immutable IDs.
+- `odds_history.csv`
+  This is append-only. Every logged odds snapshot is preserved with immutable IDs.
+
+Supporting run artifacts:
+
+- `logs/features_*.csv`
+  Per-run feature snapshots with stable `match_uid` and `feature_snapshot_id`
+- `logs/odds/bovada_tennis_*.csv`
+  Raw odds scrapes
+- `logs/all_bets.csv`
+  Bet recommendations actually logged by the pipeline
+- `logs/bankroll_history.csv`
+  Bankroll changes over time
+- `logs/betting_sessions.csv`
+  Session summaries
+
+## Model Artifacts
+
+The model registry lives in `models/model_registry.json`.
+
+`models/inference.py` now loads the active NN/XGB/RF artifacts from that registry instead of hardcoding only the filenames.
+
+## Useful Commands
 
 ```bash
 cd production
 python main.py
+python auto_settle.py
+python analyze_predictions.py
+python sync_bet_tracker.py
+python tests/test_system.py
 ```
 
-## Prediction Logging
+## Important Notes
 
-Every pipeline run appends to `prediction_log.csv`. After matches complete:
-
-```bash
-python settle_predictions.py
-```
-
-This records actual winners and computes live model vs market accuracy over time.
-
-## Model
-
-Active model: `results/professional_tennis/Neural_Network/neural_network_model_UNBIASED_TEMPORAL.pth`
-Scaler: `results/professional_tennis/Neural_Network/scaler_UNBIASED_TEMPORAL.pkl`
-Features: 141 (defined in `models/inference.py` → `EXACT_141_FEATURES`)
-
-Backups stored in `results/*/backups/` with date suffix.
-
-## Known Limitations
-
-- `Player1_Rank_Points` / `Player2_Rank_Points` hardcoded to 500 (ATP points not yet scraped)
-- Height missing for some lower-ranked players on Tennis Abstract — those matches are skipped
-- Career-accumulated features can overweight declined veterans vs their current form
+- The live production path is Tennis Abstract based, not the older UTR-based extractor.
+- `prediction_log.csv` is for the original live call on a match; use `prediction_snapshots.csv` and `logs/features_*.csv` for full historical lineage.
+- `sync_bet_tracker.py` is useful for backfilling tracked bets from already-settled prediction rows.

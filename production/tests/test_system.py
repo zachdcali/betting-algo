@@ -1,70 +1,71 @@
 #!/usr/bin/env python3
 """
-Test script for the production betting system
-- Odds fetch (mock)
-- Feature extraction shape (mock default)
-- Model loads & predicts (smoke)
-- Kelly staking (sim)
-- Updater smoke test (builds slate -> extracts players; no network)
+Smoke tests for the production betting system.
+
+These tests are intentionally lightweight:
+- no Bovada scraping
+- no Tennis Abstract scraping
+- local model loading only
 """
 
 import sys
+import tempfile
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
-# Add production modules to path
-PROD_ROOT = Path(__file__).parent.resolve()
+
+PROD_ROOT = Path(__file__).resolve().parents[1]
 if str(PROD_ROOT) not in sys.path:
-    sys.path.append(str(PROD_ROOT))
+    sys.path.insert(0, str(PROD_ROOT))
 
-def test_odds_fetching():
-    print("🧪 Testing odds fetching...")
-    try:
-        # Use a minimal synthetic slate to avoid hitting Bovada in tests
-        sample_odds = pd.DataFrame([{
-            'player1_raw': 'Test Player 1',
-            'player2_raw': 'Test Player 2',
-            'player1_normalized': 'test player 1',
-            'player2_normalized': 'test player 2',
-            'event': "ATP Test Men's",
-            'player1_odds_decimal': 2.0,
-            'player2_odds_decimal': 1.8,
-            'player1_implied_prob': 0.5,
-            'player2_implied_prob': 0.556,
-            'timestamp': '2025-08-24 10:00:00',
-            'source': 'test'
-        }])
-        print(f"✅ Odds fetching test passed - {len(sample_odds)} matches")
-        return sample_odds
-    except Exception as e:
-        print(f"❌ Odds fetching test failed: {e}")
-        return pd.DataFrame()
 
-def test_feature_extraction():
-    print("🧪 Testing feature extraction...")
+def test_schema_contract():
+    print("🧪 Testing schema contract...")
     try:
-        from features.extract_features import EXACT_141_FEATURES, LiveFeatureExtractor
-        extractor = LiveFeatureExtractor()
-        sample = extractor._get_default_features()
-        if len(sample) == 141 and set(sample.keys()).issuperset(set(EXACT_141_FEATURES)):
-            print(f"✅ Feature extraction test passed - 141 features")
-            return sample
-        print(f"❌ Feature extraction test failed - got {len(sample)}")
-        return {}
+        from models.inference import EXACT_141_FEATURES as model_features
+        from features.ta_feature_calculator import EXACT_141_FEATURES as ta_features
+
+        if len(model_features) != 141 or len(ta_features) != 141:
+            print(f"❌ Expected 141 features, got model={len(model_features)} ta={len(ta_features)}")
+            return False
+        if list(model_features) != list(ta_features):
+            print("❌ Feature order mismatch between inference and TA calculator")
+            return False
+        print("✅ Schema contract test passed")
+        return True
     except Exception as e:
-        print(f"❌ Feature extraction test failed: {e}")
-        return {}
+        print(f"❌ Schema contract test failed: {e}")
+        return False
+
+
+def test_round_offsets():
+    print("🧪 Testing round offsets...")
+    try:
+        from features.round_offsets import get_round_day_offset
+
+        off = get_round_day_offset('M', 96, 'F', pd.Timestamp('2026-03-18'))
+        if off != 11:
+            print(f"❌ Unexpected Miami final offset: {off}")
+            return False
+        print("✅ Round offset test passed")
+        return True
+    except Exception as e:
+        print(f"❌ Round offset test failed: {e}")
+        return False
+
 
 def test_model_inference():
     print("🧪 Testing model inference...")
     try:
-        from models.inference import TennisPredictor
-        from features.extract_features import EXACT_141_FEATURES
+        from models.inference import TennisPredictor, EXACT_141_FEATURES
+
         pred = TennisPredictor()
         if not pred.load_model():
             print("❌ Model loading failed")
             return False
+
         rnd = {f: np.random.rand() for f in EXACT_141_FEATURES}
         out = pred.predict_match_probability(rnd)
         if "error" in out:
@@ -76,65 +77,111 @@ def test_model_inference():
         print(f"❌ Model inference test failed: {e}")
         return False
 
+
 def test_stake_calculation():
     print("🧪 Testing stake calculation...")
     try:
         from utils.stake_calculator import simulate_daily_betting
+
         slips = simulate_daily_betting(bankroll=1000.0, kelly_multiplier=0.18)
         if slips is None or slips.empty:
-            print("⚠️  No profitable opportunities (this can be OK)")
+            print("⚠️ No profitable opportunities in synthetic simulation")
             return True
-        print(f"✅ Stake calculation test passed - {len(slips)} bets, ${slips['stake'].sum():.2f} total stakes")
+        required = {'match_uid', 'match_date', 'match_start_time', 'stake', 'edge'}
+        if not required.issubset(set(slips.columns)):
+            print(f"❌ Missing expected bet slip columns: {sorted(required - set(slips.columns))}")
+            return False
+        print(f"✅ Stake calculation test passed - {len(slips)} bets")
         return True
     except Exception as e:
         print(f"❌ Stake calculation test failed: {e}")
         return False
 
-def test_updater_smoke():
-    print("🧪 Testing player updater smoke (no network)...")
+
+def test_prediction_logger():
+    print("🧪 Testing prediction logger...")
     try:
-        from update_player_data import PlayerDataUpdater
-        sample_odds = test_odds_fetching()
-        upd = PlayerDataUpdater(max_workers=2, max_age_days=9999)  # force 'fresh' to avoid scraper
-        names = upd.extract_players_from_slate(sample_odds)
-        _ = upd.find_players_needing_update(names)  # should run without crashing
-        print("✅ Updater smoke test passed")
+        import prediction_logger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            prediction_logger.LOG_PATH = str(tmp_path / "prediction_log.csv")
+            prediction_logger.SNAPSHOT_LOG_PATH = tmp_path / "prediction_snapshots.csv"
+            prediction_logger.ODDS_HISTORY_LOG_PATH = tmp_path / "odds_history.csv"
+
+            prediction_logger.log_prediction(
+                p1="Player One",
+                p2="Player Two",
+                tournament="Test Event",
+                surface="Hard",
+                level="A",
+                round_code="R32",
+                match_date="2026-04-18",
+                run_id="run_test",
+                match_uid="match_test",
+                feature_snapshot_id="feat_test",
+                model_p1_prob=0.61,
+                model_p2_prob=0.39,
+                market_p1_prob=0.55,
+                market_p2_prob=0.45,
+                p1_odds_decimal=1.82,
+                p2_odds_decimal=2.10,
+                model_version="v-test",
+                odds_scraped_at="2026-04-18T12:00:00+00:00",
+                match_start_time="2026-04-18 09:00 AM",
+            )
+
+            log_df = pd.read_csv(prediction_logger.LOG_PATH)
+            snap_df = pd.read_csv(prediction_logger.SNAPSHOT_LOG_PATH)
+            odds_df = pd.read_csv(prediction_logger.ODDS_HISTORY_LOG_PATH)
+
+            if len(log_df) != 1 or len(snap_df) != 1 or len(odds_df) != 1:
+                print("❌ Logger did not create exactly one row in each output")
+                return False
+            if 'match_uid' not in log_df.columns or 'prediction_uid' not in log_df.columns:
+                print("❌ Logger missing immutable ID columns")
+                return False
+
+        print("✅ Prediction logger test passed")
         return True
     except Exception as e:
-        print(f"❌ Updater smoke test failed: {e}")
+        print(f"❌ Prediction logger test failed: {e}")
         return False
 
-def test_full_pipeline():
-    print("🧪 Testing full pipeline (init only)...")
+
+def test_orchestrator_init():
+    print("🧪 Testing orchestrator initialization...")
     try:
         from main import LiveBettingOrchestrator
+
         _ = LiveBettingOrchestrator()
-        print("✅ Full pipeline initialization test passed")
+        print("✅ Orchestrator initialization test passed")
         return True
     except Exception as e:
-        print(f"❌ Full pipeline test failed: {e}")
+        print(f"❌ Orchestrator initialization test failed: {e}")
         return False
+
 
 def main():
     print("🎾 Testing Tennis Betting Production System")
     print("=" * 50)
     tests = [
-        ("Odds Fetching", test_odds_fetching),
-        ("Feature Extraction", test_feature_extraction),
+        ("Schema Contract", test_schema_contract),
+        ("Round Offsets", test_round_offsets),
         ("Model Inference", test_model_inference),
         ("Stake Calculation", test_stake_calculation),
-        ("Updater Smoke", test_updater_smoke),
-        ("Full Pipeline", test_full_pipeline),
+        ("Prediction Logger", test_prediction_logger),
+        ("Orchestrator Init", test_orchestrator_init),
     ]
+
     ok = 0
     for name, fn in tests:
         print(f"\n{name}:")
         print("-" * 30)
         try:
-            res = fn()
-            success = bool(res is not False)
-            print(f"{name}: {'✅ PASS' if success else '❌ FAIL'}")
-            ok += int(success)
+            res = bool(fn())
+            print(f"{name}: {'✅ PASS' if res else '❌ FAIL'}")
+            ok += int(res)
         except Exception as e:
             print(f"💥 {name} crashed: {e}")
 
@@ -143,6 +190,7 @@ def main():
     print("=" * 50)
     print(f"Overall: {ok}/{len(tests)} tests passed")
     return ok == len(tests)
+
 
 if __name__ == "__main__":
     sys.exit(0 if main() else 1)

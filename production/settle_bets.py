@@ -26,7 +26,7 @@ def main():
     parser.add_argument('--interactive', action='store_true', help='Interactive settlement mode')
     args = parser.parse_args()
 
-    tracker = BetTracker()
+    tracker = BetTracker(str(PROD_ROOT / "logs"))
 
     # Show pending
     if args.show_pending or args.interactive:
@@ -42,7 +42,7 @@ def main():
             print(f"   Bet on: {bet['bet_on']} @ {bet['odds_decimal']:.2f}")
             print(f"   Stake: ${bet['stake']:.2f}")
             print(f"   Edge: {bet.get('edge', float('nan')):.1%}")
-            print(f"   Model: {bet.get('bet_prob', float('nan')):.1%} | Market: {bet.get('market_prob', float('nan')):.1%}")
+            print(f"   Model: {bet.get('model_prob', float('nan')):.1%} | Market: {bet.get('market_prob', float('nan')):.1%}")
             print(f"   Event: {bet.get('event', 'Unknown Event')}")
             print(f"   Date: {bet['timestamp']}")
             print()

@@ -260,41 +260,50 @@ if len(feature_cols) != 143:
     if missing_features:
         print(f"   Missing features: {missing_features[:10]}...")  # Show first 10 missing
 
-# Split into train/test based on date
-print("\n4. Creating train/test split...")
-train_df = ml_df[ml_df['tourney_date'] < '2023-01-01'].copy()
+# Split into train/validation/test based on date
+print("\n4. Creating train/validation/test split...")
+train_df = ml_df[ml_df['tourney_date'] < '2022-01-01'].copy()
+val_df = ml_df[(ml_df['tourney_date'] >= '2022-01-01') & (ml_df['tourney_date'] < '2023-01-01')].copy()
 test_df = ml_df[ml_df['tourney_date'] >= '2023-01-01'].copy()
 
-print(f"   Training set: {len(train_df)} matches ({MIN_YEAR}-2022)")
-print(f"   Test set: {len(test_df)} matches (2023-2025)")
+print(f"   Training set:   {len(train_df)} matches ({MIN_YEAR}-2021)")
+print(f"   Validation set: {len(val_df)} matches (2022)")
+print(f"   Test set:       {len(test_df)} matches (2023-2025)")
 
 # Prepare features and target
 X_train = train_df[feature_cols]
 y_train = train_df['Player1_Wins']
+X_val = val_df[feature_cols]
+y_val = val_df['Player1_Wins']
 X_test = test_df[feature_cols]
 y_test = test_df['Player1_Wins']
 
 print(f"   Training features shape: {X_train.shape}")
+print(f"   Validation features shape: {X_val.shape}")
 print(f"   Test features shape: {X_test.shape}")
-print(f"   Target distribution - Train: {y_train.mean():.3f}, Test: {y_test.mean():.3f}")
+print(f"   Target distribution - Train: {y_train.mean():.3f}, Val: {y_val.mean():.3f}, Test: {y_test.mean():.3f}")
 
 # Check for missing values and fill
 print("\n5. Checking data quality...")
 train_missing = X_train.isnull().sum().sum()
+val_missing = X_val.isnull().sum().sum()
 test_missing = X_test.isnull().sum().sum()
 
-if train_missing > 0 or test_missing > 0:
+if train_missing > 0 or val_missing > 0 or test_missing > 0:
     print("   Filling missing values...")
     X_train = X_train.fillna(X_train.median())
+    X_val = X_val.fillna(X_train.median())
     X_test = X_test.fillna(X_train.median())  # Use training median for test set
 
 print(f"   Training missing values: {X_train.isnull().sum().sum()}")
+print(f"   Validation missing values: {X_val.isnull().sum().sum()}")
 print(f"   Test missing values: {X_test.isnull().sum().sum()}")
 
 # Standardize features
 print("\n6. Standardizing features...")
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train.values)
+X_val_scaled = scaler.transform(X_val.values)
 X_test_scaled = scaler.transform(X_test.values)
 
 print(f"   Feature scaling complete")
@@ -305,6 +314,10 @@ train_dataset = TensorDataset(
     torch.FloatTensor(X_train_scaled),
     torch.FloatTensor(y_train.values)
 )
+val_dataset = TensorDataset(
+    torch.FloatTensor(X_val_scaled),
+    torch.FloatTensor(y_val.values)
+)
 test_dataset = TensorDataset(
     torch.FloatTensor(X_test_scaled),
     torch.FloatTensor(y_test.values)
@@ -313,10 +326,12 @@ test_dataset = TensorDataset(
 # Create data loaders
 batch_size = 1024  # Larger batch size for larger dataset
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 print(f"   Batch size: {batch_size}")
 print(f"   Train batches: {len(train_loader)}")
+print(f"   Validation batches: {len(val_loader)}")
 print(f"   Test batches: {len(test_loader)}")
 
 # Create and train model
@@ -335,7 +350,7 @@ num_epochs = 100
 learning_rate = 0.001
 
 train_losses, val_losses, train_accuracies, val_accuracies = train_model(
-    model, train_loader, test_loader, num_epochs, learning_rate
+    model, train_loader, val_loader, num_epochs, learning_rate
 )
 
 print("   ✅ Model training complete!")

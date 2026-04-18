@@ -17,6 +17,9 @@ echo "   Service: $SERVICE_NAME"
 echo "   Region: $REGION"
 echo ""
 
+: "${UTR_EMAIL:?Set UTR_EMAIL in your shell before deploying.}"
+: "${UTR_PASSWORD:?Set UTR_PASSWORD in your shell before deploying.}"
+
 # Set active project
 gcloud config set project $PROJECT_ID
 
@@ -38,8 +41,8 @@ gcloud run deploy $SERVICE_NAME \
     --cpu 2 \
     --timeout 3600 \
     --max-instances 5 \
-    --set-env-vars UTR_EMAIL="zachdodson12@gmail.com" \
-    --set-env-vars UTR_PASSWORD="Thailand@123" \
+    --set-env-vars UTR_EMAIL="$UTR_EMAIL" \
+    --set-env-vars UTR_PASSWORD="$UTR_PASSWORD" \
     --set-env-vars GOOGLE_CLOUD_PROJECT="$PROJECT_ID" \
     --set-env-vars MAX_PROCESSES="8" \
     --set-env-vars TEST_SINGLE_PLAYER="true"

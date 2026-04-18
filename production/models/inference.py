@@ -21,10 +21,22 @@ if _REGISTRY_PATH.exists():
     with open(_REGISTRY_PATH) as _f:
         _REGISTRY = json.load(_f)
     MODEL_VERSION = _REGISTRY.get("current_version", "unknown")
+    XGB_MODEL_VERSION = _REGISTRY.get("xgboost", {}).get("current_version", "unknown")
+    RF_MODEL_VERSION = _REGISTRY.get("random_forest", {}).get("current_version", "unknown")
 else:
+    _REGISTRY = {}
     MODEL_VERSION = "unknown"
+    XGB_MODEL_VERSION = "unknown"
+    RF_MODEL_VERSION = "unknown"
 from sklearn.utils import Bunch
 warnings.filterwarnings('ignore')
+
+
+def _registry_model_entry(section: str, version: str) -> Dict:
+    """Return a model-registry entry or an empty dict."""
+    if section == "nn":
+        return _REGISTRY.get("models", {}).get(version, {})
+    return _REGISTRY.get(section, {}).get("models", {}).get(version, {})
 
 # Neural Network Architecture (must match training)
 class TennisNet(nn.Module):
@@ -138,8 +150,9 @@ class TennisPredictor:
     def load_model(self) -> bool:
         """Load the SURFACE_FIX NN model and scaler"""
         try:
-            model_path = self.model_dir / "neural_network_model_SURFACE_FIX.pth"
-            scaler_path = self.model_dir / "scaler_SURFACE_FIX.pkl"
+            entry = _registry_model_entry("nn", MODEL_VERSION)
+            model_path = self.model_dir / entry.get("model_file", "neural_network_model_SURFACE_FIX.pth")
+            scaler_path = self.model_dir / entry.get("scaler_file", "scaler_SURFACE_FIX.pkl")
 
             if not model_path.exists():
                 print(f"❌ Model file not found: {model_path}")
@@ -255,6 +268,89 @@ class TennisPredictor:
                 })
         
         return pd.DataFrame(predictions)
+
+class XGBoostPredictor:
+    """Live tennis match predictor using XGBoost SURFACE_FIX model (141 features)"""
+
+    def __init__(self, model_dir: str = None):
+        if model_dir is None:
+            model_dir = str(Path(__file__).parent.parent.parent / "results" / "professional_tennis" / "XGBoost")
+        self.model_dir = Path(model_dir)
+        self.model = None
+        self.feature_names = None
+        self.is_loaded = False
+
+    def load_model(self) -> bool:
+        try:
+            import xgboost as xgb
+            entry = _registry_model_entry("xgboost", XGB_MODEL_VERSION)
+            model_path = self.model_dir / entry.get("model_file", "xgboost_model_SURFACE_FIX.json")
+            if not model_path.exists():
+                print(f"❌ XGBoost model not found: {model_path}")
+                return False
+            self.model = xgb.XGBClassifier()
+            self.model.load_model(str(model_path))
+            self.feature_names = list(self.model.feature_names_in_)
+            self.is_loaded = True
+            print(f"✅ XGBoost model loaded ({len(self.feature_names)} features)")
+            return True
+        except Exception as e:
+            print(f"❌ Error loading XGBoost model: {e}")
+            return False
+
+    def predict_match_probability(self, features_dict: Dict) -> Dict:
+        if not self.is_loaded:
+            if not self.load_model():
+                return {"error": "XGBoost model not loaded"}
+        try:
+            feat_values = {f: float(features_dict.get(f, 0.0)) for f in self.feature_names}
+            X = pd.DataFrame([feat_values])[self.feature_names].fillna(0.0).astype(float)
+            prob = float(self.model.predict_proba(X)[0, 1])
+            return {"xgb_p1_prob": prob, "xgb_p2_prob": 1.0 - prob}
+        except Exception as e:
+            return {"error": f"XGBoost prediction failed: {e}"}
+
+
+class RandomForestPredictor:
+    """Live tennis match predictor using Random Forest SURFACE_FIX model (141 features)"""
+
+    def __init__(self, model_dir: str = None):
+        if model_dir is None:
+            model_dir = str(Path(__file__).parent.parent.parent / "results" / "professional_tennis" / "Random_Forest")
+        self.model_dir = Path(model_dir)
+        self.model = None
+        self.feature_names = None
+        self.is_loaded = False
+
+    def load_model(self) -> bool:
+        try:
+            entry = _registry_model_entry("random_forest", RF_MODEL_VERSION)
+            model_path = self.model_dir / entry.get("model_file", "random_forest_model_SURFACE_FIX.pkl")
+            if not model_path.exists():
+                print(f"❌ Random Forest model not found: {model_path}")
+                return False
+            with open(model_path, 'rb') as f:
+                self.model = pickle.load(f)
+            self.feature_names = list(self.model.feature_names_in_)
+            self.is_loaded = True
+            print(f"✅ Random Forest model loaded ({len(self.feature_names)} features)")
+            return True
+        except Exception as e:
+            print(f"❌ Error loading Random Forest model: {e}")
+            return False
+
+    def predict_match_probability(self, features_dict: Dict) -> Dict:
+        if not self.is_loaded:
+            if not self.load_model():
+                return {"error": "Random Forest model not loaded"}
+        try:
+            feat_values = {f: float(features_dict.get(f, 0.0)) for f in self.feature_names}
+            X = pd.DataFrame([feat_values])[self.feature_names].fillna(0.0).astype(float)
+            prob = float(self.model.predict_proba(X)[0, 1])
+            return {"rf_p1_prob": prob, "rf_p2_prob": 1.0 - prob}
+        except Exception as e:
+            return {"error": f"Random Forest prediction failed: {e}"}
+
 
 def calculate_betting_edges(predictions_df: pd.DataFrame, odds_df: pd.DataFrame) -> pd.DataFrame:
     """

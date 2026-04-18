@@ -15,6 +15,13 @@ from multiprocessing import Pool
 
 from utr_scraper import UTRScraper, logger
 
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
 # Diagnostic function to check for the cross-reference method
 def check_scraper_methods(scraper):
     print("\n=== SCRAPER METHOD DIAGNOSTICS ===")
@@ -700,8 +707,8 @@ async def complete_processing():
     for directory in [data_dir / "players", data_dir / "matches", data_dir / "ratings"]:
         directory.mkdir(parents=True, exist_ok=True)
     
-    email = os.environ.get("UTR_EMAIL", "zachdodson12@gmail.com")
-    password = os.environ.get("UTR_PASSWORD", "Thailand@123")
+    email = require_env("UTR_EMAIL")
+    password = require_env("UTR_PASSWORD")
     years = ["2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018"]
     
     # Count existing files for status report

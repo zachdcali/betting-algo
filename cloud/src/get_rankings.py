@@ -9,6 +9,13 @@ import os
 from pathlib import Path
 from utr_scraper import UTRScraper
 
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
 async def generate_rankings():
     """Generate initial rankings CSV file"""
     print("Generating UTR rankings...")
@@ -17,8 +24,8 @@ async def generate_rankings():
     data_dir = base_dir / "data"
     data_dir.mkdir(exist_ok=True)
     
-    email = "zachdodson12@gmail.com"
-    password = "Thailand@123"
+    email = require_env("UTR_EMAIL")
+    password = require_env("UTR_PASSWORD")
     
     async with UTRScraper(email=email, password=password, headless=True, data_dir=data_dir) as scraper:
         # Login first
