@@ -18,7 +18,16 @@ sys.path.append(str(Path(__file__).parent))
 
 from odds.fetch_bovada import fetch_bovada_tennis_odds, save_odds_data
 from features.ta_feature_calculator import TAFeatureCalculator
-from models.inference import TennisPredictor, XGBoostPredictor, RandomForestPredictor, calculate_betting_edges, EXACT_141_FEATURES
+from models.inference import (
+    EXACT_141_FEATURES,
+    MODEL_VERSION,
+    RF_MODEL_VERSION,
+    XGB_MODEL_VERSION,
+    RandomForestPredictor,
+    TennisPredictor,
+    XGBoostPredictor,
+    calculate_betting_edges,
+)
 from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
@@ -595,6 +604,9 @@ class LiveBettingOrchestrator:
                     xgb_p1_prob=xgb_p1, xgb_p2_prob=xgb_p2,
                     rf_p1_prob=rf_p1, rf_p2_prob=rf_p2,
                     model_version=model_version,
+                    nn_model_version=model_version or MODEL_VERSION,
+                    xgb_model_version=XGB_MODEL_VERSION if xgb_p1 is not None else '',
+                    rf_model_version=RF_MODEL_VERSION if rf_p1 is not None else '',
                     odds_scraped_at=odds_scraped_at,
                     match_start_time=match_time,
                     features_complete=features_complete,
@@ -620,7 +632,7 @@ class LiveBettingOrchestrator:
             print(f"  ⚠️  ATP rankings refresh failed (non-fatal): {e}")
             print("       Rank_Points will default to 500 for this run")
 
-    def run_full_pipeline(self, start_session: bool = True) -> bool:
+    def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True) -> bool:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
         try:
@@ -640,12 +652,15 @@ class LiveBettingOrchestrator:
                 )
             
             # Step 0a: Auto-settle any pending predictions with known results
-            try:
-                from auto_settle import run as auto_settle_run
-                print("\n📋 Auto-settling pending predictions...")
-                auto_settle_run(dry_run=False)
-            except Exception as e:
-                print(f"  ⚠️  Auto-settle failed (non-fatal): {e}")
+            if auto_settle:
+                try:
+                    from auto_settle import run as auto_settle_run
+                    print("\n📋 Auto-settling pending predictions...")
+                    auto_settle_run(dry_run=False)
+                except Exception as e:
+                    print(f"  ⚠️  Auto-settle failed (non-fatal): {e}")
+            else:
+                print("\n⏭️  Auto-settle skipped for this run")
 
             # Step 0b: Refresh ATP rankings (rank + points)
             self._refresh_atp_rankings()
@@ -712,6 +727,7 @@ def main():
     parser.add_argument('--edge-threshold', type=float, help='Override edge threshold')
     parser.add_argument('--dry-run', action='store_true', help='Run without actually placing bets')
     parser.add_argument('--skip-rankings-refresh', action='store_true', help='Skip ATP rankings scrape (use cached data/atp_rankings.csv)')
+    parser.add_argument('--skip-auto-settle', action='store_true', help='Skip pre-run auto-settlement and go straight to prediction generation')
 
     args = parser.parse_args()
 
@@ -730,7 +746,7 @@ def main():
         orchestrator._refresh_atp_rankings = lambda: print("📊 ATP rankings refresh skipped (--skip-rankings-refresh)")
 
     # Run pipeline
-    success = orchestrator.run_full_pipeline()
+    success = orchestrator.run_full_pipeline(auto_settle=not args.skip_auto_settle)
     
     if args.dry_run:
         print("\n🧪 DRY RUN - No bets would actually be placed")

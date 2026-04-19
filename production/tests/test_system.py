@@ -134,9 +134,23 @@ def test_prediction_logger():
             log_df = pd.read_csv(prediction_logger.LOG_PATH)
             snap_df = pd.read_csv(prediction_logger.SNAPSHOT_LOG_PATH)
             odds_df = pd.read_csv(prediction_logger.ODDS_HISTORY_LOG_PATH)
+            upgraded = prediction_logger.upgrade_prediction_log(Path(prediction_logger.LOG_PATH), write=False)
 
             if len(log_df) != 1 or len(snap_df) != 1 or len(odds_df) != 1:
                 print("❌ Logger did not create exactly one row in each output")
+                return False
+            required = {
+                'match_uid', 'prediction_uid', 'logging_quality', 'rescore_quality',
+                'record_status', 'nn_model_version'
+            }
+            if not required.issubset(set(upgraded.columns)):
+                print(f"❌ Logger missing metadata columns: {sorted(required - set(upgraded.columns))}")
+                return False
+            if upgraded.loc[0, 'logging_quality'] != 'snapshot_v2':
+                print(f"❌ Expected snapshot_v2 logging quality, got {upgraded.loc[0, 'logging_quality']}")
+                return False
+            if upgraded.loc[0, 'record_status'] != 'pending':
+                print(f"❌ Expected pending record status, got {upgraded.loc[0, 'record_status']}")
                 return False
             if 'match_uid' not in log_df.columns or 'prediction_uid' not in log_df.columns:
                 print("❌ Logger missing immutable ID columns")

@@ -16,6 +16,8 @@ from collections import Counter
 import pandas as pd
 import numpy as np
 
+from prediction_logger import upgrade_prediction_log
+
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
 
 
@@ -302,6 +304,28 @@ def report_features(df: pd.DataFrame):
             print(f"    {feat}: {cnt}x")
 
 
+def report_logging_quality(df: pd.DataFrame):
+    section("LOGGING QUALITY")
+
+    if 'logging_quality' in df.columns:
+        counts = df['logging_quality'].fillna('unknown').value_counts()
+        print("  Logging lineage:")
+        for label, count in counts.items():
+            print(f"    {label}: {count}")
+
+    if 'rescore_quality' in df.columns:
+        counts = df['rescore_quality'].fillna('unknown').value_counts()
+        print("  Rescore lineage:")
+        for label, count in counts.items():
+            print(f"    {label}: {count}")
+
+    if 'record_status' in df.columns:
+        counts = df['record_status'].fillna('unknown').value_counts()
+        print("  Record status:")
+        for label, count in counts.items():
+            print(f"    {label}: {count}")
+
+
 # ---------------------------------------------------------------------------
 # 5. Duplicate check
 # ---------------------------------------------------------------------------
@@ -309,6 +333,8 @@ def report_duplicates(df: pd.DataFrame):
     section("DUPLICATE CHECK")
 
     unsettled = df[df['actual_winner'].isna()].copy()
+    if 'record_status' in unsettled.columns:
+        unsettled = unsettled[~unsettled['record_status'].isin(['stale_no_model'])]
 
     def pair_key(row):
         names = sorted([str(row.p1).lower().strip(), str(row.p2).lower().strip()])
@@ -350,6 +376,12 @@ def report_pending(df: pd.DataFrame):
     print(f"  With model pred:    {len(has_model)}")
     print(f"  Without model pred: {len(no_model)}")
 
+    if 'record_status' in unsettled.columns:
+        divider()
+        print("  Unsettled by status:")
+        for label, count in unsettled['record_status'].fillna('unknown').value_counts().items():
+            print(f"    {label}: {count}")
+
     if len(has_model) > 0:
         divider()
         print(f"  Upcoming with model predictions by date:")
@@ -358,15 +390,11 @@ def report_pending(df: pd.DataFrame):
 
     if len(no_model) > 0:
         divider()
-        print(f"  Oldest unsettleable (no model, >7 days old):")
-        no_model = no_model.copy()
-        no_model['match_dt'] = pd.to_datetime(no_model['match_date'], errors='coerce')
-        old = no_model[no_model['match_dt'] < pd.Timestamp.now() - pd.Timedelta(days=7)]
-        if len(old) > 0:
-            print(f"    {len(old)} matches older than 7 days with no model prediction")
-            print(f"    Consider marking these as unsettleable")
-        else:
-            print(f"    None")
+        stale = no_model[no_model.get('record_status', pd.Series(index=no_model.index)).eq('stale_no_model')]
+        pending_no_model = no_model[no_model.get('record_status', pd.Series(index=no_model.index)).ne('stale_no_model')]
+        print(f"  No-model rows:")
+        print(f"    Stale legacy rows: {len(stale)}")
+        print(f"    Recent/pending no-model rows: {len(pending_no_model)}")
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +410,7 @@ def main():
         print("No prediction_log.csv found.")
         sys.exit(1)
 
-    df = pd.read_csv(LOG_PATH)
+    df = upgrade_prediction_log(LOG_PATH, write=False)
 
     if args.pending:
         report_pending(df)
@@ -392,6 +420,7 @@ def main():
     report_calibration(df, args.version)
     report_edge_analysis(df, args.version)
     report_features(df)
+    report_logging_quality(df)
     report_duplicates(df)
     report_pending(df)
 

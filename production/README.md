@@ -2,6 +2,8 @@
 
 Internal notes for the current live tennis pipeline.
 
+Longer-form production docs now live under [docs/production/README.md](/Users/zachdodson/Documents/betting-algo/docs/production/README.md).
+
 ## Current Architecture
 
 The active production path is:
@@ -49,6 +51,7 @@ The model registry lives in `models/model_registry.json`.
 ```bash
 cd production
 python main.py
+python main.py --skip-auto-settle
 python auto_settle.py
 python analyze_predictions.py
 python sync_bet_tracker.py
@@ -60,3 +63,4 @@ python tests/test_system.py
 - The live production path is Tennis Abstract based, not the older UTR-based extractor.
 - `prediction_log.csv` is for the original live call on a match; use `prediction_snapshots.csv` and `logs/features_*.csv` for full historical lineage.
 - `sync_bet_tracker.py` is useful for backfilling tracked bets from already-settled prediction rows.
+- For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.

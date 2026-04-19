@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
 from features.ta_feature_calculator import TAFeatureCalculator
 from utils.bet_tracker import BetTracker
+from prediction_logger import upgrade_prediction_log
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
 SCRAPER = TennisAbstractScraper(rate_limit_delay=3.0)
@@ -107,6 +108,7 @@ def _resolve_slug(player_name: str, calc: TAFeatureCalculator) -> str:
 
 def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
                         calc: TAFeatureCalculator,
+                        session_cache: dict | None = None,
                         dry_run: bool = False) -> dict | None:
     """
     Fetch p1's recent matches and look for a result vs p2 on/after match_date.
@@ -126,7 +128,12 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
         years.append(match_date.year)
 
     print(f"  Checking TA for {p1} ({slug1}) vs {p2}...")
-    matches = SCRAPER.get_player_matches(slug1, years=years, force_refresh=True)
+    matches = SCRAPER.get_player_matches(
+        slug1,
+        years=years,
+        force_refresh=False,
+        session_cache=session_cache,
+    )
 
     if matches.empty:
         print(f"    No match data found for {slug1}")
@@ -270,29 +277,39 @@ def show_stats(df: pd.DataFrame):
     print(f"{'='*70}")
 
 
-def run(dry_run: bool = False, stats_only: bool = False):
+def run(
+    dry_run: bool = False,
+    stats_only: bool = False,
+    stale_days: int = 7,
+    include_market_only: bool = False,
+):
     if not LOG_PATH.exists():
         print("No prediction_log.csv found.")
         return
 
-    df = pd.read_csv(LOG_PATH)
+    df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=not dry_run)
 
     if stats_only:
         show_stats(df)
         return
 
     pending = df[df['actual_winner'].isna()].copy()
+    if 'record_status' in pending.columns:
+        pending = pending[~pending['record_status'].isin(['stale_no_model'])]
+    if not include_market_only:
+        pending = pending[pending['model_p1_prob'].notna()]
     if pending.empty:
         print("No unsettled predictions.")
         show_stats(df)
         return
 
-    print(f"Found {len(pending)} unsettled predictions\n")
+    print(f"Found {len(pending)} unsettled prediction(s) to check\n")
 
     # Load player mapping once
     calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
     calc.player_slug_map = TAFeatureCalculator._load_player_mapping(calc)
     tracker = BetTracker(str(Path(__file__).parent / "logs"))
+    session_cache = {}
 
     newly_settled = 0
     newly_settled_bets = 0
@@ -304,7 +321,14 @@ def run(dry_run: bool = False, stats_only: bool = False):
         print(f"\n[{idx}] {p1} vs {p2}  ({row.get('tournament', '')}  {match_date})")
         print(f"     Model: {float(row['model_p1_prob']):.0%} P1 | Market: {float(row['market_p1_prob']):.0%} P1")
 
-        result = try_settle_from_ta(p1, p2, match_date, calc, dry_run=dry_run)
+        result = try_settle_from_ta(
+            p1,
+            p2,
+            match_date,
+            calc,
+            session_cache=session_cache,
+            dry_run=dry_run,
+        )
 
         if result is None:
             print(f"  → Not settled yet")
@@ -373,6 +397,7 @@ def run(dry_run: bool = False, stats_only: bool = False):
         time.sleep(3.0)
 
     if not dry_run:
+        df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=False)
         df.to_csv(LOG_PATH, index=False)
         print(f"\nSaved {newly_settled} newly settled prediction(s) to prediction_log.csv")
         if newly_settled_bets:
@@ -385,6 +410,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Auto-settle predictions from Tennis Abstract results')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be settled without writing')
     parser.add_argument('--stats', action='store_true', help='Show accuracy stats only')
+    parser.add_argument('--stale-days', type=int, default=7, help='Mark legacy no-model rows older than this as stale and skip them')
+    parser.add_argument('--include-market-only', action='store_true', help='Also check old market-only rows with no model prediction')
     args = parser.parse_args()
 
-    run(dry_run=args.dry_run, stats_only=args.stats)
+    run(
+        dry_run=args.dry_run,
+        stats_only=args.stats,
+        stale_days=args.stale_days,
+        include_market_only=args.include_market_only,
+    )

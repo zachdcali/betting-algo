@@ -2,6 +2,8 @@
 
 This is the current production workflow, not the older UTR-era version.
 
+Longer-form documentation for production lineage and version semantics lives in [docs/production/README.md](/Users/zachdodson/Documents/betting-algo/docs/production/README.md) and [docs/production/VERSIONING.md](/Users/zachdodson/Documents/betting-algo/docs/production/VERSIONING.md).
+
 ## End-to-End Flow
 
 ```text
@@ -25,6 +27,13 @@ This is the current production workflow, not the older UTR-era version.
 ```bash
 cd production
 python main.py
+```
+
+For scheduled cloud prediction runs where you do not want old settlement work to block the odds/prediction path:
+
+```bash
+cd production
+python main.py --skip-auto-settle
 ```
 
 What that does:
@@ -68,6 +77,8 @@ What that does:
   Append-only odds snapshots. Use this for line-movement analysis.
 - `logs/features_*.csv`
   Per-run feature snapshots keyed by stable match identifiers.
+- `docs/production/VERSIONING.md`
+  Current rules for model-family versions, logging schema versions, and lineage quality.
 - `logs/all_bets.csv`
   Logged bet recommendations.
 - `logs/bankroll_history.csv`

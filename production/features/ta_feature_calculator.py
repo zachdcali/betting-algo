@@ -791,6 +791,14 @@ class TAFeatureCalculator:
             'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
         }
 
+        def _coerce_numeric(value, default_feature: str, note: str | None = None) -> float:
+            """Coerce optional numeric stats to floats before derived arithmetic."""
+            if pd.notna(value):
+                return float(value)
+            fallback = float(self._default_for(default_feature, p1=s1, p2=s2, surface=surface))
+            _semantic_defaults.append(note or f'{default_feature}=default')
+            return fallback
+
         # Get TA tournament start date + round BEFORE temporal features.
         # TA (like Sackmann CSV) stores tournament START DATE for all rounds.
         _upcoming = self.scraper.get_upcoming_match(slug1, p2_display, session_cache=session_cache)
@@ -879,6 +887,12 @@ class TAFeatureCalculator:
         p2_rc90 = self._rank_change(matches2, when, 90)
         p1_vol90 = self._rank_volatility(matches1, when, 90)
         p2_vol90 = self._rank_volatility(matches2, when, 90)
+        p1_rc30 = _coerce_numeric(p1_rc30, 'P1_Rank_Change_30d')
+        p1_rc90 = _coerce_numeric(p1_rc90, 'P1_Rank_Change_90d')
+        p2_rc30 = _coerce_numeric(p2_rc30, 'P2_Rank_Change_30d')
+        p2_rc90 = _coerce_numeric(p2_rc90, 'P2_Rank_Change_90d')
+        p1_vol90 = _coerce_numeric(p1_vol90, 'P1_Rank_Volatility_90d')
+        p2_vol90 = _coerce_numeric(p2_vol90, 'P2_Rank_Volatility_90d')
 
         # Level and round stats
         level_code = self._level_code(tournament_level)
@@ -913,19 +927,28 @@ class TAFeatureCalculator:
         st_flag = 1 if ((t1['last_surface'] and t1['last_surface'].lower() != surface.lower()) or
                         (t2['last_surface'] and t2['last_surface'].lower() != surface.lower())) else 0
 
+        p1_height = _coerce_numeric(s1['height'], 'Player1_Height')
+        p2_height = _coerce_numeric(s2['height'], 'Player2_Height')
+        p1_age = _coerce_numeric(s1['age'], 'Player1_Age')
+        p2_age = _coerce_numeric(s2['age'], 'Player2_Age')
+        p1_rank = _coerce_numeric(s1['rank'], 'Player1_Rank')
+        p2_rank = _coerce_numeric(s2['rank'], 'Player2_Rank')
+        p1_rank_points = _coerce_numeric(s1['rank_points'], 'Player1_Rank_Points')
+        p2_rank_points = _coerce_numeric(s2['rank_points'], 'Player2_Rank_Points')
+
         # Assemble all features
         features: Dict[str, float] = {}
 
         # Direct player attributes
         features.update({
-            'Player1_Height': s1['height'],
-            'Player2_Height': s2['height'],
-            'Player1_Age': s1['age'],
-            'Player2_Age': s2['age'],
-            'Player1_Rank': s1['rank'],
-            'Player2_Rank': s2['rank'],
-            'Player1_Rank_Points': s1['rank_points'],
-            'Player2_Rank_Points': s2['rank_points'],
+            'Player1_Height': p1_height,
+            'Player2_Height': p2_height,
+            'Player1_Age': p1_age,
+            'Player2_Age': p2_age,
+            'Player1_Rank': p1_rank,
+            'Player2_Rank': p2_rank,
+            'Player1_Rank_Points': p1_rank_points,
+            'Player2_Rank_Points': p2_rank_points,
 
             'P1_Matches_14d': t1['matches_14d'],
             'P1_Matches_30d': t1['matches_30d'],
@@ -962,25 +985,25 @@ class TAFeatureCalculator:
 
         # Derived features
         features.update({
-            'Height_Diff': s1['height'] - s2['height'],
-            'Age_Diff': s1['age'] - s2['age'],
-            'Avg_Height': (s1['height'] + s2['height']) / 2,
-            'Avg_Age': (s1['age'] + s2['age']) / 2,
-            'Rank_Diff': s1['rank'] - s2['rank'],
-            'Rank_Points_Diff': s1['rank_points'] - s2['rank_points'],
-            'Avg_Rank': (s1['rank'] + s2['rank']) / 2,
-            'Avg_Rank_Points': (s1['rank_points'] + s2['rank_points']) / 2,
+            'Height_Diff': p1_height - p2_height,
+            'Age_Diff': p1_age - p2_age,
+            'Avg_Height': (p1_height + p2_height) / 2,
+            'Avg_Age': (p1_age + p2_age) / 2,
+            'Rank_Diff': p1_rank - p2_rank,
+            'Rank_Points_Diff': p1_rank_points - p2_rank_points,
+            'Avg_Rank': (p1_rank + p2_rank) / 2,
+            'Avg_Rank_Points': (p1_rank_points + p2_rank_points) / 2,
             'draw_size': int(draw_size),
             'Rank_Ratio': (
-                max(s1['rank'], s2['rank']) / min(s1['rank'], s2['rank'])
-                if min(s1['rank'], s2['rank']) > 0 else 1.0
+                max(p1_rank, p2_rank) / min(p1_rank, p2_rank)
+                if min(p1_rank, p2_rank) > 0 else 1.0
             ),
             'Surface_Transition_Flag': st_flag,
         })
 
         # Peak age flags
-        features['P1_Peak_Age'] = 1 if 24 <= float(s1['age']) <= 28 else 0
-        features['P2_Peak_Age'] = 1 if 24 <= float(s2['age']) <= 28 else 0
+        features['P1_Peak_Age'] = 1 if 24 <= p1_age <= 28 else 0
+        features['P2_Peak_Age'] = 1 if 24 <= p2_age <= 28 else 0
 
         # Surfaces
         features.update({
