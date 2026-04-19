@@ -58,10 +58,62 @@
       "test_auc": 0.7282,
       "test_brier": 0.2104,
       "test_ece": 0.0064,
-      "notes": "Fixed M/64 Masters detection: non-Monday start (Madrid/Rome/Shanghai) now correctly treated as 2-week events. Dynamic qualifier offsets: counts actual qualifier rounds per tournament in training data instead of using static per-level defaults. Verified against real Bovada dates for Miami 2026 (all rounds exact) and Zadar/Murcia CH 2026 (all rounds exact including Q1).",
+      "probability_mode": "raw",
+      "calibrated_model_file": "neural_network_calibrated_SURFACE_FIX.pkl",
+      "notes": "Fixed M/64 Masters detection: non-Monday start (Madrid/Rome/Shanghai) now correctly treated as 2-week events. Dynamic qualifier offsets: counts actual qualifier rounds per tournament in training data instead of using static per-level defaults. Verified against real Bovada dates for Miami 2026 (all rounds exact) and Zadar/Murcia CH 2026 (all rounds exact including Q1). Historical calibration artifact support exists, but raw probabilities remain the promoted live mode until a calibrated variant earns its own version bump.",
       "model_file": "neural_network_model_SURFACE_FIX.pth",
       "scaler_file": "scaler_SURFACE_FIX.pkl",
       "archived": false
+    }
+  },
+  "xgboost": {
+    "current_version": "v1.1.0",
+    "models": {
+      "v1.0.0": {
+        "name": "XGB-143-SURFACE_FIX",
+        "date": "2026-04-06",
+        "features": 143,
+        "test_accuracy": 0.6644,
+        "test_auc": 0.7292,
+        "notes": "Initial XGBoost model trained on same JeffSackmann SURFACE_FIX dataset. Used 143 features (including duplicate Peak_Age_P1/P2).",
+        "model_file": "xgboost_model_SURFACE_FIX_v1.0.0.json",
+        "archived": true
+      },
+      "v1.1.0": {
+        "name": "XGB-141-SURFACE_FIX",
+        "date": "2026-04-07",
+        "features": 141,
+        "test_accuracy": 0.6644,
+        "test_auc": 0.7292,
+        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). Same dataset, same architecture.",
+        "model_file": "xgboost_model_SURFACE_FIX.json",
+        "archived": false
+      }
+    }
+  },
+  "random_forest": {
+    "current_version": "v1.1.0",
+    "models": {
+      "v1.0.0": {
+        "name": "RF-143-SURFACE_FIX",
+        "date": "2026-04-06",
+        "features": 143,
+        "test_accuracy": 0.6597,
+        "test_auc": 0.7241,
+        "notes": "Initial Random Forest model trained on same JeffSackmann SURFACE_FIX dataset. Used 143 features (including duplicate Peak_Age_P1/P2).",
+        "model_file": "random_forest_model_SURFACE_FIX_v1.0.0.pkl",
+        "archived": true
+      },
+      "v1.1.0": {
+        "name": "RF-141-SURFACE_FIX",
+        "date": "2026-04-07",
+        "features": 141,
+        "test_accuracy": 0.6597,
+        "test_auc": 0.7241,
+        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). Same dataset, same architecture.",
+        "model_file": "random_forest_model_SURFACE_FIX.pkl",
+        "archived": false
+      }
     }
   }
 }

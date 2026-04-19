@@ -556,6 +556,7 @@ class LiveBettingOrchestrator:
                 # Use TA-inferred match date (tourney_start + round_offset) — Bovada only gives clock time
                 match_date = pred_row.get('meta_match_date') or today
                 model_version = pred_row.get('model_version', 'NN-SURFACE_FIX')
+                nn_probability_source = pred_row.get('probability_source', 'raw')
                 # Get ranks from features
                 p1_rank = pred_row.get('Player1_Rank')
                 p2_rank = pred_row.get('Player2_Rank')
@@ -607,6 +608,7 @@ class LiveBettingOrchestrator:
                     nn_model_version=model_version or MODEL_VERSION,
                     xgb_model_version=XGB_MODEL_VERSION if xgb_p1 is not None else '',
                     rf_model_version=RF_MODEL_VERSION if rf_p1 is not None else '',
+                    nn_probability_source=nn_probability_source,
                     odds_scraped_at=odds_scraped_at,
                     match_start_time=match_time,
                     features_complete=features_complete,

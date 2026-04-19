@@ -7,13 +7,15 @@ Loads NN-141 model and generates calibrated predictions
 import pandas as pd
 import numpy as np
 import torch
-import torch.nn as nn
 import pickle
 import json
 from pathlib import Path
 from typing import Tuple, Dict, Optional
 import warnings
-from sklearn.base import BaseEstimator, ClassifierMixin
+try:
+    from models.nn_runtime import NNWrapper, TennisNet
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .nn_runtime import NNWrapper, TennisNet
 
 # Load model version from registry
 _REGISTRY_PATH = Path(__file__).parent / "model_registry.json"
@@ -28,7 +30,6 @@ else:
     MODEL_VERSION = "unknown"
     XGB_MODEL_VERSION = "unknown"
     RF_MODEL_VERSION = "unknown"
-from sklearn.utils import Bunch
 warnings.filterwarnings('ignore')
 
 
@@ -37,61 +38,6 @@ def _registry_model_entry(section: str, version: str) -> Dict:
     if section == "nn":
         return _REGISTRY.get("models", {}).get(version, {})
     return _REGISTRY.get(section, {}).get("models", {}).get(version, {})
-
-# Neural Network Architecture (must match training)
-class TennisNet(nn.Module):
-    def __init__(self, input_size: int):
-        super(TennisNet, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, 128), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(64, 32), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(32, 16), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(16, 1), nn.Sigmoid()
-        )
-    
-    def forward(self, x):
-        return self.network(x)
-
-class NNWrapper(BaseEstimator, ClassifierMixin):
-    """sklearn-compatible wrapper for PyTorch model (for calibrated models)"""
-    def __init__(self, model, scaler, device):
-        self.model = model
-        self.scaler = scaler
-        self.device = device
-        self.classes_ = np.array([0, 1])  # Required for sklearn compatibility
-    
-    def fit(self, X, y=None):
-        """Dummy fit method to satisfy sklearn validation (not used with prefit)"""
-        return self
-    
-    def __sklearn_tags__(self):
-        """Set estimator tags to be recognized as classifier"""
-        return Bunch(
-            estimator_type="classifier",
-            requires_fit=False,
-            input_tags=Bunch(sparse=False)
-        )
-    
-    def predict(self, X):
-        """Predict class labels"""
-        probs = self.predict_proba(X)[:, 1]
-        return (probs > 0.5).astype(int)
-    
-    def predict_proba(self, X):
-        """Predict probabilities for calibration"""
-        if self.model is None or self.scaler is None:
-            raise ValueError("Model and scaler must be set")
-        X_scaled = self.scaler.transform(X)
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(torch.FloatTensor(X_scaled).to(self.device)).squeeze().cpu().numpy()
-        # Ensure 2D output (n_samples, 2)
-        if outputs.ndim == 0:
-            outputs = np.array([outputs])
-        elif outputs.ndim == 1:
-            outputs = outputs.reshape(-1, 1)
-        return np.hstack((1 - outputs, outputs))  # Shape (n_samples, 2)
 
 # Exact 141 features for NN-141 model (Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
 EXACT_141_FEATURES = [
@@ -144,15 +90,20 @@ class TennisPredictor:
         self.model_dir = Path(model_dir)
         self.model = None
         self.scaler = None
+        self.calibrated_model = None
+        self.runtime_model_version = MODEL_VERSION
+        self.probability_source = "raw"
         self.feature_names = EXACT_141_FEATURES
         self.is_loaded = False
 
     def load_model(self) -> bool:
-        """Load the SURFACE_FIX NN model and scaler"""
+        """Load the current NN model, optionally using registry-enabled calibration."""
         try:
             entry = _registry_model_entry("nn", MODEL_VERSION)
             model_path = self.model_dir / entry.get("model_file", "neural_network_model_SURFACE_FIX.pth")
             scaler_path = self.model_dir / entry.get("scaler_file", "scaler_SURFACE_FIX.pkl")
+            calibrated_path = self.model_dir / entry.get("calibrated_model_file", "neural_network_calibrated_SURFACE_FIX.pkl")
+            probability_mode = entry.get("probability_mode", "raw")
 
             if not model_path.exists():
                 print(f"❌ Model file not found: {model_path}")
@@ -173,6 +124,20 @@ class TennisPredictor:
             state_dict = torch.load(model_path, map_location='cpu')
             self.model.load_state_dict(state_dict)
             self.model.eval()
+
+            self.calibrated_model = None
+            self.runtime_model_version = MODEL_VERSION
+            self.probability_source = "raw"
+            if probability_mode == "calibrated" and calibrated_path.exists():
+                try:
+                    with open(calibrated_path, 'rb') as f:
+                        self.calibrated_model = pickle.load(f)
+                    self.probability_source = "calibrated"
+                    print(f"✅ Calibrated NN probabilities loaded from {calibrated_path.name}")
+                except Exception as e:
+                    print(f"⚠️  Failed to load calibrated NN artifact {calibrated_path}: {e}")
+            elif probability_mode == "calibrated":
+                print(f"⚠️  Registry requested calibrated NN probabilities but artifact was not found: {calibrated_path}")
 
             self.is_loaded = True
             print(f"✅ NN model loaded ({input_size} features)")
@@ -201,16 +166,19 @@ class TennisPredictor:
             feature_values = [float(features_dict.get(f, 0.0)) for f in EXACT_141_FEATURES]
 
             X = np.array(feature_values).reshape(1, -1)
-            X_scaled = self.scaler.transform(X)
-
-            with torch.no_grad():
-                raw_prob = float(self.model(torch.FloatTensor(X_scaled)).squeeze().numpy())
+            if self.calibrated_model is not None:
+                raw_prob = float(self.calibrated_model.predict_proba(X)[:, 1][0])
+            else:
+                X_scaled = self.scaler.transform(X)
+                with torch.no_grad():
+                    raw_prob = float(self.model(torch.FloatTensor(X_scaled)).squeeze().numpy())
 
             return {
                 "player1_win_prob": raw_prob,
                 "player2_win_prob": 1.0 - raw_prob,
                 "raw_prob": raw_prob,
-                "model_version": MODEL_VERSION,
+                "model_version": self.runtime_model_version,
+                "probability_source": self.probability_source,
             }
             
         except Exception as e:

@@ -5,13 +5,22 @@ import os
 from datetime import datetime, date
 from pathlib import Path
 
-from logging_utils import (
-    append_unique_row,
-    build_match_uid,
-    build_odds_snapshot_uid,
-    build_prediction_uid,
-    ensure_csv_columns,
-)
+try:
+    from logging_utils import (
+        append_unique_row,
+        build_match_uid,
+        build_odds_snapshot_uid,
+        build_prediction_uid,
+        ensure_csv_columns,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .logging_utils import (
+        append_unique_row,
+        build_match_uid,
+        build_odds_snapshot_uid,
+        build_prediction_uid,
+        ensure_csv_columns,
+    )
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prediction_log.csv')
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -32,7 +41,7 @@ COLUMNS = [
     'spread_handicap', 'spread_odds_p1', 'spread_odds_p2',
     'total_games', 'total_odds_over', 'total_odds_under',
     'edge_p1', 'primary_model_family', 'model_version', 'nn_model_version',
-    'xgb_model_version', 'rf_model_version',
+    'xgb_model_version', 'rf_model_version', 'nn_probability_source',
     'logging_schema_version', 'logging_quality', 'rescore_quality',
     'record_status', 'record_note',
     'features_complete', 'defaulted_features',
@@ -46,6 +55,7 @@ COLUMNS = [
     'prediction_uid', 'latest_prediction_uid',
     'latest_logged_at', 'latest_model_version_seen',
     'latest_nn_model_version_seen', 'latest_xgb_model_version_seen', 'latest_rf_model_version_seen',
+    'latest_nn_probability_source_seen',
     'latest_odds_scraped_at', 'latest_match_start_time', 'latest_match_date',
 ]
 
@@ -64,7 +74,7 @@ SNAPSHOT_COLUMNS = [
     'spread_handicap', 'spread_odds_p1', 'spread_odds_p2',
     'total_games', 'total_odds_over', 'total_odds_under',
     'edge_p1', 'primary_model_family', 'model_version', 'nn_model_version',
-    'xgb_model_version', 'rf_model_version',
+    'xgb_model_version', 'rf_model_version', 'nn_probability_source',
     'logging_schema_version', 'logging_quality', 'rescore_quality',
     'record_status', 'record_note',
     'features_complete', 'defaulted_features',
@@ -195,6 +205,7 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
         nn_version = _clean_text(row.get('nn_model_version', ''))
         xgb_version = _clean_text(row.get('xgb_model_version', ''))
         rf_version = _clean_text(row.get('rf_model_version', ''))
+        nn_probability_source = _clean_text(row.get('nn_probability_source', ''))
 
         df.at[idx, 'nn_model_version'] = nn_version or model_version
         if not xgb_version and pd.notna(row.get('xgb_p1_prob')):
@@ -205,6 +216,14 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
             df.at[idx, 'rf_model_version'] = 'unknown_legacy'
         elif not rf_version:
             df.at[idx, 'rf_model_version'] = ''
+        if not nn_probability_source:
+            if '+calibrated' in model_version or '+calibrated' in df.at[idx, 'nn_model_version']:
+                nn_probability_source = 'calibrated'
+            elif pd.notna(row.get('model_p1_prob')):
+                nn_probability_source = 'raw'
+            else:
+                nn_probability_source = ''
+        df.at[idx, 'nn_probability_source'] = nn_probability_source
 
         has_run_id = bool(_clean_text(row.get('run_id', '')))
         has_feature_snapshot = bool(_clean_text(row.get('feature_snapshot_id', '')))
@@ -252,6 +271,8 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
             df.at[idx, 'latest_xgb_model_version_seen'] = df.at[idx, 'xgb_model_version']
         if not _clean_text(row.get('latest_rf_model_version_seen', '')):
             df.at[idx, 'latest_rf_model_version_seen'] = df.at[idx, 'rf_model_version']
+        if not _clean_text(row.get('latest_nn_probability_source_seen', '')):
+            df.at[idx, 'latest_nn_probability_source_seen'] = df.at[idx, 'nn_probability_source']
         if not _clean_text(row.get('latest_match_date', '')):
             df.at[idx, 'latest_match_date'] = match_date_str
         if not _clean_text(row.get('latest_prediction_uid', '')):
@@ -293,6 +314,7 @@ def log_prediction(
     nn_model_version: str = None,
     xgb_model_version: str = None,
     rf_model_version: str = None,
+    nn_probability_source: str = None,
     odds_scraped_at: str = None,
     match_start_time: str = None,
     actual_winner: int = None, score: str = None,
@@ -320,6 +342,8 @@ def log_prediction(
         xgb_model_version = current_xgb
     if rf_model_version is None and rf_p1_prob is not None:
         rf_model_version = current_rf
+    if nn_probability_source is None and model_p1_prob is not None:
+        nn_probability_source = 'raw'
 
     match_date_str = _parse_match_date(match_date)
     logged_at = datetime.now().isoformat()
@@ -372,6 +396,7 @@ def log_prediction(
         'nn_model_version': nn_model_version,
         'xgb_model_version': xgb_model_version or '',
         'rf_model_version': rf_model_version or '',
+        'nn_probability_source': nn_probability_source or '',
         'logging_schema_version': SCHEMA_VERSION if (run_id and feature_snapshot_id) else 'legacy_v1',
         'logging_quality': 'snapshot_v2' if (run_id and feature_snapshot_id) else 'legacy_backfilled',
         'rescore_quality': 'exact_feature_snapshot' if feature_snapshot_id else 'legacy_fallback_match',
@@ -400,6 +425,7 @@ def log_prediction(
         'latest_nn_model_version_seen': nn_model_version,
         'latest_xgb_model_version_seen': xgb_model_version or '',
         'latest_rf_model_version_seen': rf_model_version or '',
+        'latest_nn_probability_source_seen': nn_probability_source or '',
         'latest_odds_scraped_at': odds_scraped_at,
         'latest_match_start_time': match_start_time,
         'latest_match_date': match_date_str,
@@ -504,7 +530,7 @@ def log_prediction(
                                    'spread_handicap', 'spread_odds_p1', 'spread_odds_p2',
                                    'total_games', 'total_odds_over', 'total_odds_under',
                                    'edge_p1', 'primary_model_family', 'model_version', 'nn_model_version',
-                                   'xgb_model_version', 'rf_model_version',
+                                   'xgb_model_version', 'rf_model_version', 'nn_probability_source',
                                    'p1_rank', 'p2_rank',
                                    'odds_scraped_at', 'match_start_time',
                                    'run_id', 'feature_snapshot_id', 'prediction_uid'}
@@ -519,6 +545,7 @@ def log_prediction(
                 df.at[idx, 'latest_nn_model_version_seen'] = nn_model_version
                 df.at[idx, 'latest_xgb_model_version_seen'] = xgb_model_version or ''
                 df.at[idx, 'latest_rf_model_version_seen'] = rf_model_version or ''
+                df.at[idx, 'latest_nn_probability_source_seen'] = nn_probability_source or ''
                 df.at[idx, 'latest_run_id'] = run_id
                 df.at[idx, 'latest_feature_snapshot_id'] = feature_snapshot_id
                 df.at[idx, 'latest_prediction_uid'] = prediction_uid

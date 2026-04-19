@@ -113,6 +113,21 @@ def report_accuracy(df: pd.DataFrame, version: str = None):
             gmk = grp['market_correct'].mean()
             print(f"    {ver:<25s} {gmc:>3d}/{gn:<3d} = {gma:.1%} {gmkc:>3d}/{gn:<3d} = {gmk:.1%} {gma-gmk:>+6.1%}")
 
+    if 'nn_probability_source' in main.columns and main['nn_probability_source'].fillna('').astype(str).str.strip().any():
+        divider()
+        print(f"  By NN probability source:")
+        print(f"    {'Source':<14s} {'Model':>14s} {'Market':>14s} {'Edge':>7s}")
+        print(f"    {'─'*14} {'─'*14} {'─'*14} {'─'*7}")
+        for source, grp in main.groupby(main['nn_probability_source'].fillna('').replace('', 'unknown')):
+            if len(grp) == 0:
+                continue
+            gmc = int(grp['model_correct'].sum())
+            gmkc = int(grp['market_correct'].sum())
+            gn = len(grp)
+            gma = grp['model_correct'].mean()
+            gmk = grp['market_correct'].mean()
+            print(f"    {str(source):<14s} {gmc:>3d}/{gn:<3d} = {gma:.1%} {gmkc:>3d}/{gn:<3d} = {gmk:.1%} {gma-gmk:>+6.1%}")
+
     # By surface
     if main['surface'].notna().any():
         divider()

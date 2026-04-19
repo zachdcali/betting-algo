@@ -27,6 +27,17 @@ Practical guidance for the next NN retrain:
 - Because the historical NN holdout was used for early stopping, the next honest retrain should be treated as a new NN version, not a silent overwrite.
 - `v1.3.0` is a reasonable next NN version if the feature set stays conceptually the same but the train/validation/test protocol changes.
 
+Probability mode should be tracked separately from the base artifact version:
+
+- `nn_model_version = v1.2.1`
+  The trained NN weights/scaler family
+- `nn_probability_source = raw`
+  Direct sigmoid output from that model
+- `nn_probability_source = calibrated`
+  A post-hoc calibration layer applied to that same family
+
+That separation matters because a calibrated probability layer should not silently masquerade as a brand-new artifact version.
+
 ## 2. Logging Schema Versions
 
 Operational logging also needs its own versioning.
