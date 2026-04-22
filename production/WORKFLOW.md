@@ -76,6 +76,12 @@ What that does:
   Append-only prediction snapshots. Use this for experiment lineage.
 - `odds_history.csv`
   Append-only odds snapshots. Use this for line-movement analysis.
+- `logs/audit/run_history.csv`
+  Per-run pipeline and settlement summaries.
+- `logs/audit/skipped_live_matches.csv`
+  Explicit skipped-match ledger with reason codes.
+- `logs/audit/settlement_audit.csv`
+  Per-attempt settlement audit with reason codes.
 - `logs/features_*.csv`
   Per-run feature snapshots keyed by stable match identifiers.
 - `docs/production/VERSIONING.md`
@@ -113,3 +119,9 @@ python settle_bets.py --interactive
 The repo still contains older helper paths such as `features/extract_features.py` and older UTR/cloud scripts. Those are not the active live production path.
 
 The active path now uses two inference guardrails: Bovada scheduled start times and TA match-state checks. If a match is already started, inside the configured pre-start buffer, or appears to have already completed in TA history, the orchestrator skips feature generation for that row and records the skip reason in the per-run features log.
+
+For dashboards and operational review, prefer the audit logs first:
+
+- `run_history.csv` for run-level health and counts
+- `skipped_live_matches.csv` for understanding why matches never reached prediction logging
+- `settlement_audit.csv` for understanding why pending rows did or did not settle

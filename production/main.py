@@ -7,6 +7,7 @@ Coordinates odds fetching, feature extraction, model inference, and stake calcul
 import argparse
 import sys
 import re
+from collections import Counter
 import pandas as pd
 import json
 from pathlib import Path
@@ -32,6 +33,7 @@ from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
+from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
 from scraping.atp_rankings_scraper import fetch_atp_rankings, save_rankings
 
@@ -55,6 +57,8 @@ class LiveBettingOrchestrator:
         self.feature_engine = TAFeatureCalculator()
         self.run_id = None
         self.run_started_at = None
+        self.run_metrics = {}
+        self.rankings_refresh_enabled = True
 
         # Tournament resolver for surface/level/draw/round
         tournaments_map_path = Path(self.config.get('data_dir', '../data')) / 'tournaments_map.csv'
@@ -65,6 +69,53 @@ class LiveBettingOrchestrator:
         started = utc_now()
         self.run_id = make_run_id(started)
         self.run_started_at = started.replace(microsecond=0).isoformat()
+        self.run_metrics = {
+            'run_id': self.run_id,
+            'run_kind': 'prediction_pipeline',
+            'started_at': self.run_started_at,
+            'completed_at': '',
+            'status': 'running',
+            'auto_settle_enabled': '',
+            'rankings_refresh_enabled': '',
+            'odds_rows_fetched': 0,
+            'odds_rows_candidate': 0,
+            'feature_rows_total': 0,
+            'feature_rows_ok': 0,
+            'feature_rows_skipped': 0,
+            'feature_skip_reason_summary': {},
+            'prediction_rows_total': 0,
+            'prediction_rows_success': 0,
+            'prediction_rows_error': 0,
+            'prediction_log_attempts': 0,
+            'prediction_log_created': 0,
+            'prediction_log_updated': 0,
+            'prediction_log_skipped_incomplete': 0,
+            'bet_opportunities': 0,
+            'bets_logged': 0,
+            'settlement_candidates': 0,
+            'settlement_newly_settled': 0,
+            'settlement_auto_settled_bets': 0,
+            'settlement_reason_summary': {},
+            'error_message': '',
+        }
+        upsert_run_history(self.run_metrics)
+
+    def _flush_run_history(self, status: str | None = None, error_message: str = ""):
+        """Write the current run summary for dashboards and ops debugging."""
+        if not self.run_metrics:
+            return
+        payload = dict(self.run_metrics)
+        if status is not None:
+            payload['status'] = status
+            self.run_metrics['status'] = status
+        if error_message:
+            payload['error_message'] = error_message
+            self.run_metrics['error_message'] = error_message
+        if payload.get('status') not in {'running', ''}:
+            completed_at = utc_now().replace(microsecond=0).isoformat()
+            payload['completed_at'] = completed_at
+            self.run_metrics['completed_at'] = completed_at
+        upsert_run_history(payload)
 
     @staticmethod
     def parse_match_date(match_time_str: str) -> datetime:
@@ -248,6 +299,7 @@ class LiveBettingOrchestrator:
         """Fetch current odds from Bovada"""
         print("🎾 Fetching odds from Bovada...")
         odds_df = fetch_bovada_tennis_odds(headless=True)
+        self.run_metrics['odds_rows_fetched'] = len(odds_df)
         
         if not odds_df.empty:
             # Save odds data
@@ -279,6 +331,7 @@ class LiveBettingOrchestrator:
                    or 'outright' in str(r.get('event', '')).lower(),
             axis=1
         )].copy()
+        self.run_metrics['odds_rows_candidate'] = len(odds_df)
 
         feature_rows = []
         for idx, row in odds_df.iterrows():
@@ -423,6 +476,31 @@ class LiveBettingOrchestrator:
                 'meta_resolver_source': resolver_source
             })
 
+            if status == "skip":
+                skip_reason_code = (status_detail or "feature_skip_unknown").split(':', 1)[0]
+                log_skipped_live_match(
+                    run_id=self.run_id,
+                    run_started_at=self.run_started_at,
+                    stage='feature_extraction',
+                    skip_reason_code=skip_reason_code,
+                    skip_reason_detail=status_detail,
+                    match_uid=match_uid,
+                    feature_snapshot_id=feature_snapshot_id,
+                    match_date=resolved_match_date,
+                    match_start_time=row.get('match_time', ''),
+                    match_start_dt_local=match_start_dt.isoformat() if match_start_dt else '',
+                    odds_scraped_at=row.get('scrape_time_utc', '') or row.get('timestamp', ''),
+                    tournament=row.get('tourney_name', '') or row.get('event', ''),
+                    event_title=row.get('event', ''),
+                    surface=surface,
+                    level=tournament_level,
+                    round_code=resolved_round,
+                    resolver_source=resolver_source,
+                    p1=p1,
+                    p2=p2,
+                    defaulted_features=features.get('_defaulted_features', '') or '',
+                )
+
             feature_rows.append(ordered_features)
 
         features_df = pd.DataFrame(feature_rows)
@@ -432,6 +510,16 @@ class LiveBettingOrchestrator:
             features_df.to_csv(features_file, index=False)
             ok_count = (features_df['status'] == 'ok').sum()
             skip_count = (features_df['status'] == 'skip').sum()
+            skip_counter = Counter(
+                features_df.loc[features_df['status'] == 'skip', 'status_detail']
+                .fillna('feature_skip_unknown')
+                .replace('', 'feature_skip_unknown')
+                .tolist()
+            )
+            self.run_metrics['feature_rows_total'] = len(features_df)
+            self.run_metrics['feature_rows_ok'] = int(ok_count)
+            self.run_metrics['feature_rows_skipped'] = int(skip_count)
+            self.run_metrics['feature_skip_reason_summary'] = dict(skip_counter)
             print(f"✅ Feature extraction: {ok_count} ok, {skip_count} skipped")
 
         return features_df
@@ -578,6 +666,12 @@ class LiveBettingOrchestrator:
     
     def _log_all_predictions(self, predictions_df, odds_df, features_df):
         """Log every prediction to prediction_log.csv for later accuracy tracking."""
+        stats = {
+            'attempts': 0,
+            'created': 0,
+            'updated': 0,
+            'skipped_incomplete': 0,
+        }
         try:
             today = datetime.now().date().isoformat()
 
@@ -595,6 +689,7 @@ class LiveBettingOrchestrator:
                 model_p1 = pred_row.get('player1_win_prob') or pred_row.get('p1_win_prob')
                 if model_p1 is None:
                     continue
+                stats['attempts'] += 1
                 model_p2 = 1.0 - float(model_p1)
 
                 # features_complete: False if the calculator reported any noisy defaults
@@ -602,6 +697,29 @@ class LiveBettingOrchestrator:
                 if not features_complete:
                     defaulted = pred_row.get('meta_defaulted_features', '')
                     print(f"  ⛔ Skipping prediction log for {p1} vs {p2} — incomplete features: {defaulted}")
+                    stats['skipped_incomplete'] += 1
+                    log_skipped_live_match(
+                        run_id=pred_row.get('run_id', self.run_id),
+                        run_started_at=self.run_started_at,
+                        stage='prediction_logging',
+                        skip_reason_code='incomplete_features',
+                        skip_reason_detail=defaulted,
+                        match_uid=pred_row.get('match_uid', ''),
+                        feature_snapshot_id=pred_row.get('feature_snapshot_id', ''),
+                        match_date=pred_row.get('meta_match_date', '') or today,
+                        match_start_time=pred_row.get('match_time', ''),
+                        match_start_dt_local=pred_row.get('match_start_dt_local', ''),
+                        odds_scraped_at=pred_row.get('timestamp', ''),
+                        tournament=pred_row.get('event', ''),
+                        event_title=pred_row.get('event', ''),
+                        surface=pred_row.get('meta_surface_input', ''),
+                        level=pred_row.get('meta_level_input', ''),
+                        round_code=pred_row.get('meta_round_input', ''),
+                        resolver_source=pred_row.get('meta_resolver_source', ''),
+                        p1=p1,
+                        p2=p2,
+                        defaulted_features=defaulted,
+                    )
                     continue
 
                 # Try to get market odds from odds_df — match BOTH players to avoid
@@ -686,7 +804,7 @@ class LiveBettingOrchestrator:
                 else:
                     rf_p1, rf_p2 = None, None
 
-                log_prediction(
+                action = log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
                     round_code=pred_row.get('meta_round_input', '') or None,
@@ -713,9 +831,14 @@ class LiveBettingOrchestrator:
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
                 )
+                if action == 'created':
+                    stats['created'] += 1
+                elif action == 'updated':
+                    stats['updated'] += 1
         except Exception as e:
             print(f"  ⚠️ Prediction logging failed (non-fatal): {e}")
             import traceback; traceback.print_exc()
+        return stats
 
     def _refresh_atp_rankings(self):
         """Fetch and cache current ATP rankings (rank + points) from atptour.com."""
@@ -738,6 +861,8 @@ class LiveBettingOrchestrator:
         session_id = None
         try:
             self._start_run_context()
+            self.run_metrics['auto_settle_enabled'] = bool(auto_settle)
+            self.run_metrics['rankings_refresh_enabled'] = bool(self.rankings_refresh_enabled)
             print("🚀 Starting live tennis betting pipeline...")
             kelly_mult = self.config.get('kelly_multiplier', 0.18)
             bankroll = self.config.get('bankroll', 1000.0)
@@ -757,9 +882,15 @@ class LiveBettingOrchestrator:
                 try:
                     from auto_settle import run as auto_settle_run
                     print("\n📋 Auto-settling pending predictions...")
-                    auto_settle_run(dry_run=False)
+                    settle_summary = auto_settle_run(dry_run=False, run_id=self.run_id, record_run_history=False)
+                    if isinstance(settle_summary, dict):
+                        self.run_metrics['settlement_candidates'] = settle_summary.get('settlement_candidates', 0)
+                        self.run_metrics['settlement_newly_settled'] = settle_summary.get('settlement_newly_settled', 0)
+                        self.run_metrics['settlement_auto_settled_bets'] = settle_summary.get('settlement_auto_settled_bets', 0)
+                        self.run_metrics['settlement_reason_summary'] = settle_summary.get('settlement_reason_summary', {})
                 except Exception as e:
                     print(f"  ⚠️  Auto-settle failed (non-fatal): {e}")
+                    self.run_metrics['settlement_reason_summary'] = {'auto_settle_error': 1}
             else:
                 print("\n⏭️  Auto-settle skipped for this run")
 
@@ -770,25 +901,40 @@ class LiveBettingOrchestrator:
             odds_df = self.fetch_odds()
             if odds_df.empty:
                 print("⚠️  No odds available, stopping pipeline")
+                self._flush_run_history(status='no_odds')
                 return False
             
             # Step 2: Extract features
             features_df = self.extract_features(odds_df)
             if features_df.empty:
                 print("⚠️  Feature extraction failed, stopping pipeline")
+                self._flush_run_history(status='no_features')
                 return False
             
             # Step 3: Generate predictions
             predictions_df = self.generate_predictions(features_df)
+            self.run_metrics['prediction_rows_total'] = len(predictions_df)
+            if 'prediction_status' in predictions_df.columns:
+                success_count = int((predictions_df['prediction_status'] == 'success').sum())
+            else:
+                success_count = len(predictions_df)
+            self.run_metrics['prediction_rows_success'] = success_count
+            self.run_metrics['prediction_rows_error'] = len(predictions_df) - success_count
             if predictions_df.empty:
                 print("⚠️  Prediction generation failed, stopping pipeline")
+                self._flush_run_history(status='no_predictions')
                 return False
             
             # Step 4: Calculate stakes
             bet_slips_df = self.calculate_edges_and_stakes(predictions_df, odds_df)
 
             # Step 4b: Log all predictions (regardless of edge threshold)
-            self._log_all_predictions(predictions_df, odds_df, features_df)
+            prediction_log_stats = self._log_all_predictions(predictions_df, odds_df, features_df)
+            self.run_metrics['prediction_log_attempts'] = prediction_log_stats.get('attempts', 0)
+            self.run_metrics['prediction_log_created'] = prediction_log_stats.get('created', 0)
+            self.run_metrics['prediction_log_updated'] = prediction_log_stats.get('updated', 0)
+            self.run_metrics['prediction_log_skipped_incomplete'] = prediction_log_stats.get('skipped_incomplete', 0)
+            self.run_metrics['bet_opportunities'] = len(bet_slips_df)
 
             # Step 5: Save, log, and display results
             if not bet_slips_df.empty:
@@ -797,6 +943,7 @@ class LiveBettingOrchestrator:
                 # Log bets to tracking system
                 if session_id:
                     self.bet_tracker.log_bets(bet_slips_df, session_id, bankroll)
+                    self.run_metrics['bets_logged'] = len(bet_slips_df)
                 
                 self.print_summary(bet_slips_df)
                 
@@ -808,15 +955,18 @@ class LiveBettingOrchestrator:
                     print(f"   Total pending bets: {len(pending_bets)}")
                     print(f"   Use 'python settle_bets.py {session_id}' to settle results later")
                 
+                self._flush_run_history(status='success')
                 return True
             else:
                 print("📊 No profitable betting opportunities found")
+                self._flush_run_history(status='success')
                 return False
                 
         except Exception as e:
             print(f"💥 Pipeline error: {e}")
             import traceback
             traceback.print_exc()
+            self._flush_run_history(status='failed', error_message=str(e))
             return False
 
 def main():
@@ -844,6 +994,7 @@ def main():
         orchestrator.config['edge_threshold'] = args.edge_threshold
     # Patch refresh flag onto orchestrator
     if args.skip_rankings_refresh:
+        orchestrator.rankings_refresh_enabled = False
         orchestrator._refresh_atp_rankings = lambda: print("📊 ATP rankings refresh skipped (--skip-rankings-refresh)")
 
     # Run pipeline

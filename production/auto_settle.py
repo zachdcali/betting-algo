@@ -18,6 +18,7 @@ import sys
 import os
 import re
 import time
+from collections import Counter
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,8 @@ sys.path.insert(0, str(Path(__file__).parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
 from features.ta_feature_calculator import TAFeatureCalculator
 from utils.bet_tracker import BetTracker
+from audit_logger import log_settlement_event, upsert_run_history
+from logging_utils import make_run_id, utc_now
 from prediction_logger import upgrade_prediction_log
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
@@ -109,16 +112,19 @@ def _resolve_slug(player_name: str, calc: TAFeatureCalculator) -> str:
 def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
                         calc: TAFeatureCalculator,
                         session_cache: dict | None = None,
-                        dry_run: bool = False) -> dict | None:
+                        dry_run: bool = False) -> dict:
     """
     Fetch p1's recent matches and look for a result vs p2 on/after match_date.
-    Returns a dict with keys: actual_winner (1|2), score, settled_at
-    or None if result not yet found.
+    Returns a dict with a status code plus settlement metadata when available.
     """
     match_date = pd.to_datetime(match_date_str, errors='coerce')
     if pd.isna(match_date):
         print(f"  ⚠️  Could not parse match_date '{match_date_str}' — skipping")
-        return None
+        return {
+            'status': 'parse_error',
+            'outcome_detail': f"Could not parse match_date '{match_date_str}'",
+            'ta_player_slug': '',
+        }
 
     slug1 = _resolve_slug(p1, calc)
     current_year = datetime.now().year
@@ -137,7 +143,11 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 
     if matches.empty:
         print(f"    No match data found for {slug1}")
-        return None
+        return {
+            'status': 'ta_empty',
+            'outcome_detail': f"No match data found for {slug1}",
+            'ta_player_slug': slug1,
+        }
 
     # TA stores the tournament START DATE for all rounds (same as Sackmann CSV),
     # not the actual match date. So we can't use a tight date filter.
@@ -154,14 +164,22 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 
     if recent.empty:
         print(f"    No matches found within window of {match_date_str}")
-        return None
+        return {
+            'status': 'outside_window',
+            'outcome_detail': f"No matches found within window of {match_date_str}",
+            'ta_player_slug': slug1,
+        }
 
     # Look for a match vs p2
     found = recent[recent['opp_name'].apply(lambda n: _names_match(str(n), p2))]
 
     if found.empty:
         print(f"    No result found yet vs '{p2}'")
-        return None
+        return {
+            'status': 'opponent_not_found',
+            'outcome_detail': f"No result found yet vs '{p2}'",
+            'ta_player_slug': slug1,
+        }
 
     # If multiple matches vs same opponent in window, pick closest to logged date
     if len(found) > 1:
@@ -182,13 +200,26 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
         winner_name = p2
     else:
         print(f"    Unexpected result value '{result}' — skipping")
-        return None
+        return {
+            'status': 'unexpected_result',
+            'outcome_detail': f"Unexpected result value '{result}'",
+            'ta_player_slug': slug1,
+            'ta_match_date_found': match_date_found,
+            'ta_event_found': str(row.get('event', '')),
+            'ta_round_found': str(row.get('round', '')),
+        }
 
     print(f"    Found result ({match_date_found}): {winner_name} won  |  score: {score}")
     return {
+        'status': 'matched_and_settled',
         'actual_winner': actual_winner,
         'score': score,
         'settled_at': datetime.now().isoformat(),
+        'ta_player_slug': slug1,
+        'ta_match_date_found': match_date_found,
+        'ta_event_found': str(row.get('event', '')),
+        'ta_round_found': str(row.get('round', '')),
+        'outcome_detail': f"{winner_name} won",
     }
 
 
@@ -282,26 +313,80 @@ def run(
     stats_only: bool = False,
     stale_days: int = 7,
     include_market_only: bool = False,
+    run_id: str | None = None,
+    record_run_history: bool | None = None,
 ):
+    started = utc_now()
+    owns_run_id = run_id is None
+    if run_id is None:
+        run_id = make_run_id(started, prefix='settle')
+    if record_run_history is None:
+        record_run_history = owns_run_id
+
+    summary = {
+        'run_id': run_id,
+        'run_kind': 'auto_settle',
+        'started_at': started.replace(microsecond=0).isoformat(),
+        'completed_at': '',
+        'status': 'running',
+        'auto_settle_enabled': True,
+        'rankings_refresh_enabled': '',
+        'odds_rows_fetched': 0,
+        'odds_rows_candidate': 0,
+        'feature_rows_total': 0,
+        'feature_rows_ok': 0,
+        'feature_rows_skipped': 0,
+        'feature_skip_reason_summary': {},
+        'prediction_rows_total': 0,
+        'prediction_rows_success': 0,
+        'prediction_rows_error': 0,
+        'prediction_log_attempts': 0,
+        'prediction_log_created': 0,
+        'prediction_log_updated': 0,
+        'prediction_log_skipped_incomplete': 0,
+        'bet_opportunities': 0,
+        'bets_logged': 0,
+        'settlement_candidates': 0,
+        'settlement_newly_settled': 0,
+        'settlement_auto_settled_bets': 0,
+        'settlement_reason_summary': {},
+        'error_message': '',
+    }
+    if record_run_history:
+        upsert_run_history(summary)
+
     if not LOG_PATH.exists():
         print("No prediction_log.csv found.")
-        return
+        summary['status'] = 'missing_prediction_log'
+        summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
+        if record_run_history:
+            upsert_run_history(summary)
+        return summary
 
     df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=not dry_run)
 
     if stats_only:
         show_stats(df)
-        return
+        summary['status'] = 'stats_only'
+        summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
+        if record_run_history:
+            upsert_run_history(summary)
+        return summary
 
     pending = df[df['actual_winner'].isna()].copy()
     if 'record_status' in pending.columns:
         pending = pending[~pending['record_status'].isin(['stale_no_model'])]
     if not include_market_only:
         pending = pending[pending['model_p1_prob'].notna()]
+    summary['settlement_candidates'] = len(pending)
     if pending.empty:
         print("No unsettled predictions.")
         show_stats(df)
-        return
+        summary['status'] = 'success'
+        summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
+        if record_run_history:
+            upsert_run_history(summary)
+        return summary
 
     print(f"Found {len(pending)} unsettled prediction(s) to check\n")
 
@@ -313,6 +398,7 @@ def run(
 
     newly_settled = 0
     newly_settled_bets = 0
+    reason_counts = Counter()
 
     for idx, row in pending.iterrows():
         p1 = str(row['p1'])
@@ -329,9 +415,35 @@ def run(
             session_cache=session_cache,
             dry_run=dry_run,
         )
+        outcome_code = result.get('status', 'unknown')
+        reason_counts[outcome_code] += 1
+        log_settlement_event(
+            run_id=run_id,
+            dry_run=dry_run,
+            row_index=idx,
+            record_status_before=str(row.get('record_status', '')),
+            match_uid=row.get('match_uid', ''),
+            prediction_uid=row.get('prediction_uid', ''),
+            match_date=match_date,
+            match_start_time=str(row.get('match_start_time', '')),
+            tournament=str(row.get('tournament', '')),
+            round_code=str(row.get('round', '')),
+            surface=str(row.get('surface', '')),
+            p1=p1,
+            p2=p2,
+            model_version=str(row.get('model_version', '')),
+            ta_player_slug=result.get('ta_player_slug', ''),
+            outcome_code=outcome_code,
+            outcome_detail=result.get('outcome_detail', ''),
+            ta_match_date_found=result.get('ta_match_date_found', ''),
+            ta_event_found=result.get('ta_event_found', ''),
+            ta_round_found=result.get('ta_round_found', ''),
+            actual_winner=result.get('actual_winner'),
+            score=result.get('score', ''),
+        )
 
-        if result is None:
-            print(f"  → Not settled yet")
+        if outcome_code != 'matched_and_settled':
+            print(f"  → Not settled yet ({outcome_code})")
             continue
 
         if dry_run:
@@ -403,7 +515,16 @@ def run(
         if newly_settled_bets:
             print(f"Auto-settled {newly_settled_bets} pending tracked bet(s)")
 
+    summary['settlement_newly_settled'] = newly_settled
+    summary['settlement_auto_settled_bets'] = newly_settled_bets
+    summary['settlement_reason_summary'] = dict(reason_counts)
+    summary['status'] = 'success'
+    summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
+    if record_run_history:
+        upsert_run_history(summary)
+
     show_stats(df)
+    return summary
 
 
 if __name__ == '__main__':

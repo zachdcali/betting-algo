@@ -26,6 +26,12 @@ There are now two logging layers:
   This is append-only. Every logged prediction snapshot is preserved with immutable IDs.
 - `odds_history.csv`
   This is append-only. Every logged odds snapshot is preserved with immutable IDs.
+- `logs/audit/run_history.csv`
+  One row per pipeline or standalone settlement run with stage counts and outcome summaries.
+- `logs/audit/skipped_live_matches.csv`
+  Append-only audit log for matches skipped from live prediction lineage, including reason codes.
+- `logs/audit/settlement_audit.csv`
+  Append-only audit log for every settlement attempt and why it did or did not settle.
 
 Supporting run artifacts:
 
@@ -65,3 +71,4 @@ python tests/test_system.py
 - `sync_bet_tracker.py` is useful for backfilling tracked bets from already-settled prediction rows.
 - For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
+- The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.

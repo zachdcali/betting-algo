@@ -23,10 +23,11 @@ def utc_now_iso() -> str:
     return utc_now().replace(microsecond=0).isoformat()
 
 
-def make_run_id(started_at: datetime | None = None) -> str:
+def make_run_id(started_at: datetime | None = None, prefix: str = "run") -> str:
     """Create a deterministic-looking run identifier from a timestamp."""
     dt = started_at or utc_now()
-    return dt.astimezone(timezone.utc).strftime("run_%Y%m%dT%H%M%SZ")
+    stamp = dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{prefix}_{stamp}"
 
 
 def normalize_text(value) -> str:

@@ -164,6 +164,98 @@ def test_prediction_logger():
         return False
 
 
+def test_audit_logger():
+    print("🧪 Testing audit logger...")
+    try:
+        import audit_logger
+
+        orig_audit_dir = audit_logger.AUDIT_DIR
+        orig_skipped = audit_logger.SKIPPED_MATCHES_LOG_PATH
+        orig_settlement = audit_logger.SETTLEMENT_AUDIT_LOG_PATH
+        orig_run_history = audit_logger.RUN_HISTORY_LOG_PATH
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                audit_logger.AUDIT_DIR = tmp_path
+                audit_logger.SKIPPED_MATCHES_LOG_PATH = tmp_path / "skipped_live_matches.csv"
+                audit_logger.SETTLEMENT_AUDIT_LOG_PATH = tmp_path / "settlement_audit.csv"
+                audit_logger.RUN_HISTORY_LOG_PATH = tmp_path / "run_history.csv"
+
+                audit_logger.log_skipped_live_match(
+                    run_id="run_test",
+                    run_started_at="2026-04-22T01:00:00+00:00",
+                    stage="feature_extraction",
+                    skip_reason_code="scheduled_start_passed",
+                    skip_reason_detail="scheduled_start_passed",
+                    match_uid="match_test",
+                    feature_snapshot_id="feat_test",
+                    match_date="2026-04-22",
+                    match_start_time="4/22/26 8:00 AM",
+                    tournament="Munich",
+                    event_title="ATP Munich - Semifinal",
+                    surface="Clay",
+                    level="A",
+                    round_code="SF",
+                    p1="Player One",
+                    p2="Player Two",
+                )
+                audit_logger.log_settlement_event(
+                    run_id="settle_test",
+                    dry_run=False,
+                    row_index=7,
+                    match_uid="match_test",
+                    prediction_uid="pred_test",
+                    match_date="2026-04-22",
+                    tournament="Munich",
+                    round_code="SF",
+                    p1="Player One",
+                    p2="Player Two",
+                    ta_player_slug="PlayerOne",
+                    outcome_code="matched_and_settled",
+                    outcome_detail="Player One won",
+                    ta_match_date_found="2026-04-20",
+                    actual_winner=1,
+                    score="6-4 6-4",
+                )
+                audit_logger.upsert_run_history({
+                    "run_id": "run_test",
+                    "run_kind": "prediction_pipeline",
+                    "started_at": "2026-04-22T01:00:00+00:00",
+                    "completed_at": "2026-04-22T01:05:00+00:00",
+                    "status": "success",
+                    "feature_rows_ok": 12,
+                    "feature_rows_skipped": 3,
+                    "feature_skip_reason_summary": {"scheduled_start_passed": 2},
+                })
+
+                skipped_df = pd.read_csv(audit_logger.SKIPPED_MATCHES_LOG_PATH)
+                settlement_df = pd.read_csv(audit_logger.SETTLEMENT_AUDIT_LOG_PATH)
+                run_df = pd.read_csv(audit_logger.RUN_HISTORY_LOG_PATH)
+                if len(skipped_df) != 1 or len(settlement_df) != 1 or len(run_df) != 1:
+                    print("❌ Audit logger did not create exactly one row in each audit file")
+                    return False
+                if skipped_df.loc[0, "skip_reason_code"] != "scheduled_start_passed":
+                    print(f"❌ Unexpected skip reason code: {skipped_df.loc[0, 'skip_reason_code']}")
+                    return False
+                if settlement_df.loc[0, "outcome_code"] != "matched_and_settled":
+                    print(f"❌ Unexpected settlement outcome: {settlement_df.loc[0, 'outcome_code']}")
+                    return False
+                if run_df.loc[0, "status"] != "success":
+                    print(f"❌ Unexpected run history status: {run_df.loc[0, 'status']}")
+                    return False
+        finally:
+            audit_logger.AUDIT_DIR = orig_audit_dir
+            audit_logger.SKIPPED_MATCHES_LOG_PATH = orig_skipped
+            audit_logger.SETTLEMENT_AUDIT_LOG_PATH = orig_settlement
+            audit_logger.RUN_HISTORY_LOG_PATH = orig_run_history
+
+        print("✅ Audit logger test passed")
+        return True
+    except Exception as e:
+        print(f"❌ Audit logger test failed: {e}")
+        return False
+
+
 def test_orchestrator_init():
     print("🧪 Testing orchestrator initialization...")
     try:
@@ -258,6 +350,7 @@ def main():
         ("Model Inference", test_model_inference),
         ("Stake Calculation", test_stake_calculation),
         ("Prediction Logger", test_prediction_logger),
+        ("Audit Logger", test_audit_logger),
         ("Orchestrator Init", test_orchestrator_init),
         ("Inference Guardrails", test_inference_guardrails),
     ]

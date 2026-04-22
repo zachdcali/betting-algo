@@ -331,6 +331,9 @@ def log_prediction(
 
     features_complete=False marks predictions that used defaulted feature values
     and should be excluded from accuracy analysis.
+    Returns:
+        "created" if a new operational row was appended,
+        "updated" if an existing unsettled row was refreshed.
     """
     # Default model_version from registry if not provided
     current_nn, current_xgb, current_rf = _load_registry_versions()
@@ -559,10 +562,11 @@ def log_prediction(
                     df.at[idx, 'rescore_quality'] = 'exact_feature_snapshot'
                     df.at[idx, 'record_note'] = ''
                 df.to_csv(LOG_PATH, index=False)
-                return
+                return 'updated'
 
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     else:
         df = pd.DataFrame([row], columns=COLUMNS)
 
     df.to_csv(LOG_PATH, index=False)
+    return 'created'
