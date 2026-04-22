@@ -5,12 +5,14 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score, roc_curve
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_DIR = REPO_ROOT / "production"
 AUDIT_DIR = PRODUCTION_DIR / "logs" / "audit"
 LOGS_DIR = PRODUCTION_DIR / "logs"
+FEATURE_LOG_GLOB = "features_*.csv"
 
 DATA_PATHS = {
     "prediction_log": PRODUCTION_DIR / "prediction_log.csv",
@@ -51,6 +53,8 @@ def file_mtimes() -> tuple[tuple[str, float | None], ...]:
     items: list[tuple[str, float | None]] = []
     for name, path in DATA_PATHS.items():
         items.append((name, path.stat().st_mtime if path.exists() else None))
+    for path in sorted(LOGS_DIR.glob(FEATURE_LOG_GLOB)):
+        items.append((f"feature::{path.name}", path.stat().st_mtime))
     return tuple(items)
 
 
@@ -249,6 +253,34 @@ def load_dashboard_data() -> dict[str, pd.DataFrame]:
     }
 
 
+def feature_log_signature() -> tuple[tuple[str, float], ...]:
+    return tuple((path.name, path.stat().st_mtime) for path in sorted(LOGS_DIR.glob(FEATURE_LOG_GLOB)))
+
+
+def find_feature_snapshot_row(feature_snapshot_id: str) -> dict | None:
+    feature_snapshot_id = str(feature_snapshot_id or "").strip()
+    if not feature_snapshot_id:
+        return None
+
+    for path in sorted(LOGS_DIR.glob(FEATURE_LOG_GLOB), reverse=True):
+        try:
+            header = pd.read_csv(path, nrows=0)
+        except Exception:
+            continue
+        if "feature_snapshot_id" not in header.columns:
+            continue
+        try:
+            for chunk in pd.read_csv(path, chunksize=1000):
+                match = chunk[chunk["feature_snapshot_id"].astype(str) == feature_snapshot_id]
+                if not match.empty:
+                    row = match.iloc[0].to_dict()
+                    row["_source_file"] = str(path)
+                    return row
+        except Exception:
+            continue
+    return None
+
+
 def build_family_results(prediction_log: pd.DataFrame) -> pd.DataFrame:
     if prediction_log.empty:
         return pd.DataFrame()
@@ -383,6 +415,163 @@ def build_calibration_summary(family_results: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     return grouped
+
+
+def build_apples_to_apples_rows(prediction_log: pd.DataFrame) -> pd.DataFrame:
+    if prediction_log.empty:
+        return pd.DataFrame()
+
+    required = [
+        "model_correct",
+        "xgb_correct",
+        "rf_correct",
+        "market_correct",
+        "model_p1_prob",
+        "xgb_p1_prob",
+        "rf_p1_prob",
+        "market_p1_prob",
+        "actual_winner",
+    ]
+    settled = prediction_log[prediction_log["is_settled"] & prediction_log["features_complete"] & prediction_log["market_has_pick"]].copy()
+    for col in required:
+        if col not in settled.columns:
+            return pd.DataFrame()
+        settled = settled[settled[col].notna()]
+    if settled.empty:
+        return pd.DataFrame()
+    settled["p1_won"] = (settled["actual_winner"] == 1).astype(int)
+    return settled
+
+
+def expected_calibration_error(y_true: pd.Series, y_prob: pd.Series, bins: int = 10) -> float | None:
+    if len(y_true) == 0:
+        return None
+    probs = np.asarray(y_prob, dtype=float)
+    truth = np.asarray(y_true, dtype=float)
+    bin_edges = np.linspace(0.0, 1.0, bins + 1)
+    ece = 0.0
+    total = len(probs)
+    for idx in range(bins):
+        left = bin_edges[idx]
+        right = bin_edges[idx + 1]
+        if idx == bins - 1:
+            mask = (probs >= left) & (probs <= right)
+        else:
+            mask = (probs >= left) & (probs < right)
+        if not np.any(mask):
+            continue
+        conf = probs[mask].mean()
+        acc = truth[mask].mean()
+        ece += np.abs(acc - conf) * (mask.sum() / total)
+    return float(ece)
+
+
+def build_metrics_summary(apples_df: pd.DataFrame) -> pd.DataFrame:
+    if apples_df.empty:
+        return pd.DataFrame()
+
+    y_true = apples_df["p1_won"].astype(int)
+    specs = [
+        ("NN", "model_p1_prob", "effective_nn_model_version"),
+        ("XGB", "xgb_p1_prob", "effective_xgb_model_version"),
+        ("RF", "rf_p1_prob", "effective_rf_model_version"),
+        ("Market", "market_p1_prob", None),
+    ]
+    rows = []
+    for family, prob_col, version_col in specs:
+        if prob_col not in apples_df.columns:
+            continue
+        probs = apples_df[prob_col].astype(float).clip(1e-6, 1 - 1e-6)
+        predicted = (probs >= 0.5).astype(int)
+        versions = (
+            ", ".join(sorted(apples_df[version_col].dropna().astype(str).unique()))
+            if version_col and version_col in apples_df.columns
+            else family
+        )
+        rows.append(
+            {
+                "family": family,
+                "matches": int(len(apples_df)),
+                "accuracy": float((predicted == y_true).mean()),
+                "auc": float(roc_auc_score(y_true, probs)),
+                "brier": float(brier_score_loss(y_true, probs)),
+                "log_loss": float(log_loss(y_true, probs)),
+                "ece": expected_calibration_error(y_true, probs, bins=10),
+                "avg_confidence": float(np.maximum(probs, 1 - probs).mean()),
+                "versions": versions,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_roc_curve_data(apples_df: pd.DataFrame) -> pd.DataFrame:
+    if apples_df.empty:
+        return pd.DataFrame()
+
+    y_true = apples_df["p1_won"].astype(int)
+    specs = [
+        ("NN", "model_p1_prob"),
+        ("XGB", "xgb_p1_prob"),
+        ("RF", "rf_p1_prob"),
+        ("Market", "market_p1_prob"),
+    ]
+    rows = []
+    for family, prob_col in specs:
+        if prob_col not in apples_df.columns:
+            continue
+        probs = apples_df[prob_col].astype(float)
+        fpr, tpr, thresholds = roc_curve(y_true, probs)
+        for idx in range(len(fpr)):
+            rows.append(
+                {
+                    "family": family,
+                    "fpr": float(fpr[idx]),
+                    "tpr": float(tpr[idx]),
+                    "threshold": float(thresholds[idx]) if idx < len(thresholds) else np.nan,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def build_reliability_curve_data(apples_df: pd.DataFrame, bins: int = 10) -> pd.DataFrame:
+    if apples_df.empty:
+        return pd.DataFrame()
+
+    y_true = apples_df["p1_won"].astype(int)
+    specs = [
+        ("NN", "model_p1_prob"),
+        ("XGB", "xgb_p1_prob"),
+        ("RF", "rf_p1_prob"),
+        ("Market", "market_p1_prob"),
+    ]
+    bin_edges = np.linspace(0.0, 1.0, bins + 1)
+    rows = []
+    for family, prob_col in specs:
+        if prob_col not in apples_df.columns:
+            continue
+        probs = apples_df[prob_col].astype(float).to_numpy()
+        truth = y_true.to_numpy()
+        for idx in range(bins):
+            left = bin_edges[idx]
+            right = bin_edges[idx + 1]
+            if idx == bins - 1:
+                mask = (probs >= left) & (probs <= right)
+            else:
+                mask = (probs >= left) & (probs < right)
+            if not np.any(mask):
+                continue
+            rows.append(
+                {
+                    "family": family,
+                    "bin_left": float(left),
+                    "bin_right": float(right),
+                    "bin_mid": float((left + right) / 2),
+                    "matches": int(mask.sum()),
+                    "avg_predicted": float(probs[mask].mean()),
+                    "actual_rate": float(truth[mask].mean()),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def build_live_latest_snapshots(prediction_snapshots: pd.DataFrame) -> pd.DataFrame:

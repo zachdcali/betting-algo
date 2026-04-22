@@ -14,14 +14,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from dashboard.data import (  # noqa: E402
+    build_apples_to_apples_rows,
     build_calibration_summary,
     build_derived_run_history,
     build_family_accuracy_summary,
     build_family_results,
     build_live_latest_snapshots,
     build_match_catalog,
+    build_metrics_summary,
+    build_reliability_curve_data,
+    build_roc_curve_data,
     build_version_summary,
+    feature_log_signature,
     file_mtimes,
+    find_feature_snapshot_row,
     load_dashboard_data,
 )
 
@@ -38,6 +44,11 @@ def load_data_cached(_mtimes):
     return load_dashboard_data()
 
 
+@st.cache_data(show_spinner=False)
+def load_feature_snapshot_cached(feature_snapshot_id: str, _signature):
+    return find_feature_snapshot_row(feature_snapshot_id)
+
+
 def pct(value: float | int | None) -> str:
     if value is None or pd.isna(value):
         return "n/a"
@@ -52,6 +63,12 @@ def pick_latest_timestamp(*series_list: pd.Series) -> pd.Timestamp | None:
         values.append(series.max())
     values = [v for v in values if pd.notna(v)]
     return max(values) if values else None
+
+
+def fmt(value):
+    if value is None or pd.isna(value):
+        return "n/a"
+    return value
 
 
 def apply_history_filters(df: pd.DataFrame, *, trust_mode: str, surfaces, levels, rounds, statuses, versions, start_date, end_date) -> pd.DataFrame:
@@ -116,6 +133,85 @@ def render_summary_metrics(prediction_log: pd.DataFrame, live_latest: pd.DataFra
 
     freshness = latest_data_ts.strftime("%Y-%m-%d %H:%M:%S") if latest_data_ts is not None else "n/a"
     st.caption(f"Latest dashboard source update: {freshness}")
+
+
+def render_apples_to_apples_section(prediction_log: pd.DataFrame):
+    apples = build_apples_to_apples_rows(prediction_log)
+    st.markdown("### Apples-to-Apples Evaluation")
+    if apples.empty:
+        st.info("No common settled cohort is available where NN, XGB, RF, and market all have valid probabilities.")
+        return
+
+    st.caption(
+        f"Common settled cohort: {len(apples):,} matches where NN, XGB, RF, and market all have usable probabilities."
+    )
+
+    metrics = build_metrics_summary(apples)
+    if not metrics.empty:
+        display = metrics.copy()
+        for col in ["accuracy", "auc"]:
+            display[col] = display[col].map(pct)
+        for col in ["brier", "log_loss", "ece"]:
+            display[col] = display[col].map(lambda x: f"{x:.4f}" if pd.notna(x) else "n/a")
+        display["avg_confidence"] = display["avg_confidence"].map(pct)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+    chart_cols = st.columns(2)
+
+    roc = build_roc_curve_data(apples)
+    if not roc.empty:
+        roc_fig = px.line(
+            roc,
+            x="fpr",
+            y="tpr",
+            color="family",
+            title="ROC Curves on Common Settled Cohort",
+            hover_data={"threshold": ":.3f"},
+        )
+        roc_fig.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                line={"dash": "dash", "color": "#888"},
+                name="Random",
+            )
+        )
+        chart_cols[0].plotly_chart(roc_fig, use_container_width=True)
+
+    reliability = build_reliability_curve_data(apples)
+    if not reliability.empty:
+        reliability_fig = go.Figure()
+        families = reliability["family"].dropna().unique()
+        for family in families:
+            sub = reliability[reliability["family"] == family].sort_values("bin_mid")
+            reliability_fig.add_trace(
+                go.Scatter(
+                    x=sub["avg_predicted"],
+                    y=sub["actual_rate"],
+                    mode="lines+markers",
+                    name=family,
+                    text=sub["matches"],
+                    hovertemplate="Predicted=%{x:.1%}<br>Actual=%{y:.1%}<br>Matches=%{text}<extra>" + family + "</extra>",
+                )
+            )
+        reliability_fig.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                line={"dash": "dash", "color": "#888"},
+                name="Ideal",
+            )
+        )
+        reliability_fig.update_layout(
+            title="Reliability / Calibration Curves",
+            xaxis_title="Average Predicted P1 Probability",
+            yaxis_title="Actual P1 Win Rate",
+            xaxis_tickformat=".0%",
+            yaxis_tickformat=".0%",
+        )
+        chart_cols[1].plotly_chart(reliability_fig, use_container_width=True)
 
 
 def render_overview_tab(prediction_log: pd.DataFrame, family_results: pd.DataFrame, family_summary: pd.DataFrame, version_summary: pd.DataFrame):
@@ -193,6 +289,8 @@ def render_overview_tab(prediction_log: pd.DataFrame, family_results: pd.DataFra
     summary_table["edge_vs_market"] = summary_table["edge_vs_market"].map(pct)
     st.dataframe(summary_table, use_container_width=True, hide_index=True)
 
+    render_apples_to_apples_section(prediction_log)
+
 
 def render_live_slate_tab(live_latest: pd.DataFrame):
     st.subheader("Live Slate")
@@ -254,24 +352,87 @@ def render_live_slate_tab(live_latest: pd.DataFrame):
     st.dataframe(slate_table, use_container_width=True, hide_index=True)
 
 
-def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
-    st.subheader("Match Explorer")
-    catalog = build_match_catalog(prediction_log, prediction_snapshots)
-    if catalog.empty:
-        st.info("No match lineage is available yet.")
+def render_feature_snapshot_panel(feature_snapshot_id: str):
+    st.markdown("**Feature Snapshot**")
+    if not feature_snapshot_id:
+        st.caption("No exact feature snapshot is attached to this row.")
         return
 
-    labels = {
-        row.match_uid: f"{row.event_label} [{row.match_uid}]"
-        for row in catalog.itertuples(index=False)
+    row = load_feature_snapshot_cached(feature_snapshot_id, feature_log_signature())
+    if not row:
+        st.warning("Feature snapshot id was present, but no matching row was found in `production/logs/features_*.csv`.")
+        return
+
+    metadata_columns = [
+        "run_id",
+        "run_started_at",
+        "match_uid",
+        "feature_snapshot_id",
+        "player1_raw",
+        "player2_raw",
+        "event",
+        "timestamp",
+        "match_time",
+        "status",
+        "meta_level_input",
+        "meta_surface_input",
+        "meta_round_input",
+        "meta_match_date",
+        "meta_defaulted_features",
+        "meta_draw_input",
+        "meta_resolver_source",
+        "_source_file",
+    ]
+    metadata = {
+        key: row.get(key)
+        for key in metadata_columns
+        if key in row and not (pd.isna(row.get(key)) if not isinstance(row.get(key), str) else False)
     }
-    default_uid = catalog.iloc[0]["match_uid"]
-    selected_uid = st.selectbox(
-        "Select a match",
-        options=list(labels.keys()),
-        format_func=lambda uid: labels.get(uid, uid),
-        index=0 if default_uid in labels else None,
-    )
+
+    feature_items = []
+    for key, value in row.items():
+        if key.startswith("_") or key in metadata_columns or key == "match_id":
+            continue
+        if pd.isna(value):
+            continue
+        feature_items.append({"feature": key, "value": value})
+
+    feature_df = pd.DataFrame(feature_items)
+    if feature_df.empty:
+        st.caption("No feature values were found in the snapshot row.")
+        return
+
+    st.caption(f"Snapshot id: `{feature_snapshot_id}`")
+    if metadata:
+        meta_df = pd.DataFrame(metadata.items(), columns=["field", "value"])
+        st.dataframe(meta_df, use_container_width=True, hide_index=True)
+
+    active_flags = feature_df[feature_df["value"].isin([1, 1.0, True])].copy().sort_values("feature")
+    nonzero = feature_df[feature_df["value"] != 0].copy()
+    numeric_mask = pd.to_numeric(feature_df["value"], errors="coerce").notna()
+    continuous = feature_df[numeric_mask & ~feature_df["value"].isin([0, 0.0, 1, 1.0, True, False])].copy()
+    continuous["abs_value"] = pd.to_numeric(continuous["value"], errors="coerce").abs()
+    continuous = continuous.sort_values("abs_value", ascending=False).drop(columns=["abs_value"])
+
+    tabs = st.tabs(["Active Flags", "Non-zero Features", "Full Feature Vector"])
+    with tabs[0]:
+        if active_flags.empty:
+            st.caption("No active one-hot flags for this snapshot.")
+        else:
+            st.dataframe(active_flags, use_container_width=True, hide_index=True)
+    with tabs[1]:
+        if nonzero.empty:
+            st.caption("All feature values are zero or missing.")
+        else:
+            st.dataframe(nonzero, use_container_width=True, hide_index=True)
+    with tabs[2]:
+        st.dataframe(feature_df.sort_values("feature"), use_container_width=True, hide_index=True)
+
+
+def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
+    if not selected_uid:
+        st.info("Select a match to inspect.")
+        return
 
     snap = prediction_snapshots[prediction_snapshots["match_uid"] == selected_uid].sort_values("logged_at").copy()
     odds = odds_history[odds_history["match_uid"] == selected_uid].sort_values("logged_at").copy()
@@ -279,11 +440,13 @@ def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots
 
     if not log_row.empty:
         row = log_row.iloc[0]
-        top_cols = st.columns(4)
+        top_cols = st.columns(6)
         top_cols[0].metric("Status", str(row.get("record_status", "unknown")))
         top_cols[1].metric("Decision-grade", "yes" if bool(row.get("decision_grade", False)) else "no")
-        top_cols[2].metric("Current model version", str(row.get("effective_model_version", "n/a")))
+        top_cols[2].metric("NN version", str(row.get("effective_nn_model_version", "n/a")))
         top_cols[3].metric("Settled", "yes" if bool(row.get("is_settled", False)) else "no")
+        top_cols[4].metric("XGB version", str(row.get("effective_xgb_model_version", "n/a")))
+        top_cols[5].metric("RF version", str(row.get("effective_rf_model_version", "n/a")))
 
     probability_fig = go.Figure()
     if not snap.empty:
@@ -342,9 +505,131 @@ def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots
                 hide_index=True,
             )
 
-    if not log_row.empty:
-        with st.expander("Operational row"):
-            st.dataframe(log_row.T, use_container_width=True)
+    lower_cols = st.columns([1, 1])
+    with lower_cols[0]:
+        if not log_row.empty:
+            row = log_row.iloc[0]
+            st.markdown("**Operational / model row**")
+            summary = pd.DataFrame(
+                [
+                    ("match_uid", row.get("match_uid")),
+                    ("prediction_uid", row.get("latest_prediction_uid") or row.get("prediction_uid")),
+                    ("feature_snapshot_id", row.get("latest_feature_snapshot_id") or row.get("feature_snapshot_id")),
+                    ("model_version", row.get("effective_model_version")),
+                    ("nn_probability_source", row.get("effective_nn_probability_source")),
+                    ("logging_quality", row.get("logging_quality")),
+                    ("rescore_quality", row.get("rescore_quality")),
+                    ("record_status", row.get("record_status")),
+                ],
+                columns=["field", "value"],
+            )
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            with st.expander("Full operational row"):
+                st.dataframe(log_row.T, use_container_width=True)
+    with lower_cols[1]:
+        feature_snapshot_id = ""
+        if not log_row.empty:
+            row = log_row.iloc[0]
+            feature_snapshot_id = row.get("latest_feature_snapshot_id") or row.get("feature_snapshot_id") or ""
+        render_feature_snapshot_panel(str(feature_snapshot_id))
+
+
+def render_prediction_log_tab(prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
+    st.subheader("Prediction Log Browser")
+    if prediction_log.empty:
+        st.info("No prediction log rows are available.")
+        return
+
+    filter_cols = st.columns([1.2, 1.2, 1.4, 1])
+    tournaments = filter_cols[0].multiselect(
+        "Tournaments",
+        options=sorted(x for x in prediction_log["tournament"].dropna().astype(str).unique() if x),
+    )
+    player_query = filter_cols[1].text_input("Player search", placeholder="Rublev, Fils, Shelton...")
+    settlement_state = filter_cols[2].selectbox("Settlement state", ["All", "Settled only", "Pending only"])
+    max_rows = filter_cols[3].slider("Rows shown", min_value=10, max_value=500, value=100, step=10)
+
+    filtered = prediction_log.copy()
+    if tournaments:
+        filtered = filtered[filtered["tournament"].isin(tournaments)]
+    if player_query.strip():
+        mask = filtered["match_label"].fillna("").str.contains(player_query, case=False, na=False)
+        filtered = filtered[mask]
+    if settlement_state == "Settled only":
+        filtered = filtered[filtered["is_settled"]]
+    elif settlement_state == "Pending only":
+        filtered = filtered[~filtered["is_settled"]]
+
+    filtered = filtered.sort_values(["effective_logged_at", "effective_match_date"], ascending=[False, False]).copy()
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Rows", f"{len(filtered):,}")
+    metric_cols[1].metric("Settled", f"{int(filtered['is_settled'].sum()):,}" if "is_settled" in filtered.columns else "0")
+    metric_cols[2].metric("Decision-grade", f"{int(filtered['decision_grade'].sum()):,}" if "decision_grade" in filtered.columns else "0")
+    metric_cols[3].metric("Exact feature snapshots", f"{int(filtered['latest_feature_snapshot_id'].fillna('').astype(bool).sum()):,}" if "latest_feature_snapshot_id" in filtered.columns else "0")
+
+    table = filtered[
+        [
+            "effective_logged_at",
+            "effective_match_date",
+            "tournament",
+            "round",
+            "surface",
+            "level",
+            "match_label",
+            "model_p1_prob",
+            "xgb_p1_prob",
+            "rf_p1_prob",
+            "market_p1_prob",
+            "effective_model_version",
+            "effective_xgb_model_version",
+            "effective_rf_model_version",
+            "effective_nn_probability_source",
+            "record_status",
+            "logging_quality",
+            "rescore_quality",
+        ]
+    ].head(max_rows).copy()
+    for col in ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob", "market_p1_prob"]:
+        table[col] = table[col].map(pct)
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+    if filtered.empty:
+        return
+
+    labels = {
+        row.match_uid: f"{fmt(row.effective_match_date).date() if pd.notna(row.effective_match_date) else 'n/a'} | {row.tournament} | {row.round} | {row.match_label}"
+        for row in filtered.head(max_rows).itertuples(index=False)
+    }
+    selected_uid = st.selectbox(
+        "Inspect a logged match",
+        options=list(labels.keys()),
+        format_func=lambda uid: labels.get(uid, uid),
+        key="prediction_log_match_select",
+    )
+    render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
+
+
+def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
+    st.subheader("Match Explorer")
+    catalog = build_match_catalog(prediction_log, prediction_snapshots)
+    if catalog.empty:
+        st.info("No match lineage is available yet.")
+        return
+
+    labels = {
+        row.match_uid: f"{row.event_label} [{row.match_uid}]"
+        for row in catalog.itertuples(index=False)
+    }
+    default_uid = catalog.iloc[0]["match_uid"]
+    selected_uid = st.selectbox(
+        "Select a match",
+        options=list(labels.keys()),
+        format_func=lambda uid: labels.get(uid, uid),
+        index=0 if default_uid in labels else None,
+        key="generic_match_select",
+    )
+    render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
 
 
 def render_bets_tab(all_bets: pd.DataFrame, betting_sessions: pd.DataFrame):
@@ -564,8 +849,8 @@ def main():
 
         render_summary_metrics(filtered_log, live_latest, family_summary, latest_data_ts)
 
-        tab_overview, tab_live, tab_match, tab_bets, tab_ops = st.tabs(
-            ["Overview", "Live Slate", "Match Explorer", "Bets", "Ops & Audit"]
+        tab_overview, tab_log, tab_live, tab_match, tab_bets, tab_ops = st.tabs(
+            ["Overview", "Prediction Log", "Live Slate", "Match Explorer", "Bets", "Ops & Audit"]
         )
 
         with tab_overview:
@@ -584,6 +869,9 @@ def main():
                 )
                 calibration_chart.update_layout(yaxis_tickformat=".0%")
                 st.plotly_chart(calibration_chart, use_container_width=True)
+
+        with tab_log:
+            render_prediction_log_tab(filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])
 
         with tab_live:
             render_live_slate_tab(live_latest)

@@ -25,6 +25,9 @@ tennis_env/bin/streamlit run dashboard/app.py
 The first version includes:
 
 - Overview metrics and cumulative model-vs-market charts
+- apples-to-apples evaluation metrics for NN, XGB, RF, and market including AUC, ROC, Brier, log loss, and ECE
+- a prediction log browser with tournament/player filtering
+- per-match drilldown showing model versions, snapshot lineage, and the exact feature vector when `feature_snapshot_id` exists
 - Live slate view for the latest pending snapshots
 - Match explorer with snapshot and odds timelines
 - Bets and bankroll view
