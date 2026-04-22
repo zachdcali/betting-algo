@@ -8,6 +8,8 @@ This is the current intended layout for the project.
   Live tennis pipeline code. This is the operational path that fetches Bovada odds, builds TA features, runs inference, logs predictions, and settles results.
 - `docs/production/`
   Authoritative production documentation and versioning rules.
+- `dashboard/`
+  Interactive operations dashboard code built on top of the production CSV logs and audit layer.
 - `src/models/professional_tennis/`
   Historical preprocessing, dataset preparation, and model training scripts.
 - `production/tests/`
@@ -43,3 +45,5 @@ To avoid deleting something important by accident:
 ## Practical Rule
 
 If a file affects live betting behavior, it should live under `production/` or be explicitly documented from `docs/production/`.
+
+If a file is for operational visibility rather than decision logic, it should live under `dashboard/` or `docs/`.

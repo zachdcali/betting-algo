@@ -64,6 +64,13 @@ python sync_bet_tracker.py
 python tests/test_system.py
 ```
 
+Dashboard:
+
+```bash
+cd /Users/zachdodson/Documents/betting-algo
+tennis_env/bin/streamlit run dashboard/app.py
+```
+
 ## Important Notes
 
 - The live production path is Tennis Abstract based, not the older UTR-based extractor.
@@ -72,3 +79,4 @@ python tests/test_system.py
 - For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.
+- The dashboard under `dashboard/` reads `prediction_log.csv` for settled performance, `prediction_snapshots.csv` and `odds_history.csv` for live lineage, and the audit CSVs when they exist.
