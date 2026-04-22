@@ -131,7 +131,7 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
     matches = SCRAPER.get_player_matches(
         slug1,
         years=years,
-        force_refresh=False,
+        force_refresh=True,
         session_cache=session_cache,
     )
 
@@ -397,8 +397,8 @@ def run(
         time.sleep(3.0)
 
     if not dry_run:
-        df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=False)
         df.to_csv(LOG_PATH, index=False)
+        df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=True)
         print(f"\nSaved {newly_settled} newly settled prediction(s) to prediction_log.csv")
         if newly_settled_bets:
             print(f"Auto-settled {newly_settled_bets} pending tracked bet(s)")
