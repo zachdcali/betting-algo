@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report, brier_score_loss, log_loss
 import seaborn as sns
 import os
 import sys
@@ -14,6 +14,29 @@ from preprocess import get_feature_columns
 # Create output directory
 output_dir = os.path.join(os.path.dirname(__file__), "../../..", "results", "professional_tennis", "Random_Forest")
 os.makedirs(output_dir, exist_ok=True)
+
+
+def compute_metrics(y_true, y_pred, y_prob):
+    return {
+        'accuracy': accuracy_score(y_true, y_pred),
+        'precision': precision_score(y_true, y_pred),
+        'recall': recall_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred),
+        'auc': roc_auc_score(y_true, y_prob),
+        'brier': brier_score_loss(y_true, y_prob),
+        'log_loss': log_loss(y_true, np.clip(y_prob, 1e-6, 1 - 1e-6)),
+    }
+
+
+def print_metrics_block(label, metrics):
+    print(f"\n{label}")
+    print(f"Accuracy: {metrics['accuracy']:.4f} ({metrics['accuracy']*100:.2f}%)")
+    print(f"Precision: {metrics['precision']:.4f}")
+    print(f"Recall: {metrics['recall']:.4f}")
+    print(f"F1-score: {metrics['f1']:.4f}")
+    print(f"AUC-ROC: {metrics['auc']:.4f}")
+    print(f"Brier: {metrics['brier']:.4f}")
+    print(f"Log Loss: {metrics['log_loss']:.4f}")
 
 print("=" * 60)
 print("PROFESSIONAL TENNIS RANDOM FOREST MODEL TRAINING")
@@ -136,34 +159,42 @@ if len(feature_cols) != 141:
     if missing_features:
         print(f"   Missing features: {missing_features[:5]}...")  # Show first 5 missing
 
-# Split into train/test based on date
-print("\n4. Creating train/test split...")
-train_df = ml_df[ml_df['tourney_date'] < '2023-01-01'].copy()
+# Split into train/validation/test based on date
+print("\n4. Creating train/validation/test split...")
+train_df = ml_df[ml_df['tourney_date'] < '2022-01-01'].copy()
+val_df = ml_df[(ml_df['tourney_date'] >= '2022-01-01') & (ml_df['tourney_date'] < '2023-01-01')].copy()
 test_df = ml_df[ml_df['tourney_date'] >= '2023-01-01'].copy()
 
-print(f"   Training set: {len(train_df)} matches ({MIN_YEAR}-2022)")
-print(f"   Test set: {len(test_df)} matches (2023-2025)")
+print(f"   Training set:   {len(train_df)} matches ({MIN_YEAR}-2021)")
+print(f"   Validation set: {len(val_df)} matches (2022)")
+print(f"   Test set:       {len(test_df)} matches (2023-2025)")
 
 # Prepare features and target
 X_train = train_df[feature_cols]
 y_train = train_df['Player1_Wins']
+X_val = val_df[feature_cols]
+y_val = val_df['Player1_Wins']
 X_test = test_df[feature_cols]
 y_test = test_df['Player1_Wins']
 
 print(f"   Training features shape: {X_train.shape}")
+print(f"   Validation features shape: {X_val.shape}")
 print(f"   Test features shape: {X_test.shape}")
-print(f"   Target distribution - Train: {y_train.mean():.3f}, Test: {y_test.mean():.3f}")
+print(f"   Target distribution - Train: {y_train.mean():.3f}, Val: {y_val.mean():.3f}, Test: {y_test.mean():.3f}")
 
 # Check for missing values
 print("\n5. Checking data quality...")
 train_missing = X_train.isnull().sum().sum()
+val_missing = X_val.isnull().sum().sum()
 test_missing = X_test.isnull().sum().sum()
 print(f"   Training missing values: {train_missing}")
+print(f"   Validation missing values: {val_missing}")
 print(f"   Test missing values: {test_missing}")
 
-if train_missing > 0 or test_missing > 0:
+if train_missing > 0 or val_missing > 0 or test_missing > 0:
     print("   Filling missing values with median...")
     X_train = X_train.fillna(X_train.median())
+    X_val = X_val.fillna(X_train.median())
     X_test = X_test.fillna(X_train.median())  # Use training median for test set
 
 # Display feature information
@@ -183,39 +214,90 @@ print(f"   Hand features: {len(hand_features)}")
 print(f"   Country features: {len(country_features)}")
 
 # Train Random Forest model
-print("\n7. Training Random Forest model...")
-rf_model = RandomForestClassifier(
-    n_estimators=100,
-    max_depth=15,  # Slightly deeper for more complex Jeffsackmann data
-    min_samples_split=5,
-    min_samples_leaf=2,
-    random_state=42,
-    n_jobs=-1
-)
+print("\n7. Training Random Forest model with validation-based selection...")
+candidate_configs = [
+    {
+        'label': 'rf_depth10_regularized',
+        'params': {
+            'n_estimators': 400,
+            'max_depth': 10,
+            'min_samples_split': 10,
+            'min_samples_leaf': 4,
+            'max_features': 'sqrt',
+        },
+    },
+    {
+        'label': 'rf_depth15_currentish',
+        'params': {
+            'n_estimators': 300,
+            'max_depth': 15,
+            'min_samples_split': 5,
+            'min_samples_leaf': 2,
+            'max_features': 'sqrt',
+        },
+    },
+    {
+        'label': 'rf_deep_none',
+        'params': {
+            'n_estimators': 500,
+            'max_depth': None,
+            'min_samples_split': 10,
+            'min_samples_leaf': 2,
+            'max_features': 'sqrt',
+        },
+    },
+]
 
-rf_model.fit(X_train, y_train)
-print("   ✅ Model training complete!")
+best_score = None
+best_label = None
+rf_model = None
+
+for candidate in candidate_configs:
+    label = candidate['label']
+    print(f"   Candidate: {label}")
+    model = RandomForestClassifier(
+        random_state=42,
+        n_jobs=-1,
+        **candidate['params'],
+    )
+    model.fit(X_train, y_train)
+    val_pred = model.predict(X_val)
+    val_prob = model.predict_proba(X_val)[:, 1]
+    val_metrics = compute_metrics(y_val, val_pred, val_prob)
+    score = (val_metrics['log_loss'], val_metrics['brier'], -val_metrics['auc'])
+    print(
+        f"      Val logloss={val_metrics['log_loss']:.4f} | "
+        f"Val brier={val_metrics['brier']:.4f} | "
+        f"Val auc={val_metrics['auc']:.4f}"
+    )
+    if best_score is None or score < best_score:
+        best_score = score
+        best_label = label
+        rf_model = model
+
+print(f"   ✅ Selected validation winner: {best_label}")
 
 # Make predictions
-print("\n8. Making predictions...")
+print("\n8. Making validation and test predictions...")
+y_val_pred = rf_model.predict(X_val)
+y_val_proba = rf_model.predict_proba(X_val)[:, 1]
 y_pred = rf_model.predict(X_test)
 y_pred_proba = rf_model.predict_proba(X_test)[:, 1]
 
 # Calculate metrics
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred)
-recall = recall_score(y_test, y_pred)
-f1 = f1_score(y_test, y_pred)
-auc = roc_auc_score(y_test, y_pred_proba)
+val_metrics = compute_metrics(y_val, y_val_pred, y_val_proba)
+test_metrics = compute_metrics(y_test, y_pred, y_pred_proba)
+accuracy = test_metrics['accuracy']
+precision = test_metrics['precision']
+recall = test_metrics['recall']
+f1 = test_metrics['f1']
+auc = test_metrics['auc']
 
 print("\n" + "=" * 60)
 print("JEFFSACKMANN RANDOM FOREST RESULTS")
 print("=" * 60)
-print(f"Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-print(f"Precision: {precision:.4f}")
-print(f"Recall: {recall:.4f}")
-print(f"F1-score: {f1:.4f}")
-print(f"AUC-ROC: {auc:.4f}")
+print_metrics_block("Validation (2022)", val_metrics)
+print_metrics_block("Test (2023-2025)", test_metrics)
 
 # Calculate ATP ranking baseline for comparison
 print("\n9. Calculating ATP ranking baseline...")
@@ -319,8 +401,14 @@ feature_importance.to_csv(os.path.join(output_dir, 'feature_importance.csv'), in
 
 # Save model metrics
 metrics_df = pd.DataFrame({
-    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'ATP_Baseline'],
-    'Value': [accuracy, precision, recall, f1, auc, baseline_accuracy]
+    'Split': ['validation', 'validation', 'validation', 'validation', 'validation', 'validation',
+              'test', 'test', 'test', 'test', 'test', 'test', 'test', 'model'],
+    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'LogLoss',
+               'Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC', 'LogLoss', 'ATP_Baseline',
+               'Selected_Config'],
+    'Value': [val_metrics['accuracy'], val_metrics['precision'], val_metrics['recall'], val_metrics['f1'], val_metrics['auc'], val_metrics['log_loss'],
+              accuracy, precision, recall, f1, auc, test_metrics['log_loss'], baseline_accuracy,
+              best_label]
 })
 metrics_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
 
@@ -380,6 +468,7 @@ print("\n" + "=" * 60)
 print("JEFFSACKMANN RANDOM FOREST TRAINING COMPLETE")
 print("=" * 60)
 print(f"Final accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+print(f"Validation log loss winner: {best_label}")
 print(f"ATP Ranking baseline: {baseline_accuracy:.4f} ({baseline_accuracy*100:.2f}%)")
 print(f"Improvement: {(accuracy - baseline_accuracy)*100:+.2f} percentage points")
 print(f"Results saved to: {output_dir}")
@@ -390,7 +479,6 @@ print("\nDetailed Classification Report:")
 print(classification_report(y_test, y_pred, target_names=['Player2_Wins', 'Player1_Wins']))
 
 # ── Calibration metrics ───────────────────────────────────────────────────────
-from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.calibration import calibration_curve as sk_cal_curve
 
 def ece_score(y_true, y_prob, n_bins=10):
