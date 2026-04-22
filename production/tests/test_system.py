@@ -10,6 +10,7 @@ These tests are intentionally lightweight:
 
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -176,6 +177,78 @@ def test_orchestrator_init():
         return False
 
 
+def test_inference_guardrails():
+    print("🧪 Testing inference guardrails...")
+    try:
+        from main import LiveBettingOrchestrator
+        from features.ta_feature_calculator import TAFeatureCalculator
+
+        orch = LiveBettingOrchestrator()
+        parsed = orch.parse_match_start_datetime("4/21/26 7:30 PM", now=datetime(2026, 4, 21, 12, 0))
+        if parsed != datetime(2026, 4, 21, 19, 30):
+            print(f"❌ Unexpected parsed match start: {parsed}")
+            return False
+
+        _, guard_reason = orch.get_inference_guard_reason("4/21/26 7:30 PM")
+        if guard_reason not in {"", "inside_pre_match_buffer_5m", "scheduled_start_passed"}:
+            print(f"❌ Unexpected guard reason: {guard_reason}")
+            return False
+
+        calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+        completed_rows = pd.DataFrame([
+            {
+                "date": "2026-04-13",
+                "event": "Munich",
+                "round": "SF",
+                "opp_name": "Flavio Cobolli",
+                "result": "W",
+            },
+            {
+                "date": "2026-03-10",
+                "event": "Indian Wells",
+                "round": "R64",
+                "opp_name": "Flavio Cobolli",
+                "result": "W",
+            },
+        ])
+        candidate = calc._find_completed_match_candidate(
+            completed_rows,
+            opponent_name="Flavio Cobolli",
+            ref_date=datetime(2026, 4, 18, 4, 30),
+            round_code="SF",
+            expected_event_title="ATP Munich - Semifinal",
+        )
+        if not candidate or candidate.get("event") != "Munich":
+            print(f"❌ Failed to identify likely completed current match: {candidate}")
+            return False
+
+        safe_rows = pd.DataFrame([
+            {
+                "date": "2026-02-01",
+                "event": "Montpellier",
+                "round": "R32",
+                "opp_name": "Flavio Cobolli",
+                "result": "W",
+            }
+        ])
+        safe_candidate = calc._find_completed_match_candidate(
+            safe_rows,
+            opponent_name="Flavio Cobolli",
+            ref_date=datetime(2026, 4, 18, 4, 30),
+            round_code="SF",
+            expected_event_title="ATP Munich - Semifinal",
+        )
+        if safe_candidate is not None:
+            print(f"❌ False positive completed-match candidate: {safe_candidate}")
+            return False
+
+        print("✅ Inference guardrails test passed")
+        return True
+    except Exception as e:
+        print(f"❌ Inference guardrails test failed: {e}")
+        return False
+
+
 def main():
     print("🎾 Testing Tennis Betting Production System")
     print("=" * 50)
@@ -186,6 +259,7 @@ def main():
         ("Stake Calculation", test_stake_calculation),
         ("Prediction Logger", test_prediction_logger),
         ("Orchestrator Init", test_orchestrator_init),
+        ("Inference Guardrails", test_inference_guardrails),
     ]
 
     ok = 0

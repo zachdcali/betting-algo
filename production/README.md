@@ -64,4 +64,4 @@ python tests/test_system.py
 - `prediction_log.csv` is for the original live call on a match; use `prediction_snapshots.csv` and `logs/features_*.csv` for full historical lineage.
 - `sync_bet_tracker.py` is useful for backfilling tracked bets from already-settled prediction rows.
 - For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.
-- `main.py` now skips feature generation for matches that are already at or inside a small pre-start buffer from the Bovada scheduled time, so a late run does not accidentally score a match after TA has turned it into history.
+- `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.

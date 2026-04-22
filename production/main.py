@@ -17,7 +17,7 @@ import os
 sys.path.append(str(Path(__file__).parent))
 
 from odds.fetch_bovada import fetch_bovada_tennis_odds, save_odds_data
-from features.ta_feature_calculator import TAFeatureCalculator
+from features.ta_feature_calculator import TAFeatureCalculator, UnsafeToInferError
 from models.inference import (
     EXACT_141_FEATURES,
     MODEL_VERSION,
@@ -338,6 +338,7 @@ class LiveBettingOrchestrator:
                         tournament_level=tournament_level,
                         draw_size=draw_size,
                         round_code=round_code,
+                        expected_event_title=row.get('event', ''),
                         force_refresh=True,
                         persist=False,
                         session_cache=session_cache,
@@ -347,6 +348,11 @@ class LiveBettingOrchestrator:
                     # (includes ATP points fallback, round=None, structural defaults)
                     has_defaulted = bool(features.get('_defaulted_features', ''))
                     status = "ok"
+            except UnsafeToInferError as e:
+                print(f"      ⏭️  Skipping pre-match inference for {p1} vs {p2} — {e}")
+                features = {}
+                status = "skip"
+                status_detail = str(e)
             except Exception as e:
                 print(f"      ⚠️ Feature extraction failed: {e}")
                 features = {}

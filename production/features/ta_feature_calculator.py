@@ -31,6 +31,10 @@ with open(SCHEMA_PATH) as f:
     EXACT_141_FEATURES = [feat["name"] for feat in SCHEMA["features"]]
 
 
+class UnsafeToInferError(RuntimeError):
+    """Raised when the current matchup appears to have already completed on TA."""
+
+
 class TAFeatureCalculator:
     """
     Calculate the exact 143 features from Tennis Abstract data.
@@ -117,6 +121,106 @@ class TAFeatureCalculator:
         if slug:
             self.player_slug_map[normalized] = slug
         return slug
+
+    @staticmethod
+    def _name_tokens(text: str) -> List[str]:
+        norm = TAFeatureCalculator._norm(text)
+        return [tok for tok in norm.split() if tok]
+
+    @staticmethod
+    def _event_tokens(text: str) -> set[str]:
+        norm = TAFeatureCalculator._norm(text)
+        tokens = re.findall(r"[a-z0-9]+", norm)
+        stop = {
+            'atp', 'itf', 'men', 'mens', 'challenger', 'masters', 'master',
+            'grand', 'slam', 'round', 'qualifying', 'qualifier', 'final',
+            'semifinal', 'semifinals', 'quarterfinal', 'quarterfinals',
+            'open', 'cup', 'tour', 'event', 'singles', 'of', 'the', 'and',
+            'q1', 'q2', 'q3', 'q4', 'r16', 'r32', 'r64', 'r128', 'sf', 'qf',
+            'm15', 'm25'
+        }
+        return {tok for tok in tokens if len(tok) >= 3 and tok not in stop}
+
+    def _opponent_name_matches(self, candidate_name: str, target_name: str) -> bool:
+        cand_norm = self._norm(candidate_name)
+        target_norm = self._norm(target_name)
+        if not cand_norm or not target_norm:
+            return False
+        if cand_norm == target_norm:
+            return True
+        cand_tokens = self._name_tokens(candidate_name)
+        target_tokens = self._name_tokens(target_name)
+        if cand_tokens and target_tokens and cand_tokens[-1] == target_tokens[-1]:
+            return True
+        return False
+
+    def _find_completed_match_candidate(
+        self,
+        df: pd.DataFrame,
+        opponent_name: str,
+        ref_date: datetime,
+        round_code: Optional[str] = None,
+        expected_event_title: str = "",
+    ) -> Optional[Dict[str, object]]:
+        """
+        Look for a likely "this exact match already finished" row in TA history.
+
+        TA stores tournament start dates, so the search window must be wide enough to
+        capture same-event rows even when `ref_date` is an inferred round date.
+        """
+        if df.empty or 'opp_name' not in df.columns or 'date' not in df.columns:
+            return None
+
+        work = df.copy()
+        work['date'] = pd.to_datetime(work['date'], errors='coerce')
+        window_start = pd.Timestamp(ref_date) - timedelta(days=21)
+        window_end = pd.Timestamp(ref_date) + timedelta(days=14)
+        work = work[(work['date'] >= window_start) & (work['date'] <= window_end)].copy()
+        if work.empty:
+            return None
+
+        work = work[
+            work['opp_name'].astype(str).apply(lambda name: self._opponent_name_matches(name, opponent_name))
+        ].copy()
+        if work.empty:
+            return None
+
+        expected_tokens = self._event_tokens(expected_event_title)
+        best = None
+
+        for _, row in work.iterrows():
+            candidate_round = str(row.get('round', '') or '').upper()
+            round_match = bool(round_code) and candidate_round == str(round_code).upper()
+            row_tokens = self._event_tokens(str(row.get('event', '') or ''))
+            shared_tokens = expected_tokens & row_tokens
+            event_match = bool(shared_tokens)
+            date_diff = abs((pd.Timestamp(ref_date) - row['date']).days) if pd.notna(row['date']) else 999
+            close_match = date_diff <= 2
+
+            # Require at least two strong signals before treating the row as the
+            # current matchup; this avoids excluding prior H2Hs too aggressively.
+            signal_count = int(round_match) + int(event_match) + int(close_match)
+            if signal_count < 2:
+                continue
+
+            score = (3 if round_match else 0) + (min(3, len(shared_tokens)) if event_match else 0)
+            if close_match:
+                score += 2
+            elif date_diff <= 7:
+                score += 1
+
+            candidate = {
+                'date': row['date'],
+                'event': str(row.get('event', '') or ''),
+                'round': candidate_round,
+                'score': int(score),
+                'date_diff_days': int(date_diff),
+                'shared_event_tokens': sorted(shared_tokens),
+            }
+            if best is None or candidate['score'] > best['score']:
+                best = candidate
+
+        return best
 
     # ========== Laplace-smoothed win rate helper ==========
 
@@ -564,6 +668,7 @@ class TAFeatureCalculator:
         tournament_level: str = "A",
         draw_size: int = 32,
         round_code: Optional[str] = None,
+        expected_event_title: str = "",
         force_refresh: bool = True,
         persist: bool = False,
         session_cache: Optional[Dict] = None,
@@ -639,6 +744,7 @@ class TAFeatureCalculator:
             tournament_level=tournament_level,
             draw_size=draw_size,
             round_code=round_code,
+            expected_event_title=expected_event_title,
             force_refresh=force_refresh,
             persist=persist,
             session_cache=session_cache,
@@ -654,6 +760,7 @@ class TAFeatureCalculator:
         tournament_level: str = "A",
         draw_size: int = 32,
         round_code: Optional[str] = None,
+        expected_event_title: str = "",
         force_refresh: bool = True,
         persist: bool = False,
         session_cache: Optional[Dict] = None,
@@ -802,6 +909,22 @@ class TAFeatureCalculator:
         # Get TA tournament start date + round BEFORE temporal features.
         # TA (like Sackmann CSV) stores tournament START DATE for all rounds.
         _upcoming = self.scraper.get_upcoming_match(slug1, p2_display, session_cache=session_cache)
+        completed_candidate = self._find_completed_match_candidate(
+            matches1,
+            p2_display,
+            when,
+            round_code=round_code,
+            expected_event_title=expected_event_title,
+        )
+        if completed_candidate and not _upcoming:
+            event_label = completed_candidate['event'] or 'unknown event'
+            round_label = completed_candidate['round'] or '?'
+            date_label = completed_candidate['date'].date().isoformat() if pd.notna(completed_candidate['date']) else '?'
+            raise UnsafeToInferError(
+                "ta_completed_match_candidate:"
+                f"{p1_display} vs {p2_display} already appears in TA history "
+                f"({event_label}, {round_label}, {date_label})"
+            )
         _tourney_start = None
         if _upcoming:
             if not round_code and _upcoming.get('round'):

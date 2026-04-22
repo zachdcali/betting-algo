@@ -17,4 +17,4 @@ Current production principles:
 - Prediction generation and auto-settlement are separate concerns.
 - `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the lineage layer.
 - Old rows without immutable snapshot ids are legacy history and should be treated differently from new schema-backed rows.
-- Bovada scheduled start times are part of the safety layer: the orchestrator skips feature generation once a match is at or past the configured pre-start cutoff so delayed runs do not drift into post-start TA history.
+- Bovada scheduled start times and TA match-state checks are part of the safety layer: the orchestrator skips feature generation once a match is at/past the configured pre-start cutoff or appears to have already completed in TA history, so delayed runs do not drift into post-start inference.
