@@ -10,7 +10,7 @@ import re
 import pandas as pd
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 # Add production modules to path
@@ -73,33 +73,113 @@ class LiveBettingOrchestrator:
         Examples: "Today 7:30 PM", "Tomorrow 3:00 AM", "3/16/26 2:00 PM"
         Falls back to today if unparseable.
         """
+        return LiveBettingOrchestrator.parse_match_start_datetime(match_time_str) or datetime.now()
+
+    @staticmethod
+    def parse_match_start_datetime(match_time_str: str, now: datetime = None):
+        """
+        Parse Bovada match_time into a local naive datetime when possible.
+
+        Supported examples:
+        - "4/21/26 7:30 PM"
+        - "4/21/2026 7:30 PM"
+        - "Today 7:30 PM"
+        - "Tomorrow 3:00 AM"
+        - "Sat 7:30 PM"
+        """
         if not match_time_str or match_time_str == "Unknown":
-            return datetime.now()
+            return None
 
-        t = match_time_str.strip()
-        now = datetime.now()
+        now = now or datetime.now()
+        text = str(match_time_str).strip()
 
-        # Absolute date: "3/16/26 2:00 PM" or "03/16/2026 2:00 PM"
-        import re as _re
-        m = _re.search(r"(\d{1,2})/(\d{1,2})/(\d{2,4})", t)
-        if m:
-            mo, dy, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            if yr < 100:
-                yr += 2000
+        for fmt in ("%m/%d/%y %I:%M %p", "%m/%d/%Y %I:%M %p", "%m/%d/%y", "%m/%d/%Y"):
             try:
-                return datetime(yr, mo, dy, now.hour, now.minute)
+                parsed = datetime.strptime(text, fmt)
+                if "%I:%M %p" not in fmt:
+                    parsed = parsed.replace(hour=now.hour, minute=now.minute)
+                return parsed
             except ValueError:
-                return now
+                pass
 
-        # Relative: "Today ..." or "Tomorrow ..."
-        if t.lower().startswith("today"):
-            return now
-        if t.lower().startswith("tomorrow"):
-            from datetime import timedelta
-            return now + timedelta(days=1)
+        time_match = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", text, re.I)
+        parsed_time = None
+        if time_match:
+            try:
+                parsed_time = datetime.strptime(time_match.group(1).upper(), "%I:%M %p")
+            except ValueError:
+                parsed_time = None
 
-        # Day-of-week: "Sat 7:30 PM" — default to today
-        return now
+        lower = text.lower()
+        if lower.startswith("today") and parsed_time:
+            return now.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+            )
+        if lower.startswith("tomorrow") and parsed_time:
+            base = now + timedelta(days=1)
+            return base.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+            )
+
+        dow_match = re.match(r"^(mon|tue|wed|thu|fri|sat|sun)\b", lower)
+        if dow_match and parsed_time:
+            day_map = {
+                "mon": 0,
+                "tue": 1,
+                "wed": 2,
+                "thu": 3,
+                "fri": 4,
+                "sat": 5,
+                "sun": 6,
+            }
+            target = day_map[dow_match.group(1)]
+            days_ahead = (target - now.weekday()) % 7
+            base = now + timedelta(days=days_ahead)
+            candidate = base.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if candidate < now and days_ahead == 0:
+                candidate = candidate + timedelta(days=7)
+            return candidate
+
+        if parsed_time:
+            return now.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+            )
+
+        return None
+
+    def get_inference_guard_reason(self, match_time_str: str) -> tuple[datetime | None, str]:
+        """
+        Return a skip reason when a match is too close to start or already in progress.
+
+        This keeps the TA-driven feature path out of post-start territory where the
+        current match could already appear in player history.
+        """
+        start_dt = self.parse_match_start_datetime(match_time_str)
+        if start_dt is None:
+            return None, ""
+
+        buffer_minutes = int(self.config.get('pre_match_inference_buffer_minutes', 5))
+        cutoff = start_dt - timedelta(minutes=buffer_minutes)
+        now = datetime.now()
+        if now >= start_dt:
+            return start_dt, "scheduled_start_passed"
+        if now >= cutoff:
+            return start_dt, f"inside_pre_match_buffer_{buffer_minutes}m"
+        return start_dt, ""
 
     @staticmethod
     def parse_round_from_text(text: str) -> str:
@@ -153,7 +233,8 @@ class LiveBettingOrchestrator:
             'min_stake_dollars': 1.0,
             'bankroll': 1000.0,
             'logs_dir': './logs',
-            'models_dir': '../results/professional_tennis/Neural_Network'
+            'models_dir': '../results/professional_tennis/Neural_Network',
+            'pre_match_inference_buffer_minutes': 5,
         }
         
         if config_path and Path(config_path).exists():
@@ -233,34 +314,44 @@ class LiveBettingOrchestrator:
             # Use exact match date from Bovada where available
             match_time_str = row.get('match_time', '')
             match_date = self.parse_match_date(match_time_str)
+            match_start_dt, guard_reason = self.get_inference_guard_reason(match_time_str)
             # Flag whether Bovada gave us a real absolute date (e.g. "3/22/26 8:00 AM")
             # vs. just a time or no date (defaults to today)
             import re as _re2
             match_date_is_explicit = bool(_re2.search(r'\d{1,2}/\d{1,2}/\d{2,4}', match_time_str))
 
             has_defaulted = False
+            status_detail = ""
             try:
-                features = self.feature_engine.build_141_features(
-                    player1_name=p1,
-                    player2_name=p2,
-                    match_date=match_date,
-                    surface=surface,
-                    tournament_level=tournament_level,
-                    draw_size=draw_size,
-                    round_code=round_code,
-                    force_refresh=True,
-                    persist=False,
-                    session_cache=session_cache,
-                    match_date_is_explicit=match_date_is_explicit,
-                )
-                # features_complete=False if ANY meaningful feature was defaulted
-                # (includes ATP points fallback, round=None, structural defaults)
-                has_defaulted = bool(features.get('_defaulted_features', ''))
-                status = "ok"
+                if guard_reason:
+                    start_label = match_start_dt.isoformat(sep=' ', timespec='minutes') if match_start_dt else match_time_str
+                    print(f"      ⏭️  Skipping pre-match inference for {p1} vs {p2} — {guard_reason} (scheduled {start_label})")
+                    features = {}
+                    status = "skip"
+                    status_detail = guard_reason
+                else:
+                    features = self.feature_engine.build_141_features(
+                        player1_name=p1,
+                        player2_name=p2,
+                        match_date=match_date,
+                        surface=surface,
+                        tournament_level=tournament_level,
+                        draw_size=draw_size,
+                        round_code=round_code,
+                        force_refresh=True,
+                        persist=False,
+                        session_cache=session_cache,
+                        match_date_is_explicit=match_date_is_explicit,
+                    )
+                    # features_complete=False if ANY meaningful feature was defaulted
+                    # (includes ATP points fallback, round=None, structural defaults)
+                    has_defaulted = bool(features.get('_defaulted_features', ''))
+                    status = "ok"
             except Exception as e:
                 print(f"      ⚠️ Feature extraction failed: {e}")
                 features = {}
                 status = "skip"
+                status_detail = f"feature_error:{e}"
 
             # Ordered 141 features for the model — flag any that are absent from the returned dict
             missing_from_dict = [k for k in EXACT_141_FEATURES if k not in features]
@@ -314,7 +405,9 @@ class LiveBettingOrchestrator:
                 'event': row.get('event', ''),
                 'timestamp': row.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                 'match_time': row.get('match_time', ''),
+                'match_start_dt_local': match_start_dt.isoformat() if match_start_dt else '',
                 'status': status,
+                'status_detail': status_detail,
                 'meta_level_input': tournament_level,
                 'meta_surface_input': surface,
                 'meta_round_input': resolved_round,

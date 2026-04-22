@@ -42,6 +42,7 @@ What that does:
 - fetches current Bovada odds
 - resolves surface / level / draw / round
 - builds 141 live features from Tennis Abstract
+- skips matches that have already reached the configured pre-start cutoff, to keep TA history from leaking the current match into features
 - scores the slate with NN, XGBoost, and Random Forest
 - writes per-run feature logs and bet slips
 - logs immutable prediction and odds snapshots
@@ -110,3 +111,5 @@ python settle_bets.py --interactive
 ## Important Distinction
 
 The repo still contains older helper paths such as `features/extract_features.py` and older UTR/cloud scripts. Those are not the active live production path.
+
+The active path now also uses Bovada scheduled start times as an inference guardrail: if a match is already started or inside the configured pre-start buffer, the orchestrator skips feature generation for that row and records the skip reason in the per-run features log.
