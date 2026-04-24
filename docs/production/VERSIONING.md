@@ -22,6 +22,12 @@ Recommended bump rules:
 - Minor bump: retrain with a changed split, changed features, changed heuristic, changed calibration, or changed hyperparameters
 - Major bump: materially different data source, feature philosophy, or modeling approach
 
+Candidate versions are useful when a model has been retrained honestly but is not yet the promoted live artifact:
+
+- keep `current_version` pointed at the live promoted version
+- track a `candidate_version` separately when a retrain exists but should not silently replace production
+- use candidate status for cases like "honest retrain completed, but offline or live review is not strong enough to promote"
+
 Practical guidance for the next NN retrain:
 
 - Because the historical NN holdout was used for early stopping, the next honest retrain should be treated as a new NN version, not a silent overwrite.

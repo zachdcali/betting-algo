@@ -8,15 +8,20 @@ stored in prediction_log.csv and match_features_export.csv.
 
 import os
 import glob
-import json
 import pickle
 import warnings
 
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 import xgboost as xgb
+
+try:
+    from models.nn_runtime import TennisNet
+    from models.registry_utils import resolve_artifact_path
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .models.nn_runtime import TennisNet
+    from .models.registry_utils import resolve_artifact_path
 
 warnings.filterwarnings("ignore")
 
@@ -58,8 +63,9 @@ print(f"Date range from timestamps: {all_features['timestamp'].min()} → {all_f
 
 
 # ── 2. Load model feature list ────────────────────────────────────────────────
+xgb_model_path = resolve_artifact_path("xgboost") or os.path.join(RESULTS, "XGBoost", "xgboost_model_SURFACE_FIX.json")
 xgb_model = xgb.XGBClassifier()
-xgb_model.load_model(os.path.join(RESULTS, "XGBoost", "xgboost_model_SURFACE_FIX.json"))
+xgb_model.load_model(str(xgb_model_path))
 MODEL_FEATURES = list(xgb_model.feature_names_in_)
 print(f"\nModel expects {len(MODEL_FEATURES)} features")
 
@@ -86,21 +92,8 @@ print(f"XGBoost: min={xgb_probs.min():.3f}  max={xgb_probs.max():.3f}  mean={xgb
 
 
 # ── 5. Neural Network predictions ────────────────────────────────────────────
-class TennisNet(nn.Module):
-    def __init__(self, input_size):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, 128), nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(128, 64),         nn.ReLU(), nn.Dropout(0.3),
-            nn.Linear(64, 32),          nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(32, 16),          nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(16, 1),           nn.Sigmoid(),
-        )
-    def forward(self, x):
-        return self.network(x).squeeze(1)
-
-nn_model_path  = os.path.join(RESULTS, "Neural_Network", "neural_network_model_SURFACE_FIX.pth")
-nn_scaler_path = os.path.join(RESULTS, "Neural_Network", "scaler_SURFACE_FIX.pkl")
+nn_model_path = resolve_artifact_path("nn") or os.path.join(RESULTS, "Neural_Network", "neural_network_model_SURFACE_FIX.pth")
+nn_scaler_path = resolve_artifact_path("nn", "scaler_file") or os.path.join(RESULTS, "Neural_Network", "scaler_SURFACE_FIX.pkl")
 
 with open(nn_scaler_path, "rb") as f:
     scaler = pickle.load(f)
@@ -117,7 +110,7 @@ print(f"Neural Net: min={nn_probs.min():.3f}  max={nn_probs.max():.3f}  mean={nn
 
 
 # ── 6. Random Forest predictions ─────────────────────────────────────────────
-rf_path = os.path.join(RESULTS, "Random_Forest", "random_forest_model_SURFACE_FIX.pkl")
+rf_path = resolve_artifact_path("random_forest") or os.path.join(RESULTS, "Random_Forest", "random_forest_model_SURFACE_FIX.pkl")
 with open(rf_path, "rb") as f:
     rf_model = pickle.load(f)
 

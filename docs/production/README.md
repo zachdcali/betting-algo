@@ -12,6 +12,8 @@ Start here:
   How model-family versions, logging schema versions, and lineage quality should work
 - [Model Releases](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md)
   Plain-English release notes for promoted NN/XGB/RF versions
+- [Results Layout](/Users/zachdodson/Documents/betting-algo/results/professional_tennis/README.md)
+  Where promoted releases, candidates, backups, and mutable training outputs should live
 - [Dashboard README](/Users/zachdodson/Documents/betting-algo/dashboard/README.md)
   How to run the live operations dashboard and which CSVs it reads
 

@@ -15,11 +15,13 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Keep versioning separate by family:
   `nn`, `xgboost`, and `random_forest`.
 - Do not silently overwrite a promoted production artifact.
+- It is acceptable to keep a retrained model as a registry-tracked candidate when it has not yet earned promotion.
 - When promoting a new model version:
   1. create a stable versioned artifact copy
   2. archive the previous promoted artifact with a stable versioned filename
   3. update [production/models/model_registry.json](/Users/zachdodson/Documents/betting-algo/production/models/model_registry.json)
   4. update [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md)
+- Use [production/models/validate_registry.py](/Users/zachdodson/Documents/betting-algo/production/models/validate_registry.py) after registry changes.
 - A changed train/validation/test protocol warrants at least a minor version bump.
 - Probability calibration for the NN should be tracked separately from the base NN artifact version.
 

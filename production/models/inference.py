@@ -8,36 +8,35 @@ import pandas as pd
 import numpy as np
 import torch
 import pickle
-import json
 from pathlib import Path
 from typing import Tuple, Dict, Optional
 import warnings
 try:
     from models.nn_runtime import NNWrapper, TennisNet
+    from models.registry_utils import (
+        load_registry,
+        get_current_version,
+        get_model_entry,
+    )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from .nn_runtime import NNWrapper, TennisNet
+    from .registry_utils import (
+        load_registry,
+        get_current_version,
+        get_model_entry,
+    )
 
-# Load model version from registry
-_REGISTRY_PATH = Path(__file__).parent / "model_registry.json"
-if _REGISTRY_PATH.exists():
-    with open(_REGISTRY_PATH) as _f:
-        _REGISTRY = json.load(_f)
-    MODEL_VERSION = _REGISTRY.get("current_version", "unknown")
-    XGB_MODEL_VERSION = _REGISTRY.get("xgboost", {}).get("current_version", "unknown")
-    RF_MODEL_VERSION = _REGISTRY.get("random_forest", {}).get("current_version", "unknown")
-else:
-    _REGISTRY = {}
-    MODEL_VERSION = "unknown"
-    XGB_MODEL_VERSION = "unknown"
-    RF_MODEL_VERSION = "unknown"
+_REGISTRY = load_registry()
+MODEL_VERSION = get_current_version("nn", _REGISTRY)
+XGB_MODEL_VERSION = get_current_version("xgboost", _REGISTRY)
+RF_MODEL_VERSION = get_current_version("random_forest", _REGISTRY)
 warnings.filterwarnings('ignore')
 
 
 def _registry_model_entry(section: str, version: str) -> Dict:
     """Return a model-registry entry or an empty dict."""
-    if section == "nn":
-        return _REGISTRY.get("models", {}).get(version, {})
-    return _REGISTRY.get(section, {}).get("models", {}).get(version, {})
+    family = "nn" if section == "nn" else section
+    return get_model_entry(family, version=version, registry=_REGISTRY, include_candidates=True)
 
 # Exact 141 features for NN-141 model (Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
 EXACT_141_FEATURES = [

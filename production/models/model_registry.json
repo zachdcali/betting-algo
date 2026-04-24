@@ -1,5 +1,6 @@
 {
   "current_version": "v1.2.1",
+  "candidate_version": "v1.3.0",
   "models": {
     "v1.0.0": {
       "name": "NN-98",
@@ -32,9 +33,10 @@
       "architecture": "128-64-32-16-1",
       "test_accuracy": 0.6638,
       "test_auc": 0.7268,
-      "notes": "Fixed surface experience cap bug and Peak_Age column naming mismatch. Static round-day offset heuristic (assumed Monday start for all tournaments). Production accuracy: 22/34 (64.7%) vs market 55.9%.",
-      "model_file": "neural_network_model_SURFACE_FIX_v1.1.1.pth",
-      "scaler_file": "scaler_SURFACE_FIX_v1.1.1.pkl",
+      "notes": "Fixed surface experience cap bug and Peak_Age column naming mismatch. Static round-day offset heuristic (assumed Monday start for all tournaments). Production accuracy: 22/34 (64.7%) vs market 55.9%. Historical metrics are preserved, but the exact artifact file is no longer available in-repo.",
+      "model_file": null,
+      "scaler_file": null,
+      "artifact_available": false,
       "archived": true
     },
     "v1.2.0": {
@@ -45,8 +47,8 @@
       "test_accuracy": 0.6623,
       "test_auc": 0.7280,
       "notes": "Dynamic round-day offset heuristic (anchored on 'finals are Sunday', adapts to actual start dow). Removed duplicate Peak_Age_P1/P2 (143->141). Single source of truth for offsets in round_offsets.py. M/64 all treated as 1-week (bug — Madrid/Rome should be 2-week). Static qualifier offsets per level.",
-      "model_file": "archive/neural_network_model_v1.2.0.pth",
-      "scaler_file": "archive/scaler_v1.2.0.pkl",
+      "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.0.pth",
+      "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.0.pkl",
       "archived": true
     },
     "v1.2.1": {
@@ -60,9 +62,28 @@
       "test_ece": 0.0064,
       "probability_mode": "raw",
       "calibrated_model_file": "neural_network_calibrated_SURFACE_FIX.pkl",
-      "notes": "Fixed M/64 Masters detection: non-Monday start (Madrid/Rome/Shanghai) now correctly treated as 2-week events. Dynamic qualifier offsets: counts actual qualifier rounds per tournament in training data instead of using static per-level defaults. Verified against real Bovada dates for Miami 2026 (all rounds exact) and Zadar/Murcia CH 2026 (all rounds exact including Q1). Historical calibration artifact support exists, but raw probabilities remain the promoted live mode until a calibrated variant earns its own version bump.",
-      "model_file": "neural_network_model_SURFACE_FIX.pth",
-      "scaler_file": "scaler_SURFACE_FIX.pkl",
+      "notes": "Fixed M/64 Masters detection: non-Monday start (Madrid/Rome/Shanghai) now correctly treated as 2-week events. Dynamic qualifier offsets: counts actual qualifier rounds per tournament in training data instead of using static per-level defaults. Verified against real Bovada dates for Miami 2026 (all rounds exact) and Zadar/Murcia CH 2026 (all rounds exact including Q1). Historical calibration artifact support exists, but raw probabilities remain the promoted live mode until a calibrated variant earns its own version bump. The generic current files still mirror this release for compatibility with older scripts.",
+      "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
+      "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
+      "archived": false
+    }
+  },
+  "candidates": {
+    "v1.3.0": {
+      "name": "NN-141-FIXED_SPLIT-CANDIDATE",
+      "date": "2026-04-18",
+      "features": 141,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6622,
+      "test_auc": 0.7262,
+      "test_log_loss": 0.6098,
+      "test_brier": 0.2112,
+      "test_ece": 0.0142,
+      "probability_mode": "raw",
+      "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Saved as a registry-tracked candidate instead of the live current NN because it was slightly worse than v1.2.1 on offline metrics and the live NN still needs further calibration/extreme-prediction review.",
+      "model_file": "candidates/v1.3.0/neural_network_model_SURFACE_FIX_v1.3.0.pth",
+      "scaler_file": "candidates/v1.3.0/scaler_SURFACE_FIX_v1.3.0.pkl",
+      "metrics_file": "candidates/v1.3.0/metrics.csv",
       "archived": false
     }
   },
@@ -76,7 +97,7 @@
         "test_accuracy": 0.6644,
         "test_auc": 0.7292,
         "notes": "Initial XGBoost model trained on same JeffSackmann SURFACE_FIX dataset. Used 143 features (including duplicate Peak_Age_P1/P2).",
-        "model_file": "xgboost_model_SURFACE_FIX_v1.0.0.json",
+        "model_file": "releases/xgboost_model_SURFACE_FIX_v1.0.0.json",
         "archived": true
       },
       "v1.1.0": {
@@ -86,7 +107,7 @@
         "test_accuracy": 0.6644,
         "test_auc": 0.7292,
         "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). This is the pre-fixed-split promoted tree artifact and is retained as the archived reference point before the 2026-04-23 honest train/validation/test retrain.",
-        "model_file": "xgboost_model_SURFACE_FIX_v1.1.0.json",
+        "model_file": "releases/xgboost_model_SURFACE_FIX_v1.1.0.json",
         "archived": true
       },
       "v1.2.0": {
@@ -97,7 +118,7 @@
         "test_auc": 0.7302,
         "test_log_loss": 0.6064,
         "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was balanced_depth6. Promoted because training protocol changed, even though headline metrics moved only slightly.",
-        "model_file": "xgboost_model_SURFACE_FIX_v1.2.0.json",
+        "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
         "archived": false
       }
     }
@@ -112,7 +133,7 @@
         "test_accuracy": 0.6597,
         "test_auc": 0.7241,
         "notes": "Initial Random Forest model trained on same JeffSackmann SURFACE_FIX dataset. Used 143 features (including duplicate Peak_Age_P1/P2).",
-        "model_file": "random_forest_model_SURFACE_FIX_v1.0.0.pkl",
+        "model_file": "releases/random_forest_model_SURFACE_FIX_v1.0.0.pkl",
         "archived": true
       },
       "v1.1.0": {
@@ -122,7 +143,7 @@
         "test_accuracy": 0.6597,
         "test_auc": 0.7241,
         "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). This is the pre-fixed-split promoted tree artifact and is retained as the archived reference point before the 2026-04-23 honest train/validation/test retrain.",
-        "model_file": "random_forest_model_SURFACE_FIX_v1.1.0.pkl",
+        "model_file": "releases/random_forest_model_SURFACE_FIX_v1.1.0.pkl",
         "archived": true
       },
       "v1.2.0": {
@@ -133,7 +154,7 @@
         "test_auc": 0.7251,
         "test_log_loss": 0.6105,
         "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was rf_depth15_currentish. Promoted because training protocol changed, even though headline metrics moved only slightly.",
-        "model_file": "random_forest_model_SURFACE_FIX_v1.2.0.pkl",
+        "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
         "archived": false
       }
     }
