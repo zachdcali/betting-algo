@@ -64,6 +64,41 @@ EXACT_141_FEATURES: List[str] = [
 ]
 
 
+SURFACE_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("Surface_") and col != "Surface_Transition_Flag"]
+LEVEL_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("Level_")]
+ROUND_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("Round_")]
+P1_HAND_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("P1_Hand_")]
+P2_HAND_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("P2_Hand_")]
+P1_COUNTRY_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("P1_Country_")]
+P2_COUNTRY_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("P2_Country_")]
+HANDEDNESS_MATCHUP_DUMMY_COLS = [col for col in EXACT_141_FEATURES if col.startswith("Handedness_Matchup_")]
+
+ONE_HOT_CATEGORY_COLS = set(
+    SURFACE_DUMMY_COLS
+    + LEVEL_DUMMY_COLS
+    + ROUND_DUMMY_COLS
+    + P1_HAND_DUMMY_COLS
+    + P2_HAND_DUMMY_COLS
+    + P1_COUNTRY_DUMMY_COLS
+    + P2_COUNTRY_DUMMY_COLS
+    + HANDEDNESS_MATCHUP_DUMMY_COLS
+)
+NATIVE_CAT_FEATURES: List[str] = [
+    "surface_cat",
+    "level_cat",
+    "round_cat",
+    "p1_hand_cat",
+    "p2_hand_cat",
+    "p1_country_cat",
+    "p2_country_cat",
+    "handedness_matchup_cat",
+]
+NATIVE_CAT_NUMERIC_FEATURES: List[str] = [
+    col for col in EXACT_141_FEATURES if col not in ONE_HOT_CATEGORY_COLS
+]
+NATIVE_CAT_ALL_FEATURES: List[str] = NATIVE_CAT_NUMERIC_FEATURES + NATIVE_CAT_FEATURES
+
+
 @dataclass
 class DataSplit:
     train_df: pd.DataFrame
@@ -122,6 +157,50 @@ def prepare_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def decode_one_hot_group(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    prefix: str,
+    fallback_col: Optional[str] = None,
+    unknown: str = "Unknown",
+) -> pd.Series:
+    """Return one categorical column from a raw field or one-hot group."""
+    if fallback_col and fallback_col in df.columns:
+        values = df[fallback_col].fillna(unknown).astype(str)
+        return values.where(values.str.len() > 0, unknown)
+
+    available = [col for col in group_cols if col in df.columns]
+    if not available:
+        return pd.Series(unknown, index=df.index, dtype="object")
+
+    dummy_values = df[available].fillna(0.0)
+    max_values = dummy_values.max(axis=1)
+    labels = dummy_values.idxmax(axis=1).str.replace(prefix, "", regex=False)
+    return labels.where(max_values > 0, unknown).astype(str)
+
+
+def prepare_native_categorical_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a feature view that replaces low-cardinality one-hot groups with
+    categorical columns for CatBoost/LightGBM side experiments.
+    """
+    prepared = prepare_feature_frame(df)
+    out = prepared[NATIVE_CAT_NUMERIC_FEATURES].copy()
+    out["surface_cat"] = decode_one_hot_group(prepared, SURFACE_DUMMY_COLS, "Surface_", fallback_col="surface")
+    out["level_cat"] = decode_one_hot_group(prepared, LEVEL_DUMMY_COLS, "Level_", fallback_col="tourney_level")
+    out["round_cat"] = decode_one_hot_group(prepared, ROUND_DUMMY_COLS, "Round_", fallback_col="round")
+    out["p1_hand_cat"] = decode_one_hot_group(prepared, P1_HAND_DUMMY_COLS, "P1_Hand_")
+    out["p2_hand_cat"] = decode_one_hot_group(prepared, P2_HAND_DUMMY_COLS, "P2_Hand_")
+    out["p1_country_cat"] = decode_one_hot_group(prepared, P1_COUNTRY_DUMMY_COLS, "P1_Country_")
+    out["p2_country_cat"] = decode_one_hot_group(prepared, P2_COUNTRY_DUMMY_COLS, "P2_Country_")
+    out["handedness_matchup_cat"] = decode_one_hot_group(
+        prepared,
+        HANDEDNESS_MATCHUP_DUMMY_COLS,
+        "Handedness_Matchup_",
+    )
+    return out[NATIVE_CAT_ALL_FEATURES]
+
+
 def build_fixed_split(df: pd.DataFrame) -> DataSplit:
     return DataSplit(
         train_df=df[df["tourney_date"] < "2022-01-01"].copy(),
@@ -172,18 +251,37 @@ def build_blocked_windows(
     return splits
 
 
-def split_xy(split: DataSplit) -> Dict[str, pd.DataFrame | np.ndarray]:
-    out: Dict[str, pd.DataFrame | np.ndarray] = {"label": split.label}
+def split_xy(split: DataSplit, feature_mode: str = "one_hot") -> Dict[str, pd.DataFrame | np.ndarray]:
+    if feature_mode not in {"one_hot", "native_cat"}:
+        raise ValueError(f"Unsupported feature_mode: {feature_mode}")
+
+    feature_names = EXACT_141_FEATURES if feature_mode == "one_hot" else NATIVE_CAT_ALL_FEATURES
+    numeric_features = EXACT_141_FEATURES if feature_mode == "one_hot" else NATIVE_CAT_NUMERIC_FEATURES
+    categorical_features = [] if feature_mode == "one_hot" else NATIVE_CAT_FEATURES
+
+    out: Dict[str, pd.DataFrame | np.ndarray] = {
+        "label": split.label,
+        "feature_mode": feature_mode,
+        "feature_names": feature_names,
+        "numeric_features": numeric_features,
+        "categorical_features": categorical_features,
+    }
     for prefix, frame in (("train", split.train_df), ("val", split.val_df), ("test", split.test_df)):
         prepared = prepare_feature_frame(frame)
-        X = prepared[EXACT_141_FEATURES].astype(float)
+        if feature_mode == "native_cat":
+            X = prepare_native_categorical_frame(prepared)
+            X[numeric_features] = X[numeric_features].astype(float)
+            for col in categorical_features:
+                X[col] = X[col].fillna("Unknown").astype(str)
+        else:
+            X = prepared[EXACT_141_FEATURES].astype(float)
         medians = None
         if prefix == "train":
-            medians = X.median()
+            medians = X[numeric_features].median()
             out["_train_medians"] = medians
         else:
             medians = out["_train_medians"]
-        X = X.fillna(medians)
+        X[numeric_features] = X[numeric_features].fillna(medians)
         y = prepared["Player1_Wins"].astype(int).values
         out[f"{prefix}_X"] = X
         out[f"{prefix}_y"] = y
@@ -194,6 +292,9 @@ def split_xy(split: DataSplit) -> Dict[str, pd.DataFrame | np.ndarray]:
 def make_experiment_dir(family: str, experiment_slug: str) -> Path:
     stamp = datetime.now().strftime("%Y-%m-%d")
     path = EXPERIMENTS_ROOT / stamp / family / experiment_slug
+    if path.exists() and any(path.iterdir()):
+        run_stamp = datetime.now().strftime("%H%M%S")
+        path = EXPERIMENTS_ROOT / stamp / family / f"{experiment_slug}__run_{run_stamp}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -204,4 +305,3 @@ def save_json(path: Path, payload: Dict) -> None:
 
 def flatten_metrics(prefix: str, metrics: Dict[str, float]) -> Dict[str, float]:
     return {f"{prefix}_{k}": v for k, v in metrics.items()}
-

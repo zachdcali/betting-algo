@@ -10,6 +10,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Side-model tuning workflow lives in [docs/modeling/EXPERIMENT_WORKFLOW.md](/Users/zachdodson/Documents/betting-algo/docs/modeling/EXPERIMENT_WORKFLOW.md).
 - The live orchestrator is [production/main.py](/Users/zachdodson/Documents/betting-algo/production/main.py).
 - The active live features path is TA-based, not the older UTR path.
+- CatBoost and LightGBM are supported only as side experiments for now; do not
+  promote or wire them into live inference without explicit versioning and
+  registry updates.
 
 ## Model Versioning Rules
 
@@ -33,6 +36,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   train `< 2022-01-01`, validation `2022`, test `>= 2023-01-01`.
 - Do not use the test era for early stopping, model selection, or threshold tuning.
 - If an old archived artifact cannot be evaluated because the feature schema changed, handle that comparison gracefully and do not crash the training script.
+- Optional CatBoost/LightGBM screening uses the same chronological splits via:
+  `tennis_env/bin/python src/models/professional_tennis/run_side_experiments.py --mode fixed --only-boosters --booster-feature-mode both`.
+  The `native_cat` feature mode is experimental and replaces one-hot
+  surface/level/round/hand/country/handedness groups for side-model evaluation
+  only.
 
 ## Logging And Lineage
 
@@ -54,6 +62,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `production/prediction_log.csv`, ranking refresh files, ad hoc screenshots, and other live/generated data.
 - Prefer code, docs, and explicit migrations in commits.
 - Side-model experiment outputs should stay local under `results/professional_tennis/experiments/` unless there is a deliberate reason to commit a tiny text summary.
+- Experiment output dirs are date/family/slug based and append
+  `__run_HHMMSS` when a same-day slug already contains files; avoid relying on a
+  generic same-day slug as a stable ledger.
 
 ## When To Update This File
 

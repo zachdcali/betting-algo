@@ -110,6 +110,7 @@ tmp/
 out/
 tennis_env/
 "Bovada HTML"/
+results/professional_tennis/experiments/
 
 # Production runtime files (generated, not source)
 production/prediction_log.csv
