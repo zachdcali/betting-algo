@@ -67,7 +67,7 @@
     }
   },
   "xgboost": {
-    "current_version": "v1.1.0",
+    "current_version": "v1.2.0",
     "models": {
       "v1.0.0": {
         "name": "XGB-143-SURFACE_FIX",
@@ -85,14 +85,25 @@
         "features": 141,
         "test_accuracy": 0.6644,
         "test_auc": 0.7292,
-        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). Same dataset, same architecture.",
-        "model_file": "xgboost_model_SURFACE_FIX.json",
+        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). This is the pre-fixed-split promoted tree artifact and is retained as the archived reference point before the 2026-04-23 honest train/validation/test retrain.",
+        "model_file": "xgboost_model_SURFACE_FIX_v1.1.0.json",
+        "archived": true
+      },
+      "v1.2.0": {
+        "name": "XGB-141-FIXED_SPLIT",
+        "date": "2026-04-23",
+        "features": 141,
+        "test_accuracy": 0.6649,
+        "test_auc": 0.7302,
+        "test_log_loss": 0.6064,
+        "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was balanced_depth6. Promoted because training protocol changed, even though headline metrics moved only slightly.",
+        "model_file": "xgboost_model_SURFACE_FIX_v1.2.0.json",
         "archived": false
       }
     }
   },
   "random_forest": {
-    "current_version": "v1.1.0",
+    "current_version": "v1.2.0",
     "models": {
       "v1.0.0": {
         "name": "RF-143-SURFACE_FIX",
@@ -110,8 +121,19 @@
         "features": 141,
         "test_accuracy": 0.6597,
         "test_auc": 0.7241,
-        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). Same dataset, same architecture.",
-        "model_file": "random_forest_model_SURFACE_FIX.pkl",
+        "notes": "Retrained on 141 features (removed duplicate Peak_Age_P1/P2, same feature set as NN v1.2.1). This is the pre-fixed-split promoted tree artifact and is retained as the archived reference point before the 2026-04-23 honest train/validation/test retrain.",
+        "model_file": "random_forest_model_SURFACE_FIX_v1.1.0.pkl",
+        "archived": true
+      },
+      "v1.2.0": {
+        "name": "RF-141-FIXED_SPLIT",
+        "date": "2026-04-23",
+        "features": 141,
+        "test_accuracy": 0.6603,
+        "test_auc": 0.7251,
+        "test_log_loss": 0.6105,
+        "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was rf_depth15_currentish. Promoted because training protocol changed, even though headline metrics moved only slightly.",
+        "model_file": "random_forest_model_SURFACE_FIX_v1.2.0.pkl",
         "archived": false
       }
     }

@@ -52,6 +52,8 @@ The model registry lives in `models/model_registry.json`.
 
 `models/inference.py` now loads the active NN/XGB/RF artifacts from that registry instead of hardcoding only the filenames.
 
+Promoted model-family release notes live in [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md).
+
 ## Useful Commands
 
 ```bash
