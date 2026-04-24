@@ -504,23 +504,26 @@ print(f"  ECE      : {ece_new:.4f}  (lower is better)")
 
 old_model_path = os.path.join(output_dir, 'random_forest_model.pkl')
 if os.path.exists(old_model_path):
-    with open(old_model_path, 'rb') as f:
-        rf_old = pickle.load(f)
-    y_pred_old = rf_old.predict(X_test)
-    y_prob_old = rf_old.predict_proba(X_test)[:, 1]
-    acc_old = accuracy_score(y_test, y_pred_old)
-    auc_old = roc_auc_score(y_test, y_prob_old)
-    brier_old = brier_score_loss(y_test.values, y_prob_old)
-    ece_old = ece_score(y_test.values, y_prob_old)
-    print(f"\nOld RF model:")
-    print(f"  Accuracy : {acc_old:.4f}")
-    print(f"  AUC-ROC  : {auc_old:.4f}")
-    print(f"  Brier    : {brier_old:.4f}  (lower is better)")
-    print(f"  ECE      : {ece_old:.4f}  (lower is better)")
-    print(f"\nDelta (SURFACE_FIX minus old):")
-    print(f"  Accuracy : {accuracy - acc_old:+.4f}")
-    print(f"  AUC-ROC  : {auc - auc_old:+.4f}")
-    print(f"  Brier    : {brier_new - brier_old:+.4f}")
-    print(f"  ECE      : {ece_new - ece_old:+.4f}")
+    try:
+        with open(old_model_path, 'rb') as f:
+            rf_old = pickle.load(f)
+        y_pred_old = rf_old.predict(X_test)
+        y_prob_old = rf_old.predict_proba(X_test)[:, 1]
+        acc_old = accuracy_score(y_test, y_pred_old)
+        auc_old = roc_auc_score(y_test, y_prob_old)
+        brier_old = brier_score_loss(y_test.values, y_prob_old)
+        ece_old = ece_score(y_test.values, y_prob_old)
+        print(f"\nOld RF model:")
+        print(f"  Accuracy : {acc_old:.4f}")
+        print(f"  AUC-ROC  : {auc_old:.4f}")
+        print(f"  Brier    : {brier_old:.4f}  (lower is better)")
+        print(f"  ECE      : {ece_old:.4f}  (lower is better)")
+        print(f"\nDelta (SURFACE_FIX minus old):")
+        print(f"  Accuracy : {accuracy - acc_old:+.4f}")
+        print(f"  AUC-ROC  : {auc - auc_old:+.4f}")
+        print(f"  Brier    : {brier_new - brier_old:+.4f}")
+        print(f"  ECE      : {ece_new - ece_old:+.4f}")
+    except Exception as e:
+        print(f"  (old random_forest_model.pkl comparison skipped: {e})")
 else:
     print("  (old random_forest_model.pkl not found for comparison)")
