@@ -13,6 +13,8 @@ To keep that distinction clear, model-family folders should use this layout:
   Promoted versioned artifacts referenced by `production/models/model_registry.json`
 - `candidates/`
   Trained but not yet promoted artifacts
+- `experiments/`
+  Local side-model tuning runs and walk-forward outputs
 - `backups/`
   One-off safety backups made during migrations or retrains
 - top-level files

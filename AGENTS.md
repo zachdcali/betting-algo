@@ -7,6 +7,7 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Live operations docs start at [docs/production/README.md](/Users/zachdodson/Documents/betting-algo/docs/production/README.md).
 - Versioning rules live in [docs/production/VERSIONING.md](/Users/zachdodson/Documents/betting-algo/docs/production/VERSIONING.md).
 - Human-readable promoted model notes live in [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md).
+- Side-model tuning workflow lives in [docs/modeling/EXPERIMENT_WORKFLOW.md](/Users/zachdodson/Documents/betting-algo/docs/modeling/EXPERIMENT_WORKFLOW.md).
 - The live orchestrator is [production/main.py](/Users/zachdodson/Documents/betting-algo/production/main.py).
 - The active live features path is TA-based, not the older UTR path.
 
@@ -52,6 +53,17 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Avoid committing mutable local churn unless it is the point of the change:
   `production/prediction_log.csv`, ranking refresh files, ad hoc screenshots, and other live/generated data.
 - Prefer code, docs, and explicit migrations in commits.
+- Side-model experiment outputs should stay local under `results/professional_tennis/experiments/` unless there is a deliberate reason to commit a tiny text summary.
+
+## When To Update This File
+
+Update `AGENTS.md` when a future session changes:
+
+- model-version promotion rules
+- experiment folder conventions
+- experiment harness commands
+- the standard chronological split or walk-forward policy
+- logging/lineage expectations that future sessions need to know up front
 
 ## Safety Notes
 

@@ -12,6 +12,8 @@ This is the current intended layout for the project.
   Interactive operations dashboard code built on top of the production CSV logs and audit layer.
 - `src/models/professional_tennis/`
   Historical preprocessing, dataset preparation, and model training scripts.
+- `docs/modeling/`
+  Experiment workflow, tuning conventions, and other modeling-process documentation.
 - `production/tests/`
   Lightweight smoke tests for live-system behavior.
 
@@ -21,6 +23,7 @@ This is the current intended layout for the project.
   Offline research, charting, bankroll studies, and backtests.
 - `results/`
   Exported evaluation artifacts and model analysis outputs.
+  Promoted release artifacts, candidates, and local experiments should follow the layout described in `results/professional_tennis/README.md`.
 - `analysis_output/`, `out/`
   Derived experiment outputs.
 

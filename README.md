@@ -70,6 +70,12 @@ results/professional_tennis/      # Evaluation outputs (model weights kept local
 data/                             # Historical match data (not committed)
 ```
 
+Current docs to start from:
+
+- `docs/production/README.md` for live pipeline and logging lineage
+- `docs/production/VERSIONING.md` for model-family and logging-schema rules
+- `docs/modeling/EXPERIMENT_WORKFLOW.md` for side-model tuning and walk-forward experiments
+
 ## Live Pipeline
 
 The `production/` pipeline runs daily:
