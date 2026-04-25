@@ -201,6 +201,22 @@ def prepare_native_categorical_frame(df: pd.DataFrame) -> pd.DataFrame:
     return out[NATIVE_CAT_ALL_FEATURES]
 
 
+def build_recency_weights(dates: pd.Series, half_life_years: float) -> np.ndarray:
+    """Return mean-normalized exponential recency weights for training rows."""
+    parsed = pd.to_datetime(dates, errors="coerce")
+    reference_date = parsed.max()
+    if pd.isna(reference_date):
+        return np.ones(len(parsed), dtype=float)
+
+    age_days = (reference_date - parsed).dt.days.clip(lower=0).fillna(0).astype(float)
+    half_life_days = max(float(half_life_years) * 365.25, 1.0)
+    weights = np.power(0.5, age_days / half_life_days).to_numpy(dtype=float)
+    mean_weight = float(np.nanmean(weights))
+    if mean_weight > 0:
+        weights = weights / mean_weight
+    return weights
+
+
 def build_fixed_split(df: pd.DataFrame) -> DataSplit:
     return DataSplit(
         train_df=df[df["tourney_date"] < "2022-01-01"].copy(),
@@ -251,7 +267,11 @@ def build_blocked_windows(
     return splits
 
 
-def split_xy(split: DataSplit, feature_mode: str = "one_hot") -> Dict[str, pd.DataFrame | np.ndarray]:
+def split_xy(
+    split: DataSplit,
+    feature_mode: str = "one_hot",
+    recency_half_life_years: float | None = None,
+) -> Dict[str, pd.DataFrame | np.ndarray]:
     if feature_mode not in {"one_hot", "native_cat"}:
         raise ValueError(f"Unsupported feature_mode: {feature_mode}")
 
@@ -285,7 +305,15 @@ def split_xy(split: DataSplit, feature_mode: str = "one_hot") -> Dict[str, pd.Da
         y = prepared["Player1_Wins"].astype(int).values
         out[f"{prefix}_X"] = X
         out[f"{prefix}_y"] = y
+        out[f"{prefix}_dates"] = prepared["tourney_date"].values
         out[f"{prefix}_n"] = len(prepared)
+        if prefix == "train" and recency_half_life_years is not None:
+            weights = build_recency_weights(prepared["tourney_date"], recency_half_life_years)
+            out["train_weight"] = weights
+            out["recency_half_life_years"] = recency_half_life_years
+            out["train_weight_min"] = float(np.min(weights)) if len(weights) else None
+            out["train_weight_max"] = float(np.max(weights)) if len(weights) else None
+            out["train_weight_mean"] = float(np.mean(weights)) if len(weights) else None
     return out
 
 

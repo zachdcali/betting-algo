@@ -585,12 +585,50 @@ def build_live_latest_snapshots(prediction_snapshots: pd.DataFrame) -> pd.DataFr
         .sort_values(["match_date", "logged_at", "match_label"], ascending=[True, False, True])
         .reset_index(drop=True)
     )
-    latest["probability_range"] = latest[["model_p1_prob", "xgb_p1_prob", "rf_p1_prob", "market_p1_prob"]].max(axis=1) - latest[
-        ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob", "market_p1_prob"]
-    ].min(axis=1)
-    latest["nn_vs_market_edge"] = latest["model_p1_prob"] - latest["market_p1_prob"]
-    latest["xgb_vs_market_edge"] = latest["xgb_p1_prob"] - latest["market_p1_prob"]
-    latest["rf_vs_market_edge"] = latest["rf_p1_prob"] - latest["market_p1_prob"]
+    p1_model_cols = [col for col in ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob"] if col in latest.columns]
+    p2_model_cols = [col for col in ["model_p2_prob", "xgb_p2_prob", "rf_p2_prob"] if col in latest.columns]
+    p1_range_cols = [col for col in p1_model_cols + ["market_p1_prob"] if col in latest.columns]
+    latest["probability_range"] = latest[p1_range_cols].max(axis=1) - latest[p1_range_cols].min(axis=1)
+    latest["consensus_p1_prob"] = latest[p1_model_cols].mean(axis=1) if p1_model_cols else np.nan
+    latest["consensus_p2_prob"] = latest[p2_model_cols].mean(axis=1) if p2_model_cols else 1 - latest["consensus_p1_prob"]
+
+    edge_specs = [
+        ("nn", "model"),
+        ("xgb", "xgb"),
+        ("rf", "rf"),
+        ("consensus", "consensus"),
+    ]
+    edge_cols = []
+    for label, prefix in edge_specs:
+        p1_col = f"{prefix}_p1_prob" if prefix != "model" else "model_p1_prob"
+        p2_col = f"{prefix}_p2_prob" if prefix != "model" else "model_p2_prob"
+        p1_edge_col = f"{label}_p1_market_edge"
+        p2_edge_col = f"{label}_p2_market_edge"
+        p1_lift_col = f"{label}_p1_market_lift"
+        p2_lift_col = f"{label}_p2_market_lift"
+        if p1_col in latest.columns and "market_p1_prob" in latest.columns:
+            latest[p1_edge_col] = latest[p1_col] - latest["market_p1_prob"]
+            latest[p1_lift_col] = latest[p1_edge_col] / latest["market_p1_prob"].replace(0, np.nan)
+            edge_cols.append(p1_edge_col)
+        if p2_col in latest.columns and "market_p2_prob" in latest.columns:
+            latest[p2_edge_col] = latest[p2_col] - latest["market_p2_prob"]
+            latest[p2_lift_col] = latest[p2_edge_col] / latest["market_p2_prob"].replace(0, np.nan)
+            edge_cols.append(p2_edge_col)
+
+    latest["nn_vs_market_edge"] = latest.get("nn_p1_market_edge", pd.Series(np.nan, index=latest.index))
+    latest["xgb_vs_market_edge"] = latest.get("xgb_p1_market_edge", pd.Series(np.nan, index=latest.index))
+    latest["rf_vs_market_edge"] = latest.get("rf_p1_market_edge", pd.Series(np.nan, index=latest.index))
+    latest["largest_player_market_edge"] = latest[edge_cols].abs().max(axis=1) if edge_cols else np.nan
+    if {"consensus_p1_market_edge", "consensus_p2_market_edge"}.issubset(latest.columns):
+        latest["consensus_edge_player"] = np.where(
+            latest["consensus_p1_market_edge"] >= latest["consensus_p2_market_edge"],
+            latest["p1"],
+            latest["p2"],
+        )
+        latest["consensus_edge"] = latest[["consensus_p1_market_edge", "consensus_p2_market_edge"]].max(axis=1)
+    else:
+        latest["consensus_edge_player"] = ""
+        latest["consensus_edge"] = np.nan
     return latest
 
 

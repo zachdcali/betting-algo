@@ -177,6 +177,7 @@ def train_xgb_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dic
     model.fit(
         split_payload["train_X"],
         split_payload["train_y"],
+        sample_weight=split_payload.get("train_weight"),
         eval_set=[(split_payload["val_X"], split_payload["val_y"])],
         verbose=False,
     )
@@ -190,6 +191,10 @@ def train_xgb_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dic
         "family": "xgboost",
         "config": config,
         "split_label": split_payload["label"],
+        "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "recency_half_life_years": split_payload.get("recency_half_life_years"),
+        "train_weight_min": split_payload.get("train_weight_min"),
+        "train_weight_max": split_payload.get("train_weight_max"),
         "best_iteration": getattr(model, "best_iteration", None),
         **flatten_metrics("val", val_metrics),
         **flatten_metrics("test", test_metrics),
@@ -224,13 +229,13 @@ def _as_native_cat_slug(feature_mode: str, slug: str) -> str:
     return f"{slug}__{feature_mode}"
 
 
-def _catboost_pool(Pool, X: pd.DataFrame, y: np.ndarray, cat_features: List[str]):
+def _catboost_pool(Pool, X: pd.DataFrame, y: np.ndarray, cat_features: List[str], weight=None):
     if cat_features:
         X = X.copy()
         for col in cat_features:
             X[col] = X[col].fillna("Unknown").astype(str)
-        return Pool(X, y, cat_features=cat_features)
-    return Pool(X, y)
+        return Pool(X, y, cat_features=cat_features, weight=weight)
+    return Pool(X, y, weight=weight)
 
 
 def train_catboost_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dict:
@@ -248,7 +253,13 @@ def train_catboost_config(split_payload: Dict, config: Dict, output_dir: Path) -
         od_wait=config.get("early_stopping_rounds", 75),
         **config["params"],
     )
-    train_pool = _catboost_pool(Pool, split_payload["train_X"], split_payload["train_y"], cat_features)
+    train_pool = _catboost_pool(
+        Pool,
+        split_payload["train_X"],
+        split_payload["train_y"],
+        cat_features,
+        weight=split_payload.get("train_weight"),
+    )
     val_pool = _catboost_pool(Pool, split_payload["val_X"], split_payload["val_y"], cat_features)
     test_pool = _catboost_pool(Pool, split_payload["test_X"], split_payload["test_y"], cat_features)
 
@@ -264,6 +275,9 @@ def train_catboost_config(split_payload: Dict, config: Dict, output_dir: Path) -
         "config": config,
         "split_label": split_payload["label"],
         "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "recency_half_life_years": split_payload.get("recency_half_life_years"),
+        "train_weight_min": split_payload.get("train_weight_min"),
+        "train_weight_max": split_payload.get("train_weight_max"),
         "categorical_features": cat_features,
         "best_iteration": model.get_best_iteration(),
         **flatten_metrics("val", val_metrics),
@@ -315,6 +329,7 @@ def train_lightgbm_config(split_payload: Dict, config: Dict, output_dir: Path) -
     model.fit(
         train_X,
         split_payload["train_y"],
+        sample_weight=split_payload.get("train_weight"),
         eval_set=[(val_X, split_payload["val_y"])],
         eval_metric="binary_logloss",
         categorical_feature=cat_features or "auto",
@@ -331,6 +346,9 @@ def train_lightgbm_config(split_payload: Dict, config: Dict, output_dir: Path) -
         "config": config,
         "split_label": split_payload["label"],
         "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "recency_half_life_years": split_payload.get("recency_half_life_years"),
+        "train_weight_min": split_payload.get("train_weight_min"),
+        "train_weight_max": split_payload.get("train_weight_max"),
         "categorical_features": cat_features,
         "best_iteration": getattr(model, "best_iteration_", None),
         **flatten_metrics("val", val_metrics),
@@ -483,6 +501,69 @@ def train_booster_config(family: str, split_payload: Dict, config: Dict, output_
     raise ValueError(f"Unknown booster family: {family}")
 
 
+def parse_half_lives(value: str) -> List[float]:
+    half_lives = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        half_lives.append(float(item))
+    if not half_lives:
+        raise ValueError("At least one recency half-life is required.")
+    return half_lives
+
+
+def recency_xgb_config(half_life: float, blocked: bool = False) -> Dict:
+    return {
+        "slug": f"xgb_depth5_recency_hl_{half_life:g}y",
+        "params": {
+            "n_estimators": 800 if blocked else 1000,
+            "max_depth": 5,
+            "learning_rate": 0.03,
+            "subsample": 0.80,
+            "colsample_bytree": 0.80,
+            "min_child_weight": 3,
+            "reg_lambda": 3.0,
+            "reg_alpha": 0.5,
+            "gamma": 0.0,
+        },
+        "early_stopping_rounds": 50,
+        "recency_half_life_years": half_life,
+    }
+
+
+def run_recency_xgb_fixed_experiments(df: pd.DataFrame, half_lives: List[float]) -> pd.DataFrame:
+    fixed_split = build_fixed_split(df)
+    rows = []
+    for half_life in half_lives:
+        payload = split_xy(fixed_split, recency_half_life_years=half_life)
+        config = recency_xgb_config(half_life)
+        out = make_experiment_dir("xgboost", config["slug"])
+        rows.append(train_xgb_config(payload, config, out))
+    return pd.DataFrame(rows)
+
+
+def run_recency_xgb_blocked_eval(df: pd.DataFrame, half_lives: List[float]) -> pd.DataFrame:
+    splits = build_blocked_windows(
+        df,
+        train_years=6,
+        val_years=1,
+        test_years=1,
+        start_year=2010,
+        end_test_year=2024,
+        step_years=2,
+    )
+
+    rows = []
+    for split in splits:
+        for half_life in half_lives:
+            payload = split_xy(split, recency_half_life_years=half_life)
+            config = recency_xgb_config(half_life, blocked=True)
+            out = make_experiment_dir("xgboost", f"{config['slug']}__{split.label}")
+            rows.append(train_xgb_config(payload, config, out))
+    return pd.DataFrame(rows)
+
+
 def run_booster_fixed_experiments(
     df: pd.DataFrame,
     families: List[str],
@@ -603,16 +684,35 @@ def main() -> None:
         default="both",
         help="Feature representation for CatBoost/LightGBM experiments.",
     )
+    parser.add_argument(
+        "--include-recency-xgb",
+        action="store_true",
+        help="Run XGBoost side experiments with exponential recency weighting.",
+    )
+    parser.add_argument(
+        "--only-recency-xgb",
+        action="store_true",
+        help="Run only XGBoost recency-weighting experiments for the selected mode.",
+    )
+    parser.add_argument(
+        "--recency-half-lives",
+        default="3,5,8,12",
+        help="Comma-separated training half-lives in years for --include-recency-xgb.",
+    )
     args = parser.parse_args()
 
     df = load_ml_ready_df()
     summaries: List[pd.DataFrame] = []
+    booster_families: List[str] = []
+    recency_half_lives: List[float] = []
     if args.only_boosters:
         args.include_boosters = True
+    if args.only_recency_xgb:
+        args.include_recency_xgb = True
 
-    if not args.only_boosters and args.mode in {"fixed", "all"}:
+    if not args.only_boosters and not args.only_recency_xgb and args.mode in {"fixed", "all"}:
         summaries.append(run_fixed_experiments(df))
-    if not args.only_boosters and args.mode in {"blocked", "all"}:
+    if not args.only_boosters and not args.only_recency_xgb and args.mode in {"blocked", "all"}:
         summaries.append(run_blocked_eval(df))
     if args.include_boosters:
         booster_families = [family.strip() for family in args.booster_families.split(",") if family.strip()]
@@ -628,23 +728,35 @@ def main() -> None:
             summaries.append(run_booster_fixed_experiments(df, booster_families, feature_modes))
         if args.mode in {"blocked", "all"}:
             summaries.append(run_booster_blocked_eval(df, booster_families, feature_modes))
+    if args.include_recency_xgb:
+        recency_half_lives = parse_half_lives(args.recency_half_lives)
+        if args.mode in {"fixed", "all"}:
+            summaries.append(run_recency_xgb_fixed_experiments(df, recency_half_lives))
+        if args.mode in {"blocked", "all"}:
+            summaries.append(run_recency_xgb_blocked_eval(df, recency_half_lives))
 
     if summaries:
         combined = pd.concat(summaries, ignore_index=True)
         batch_parts = [args.mode]
-        if args.only_boosters:
+        if args.only_recency_xgb:
+            batch_parts.append("recency_xgb_only")
+        elif args.only_boosters:
             batch_parts.append("boosters_only")
         elif args.include_boosters:
             batch_parts.append("with_boosters")
         if args.include_boosters:
             batch_parts.append(args.booster_feature_mode)
             batch_parts.append("-".join(sorted(booster_families)))
+        if args.include_recency_xgb:
+            batch_parts.append("recency_xgb")
+            batch_parts.append("-".join(f"{half_life:g}y" for half_life in recency_half_lives))
         out_dir = make_experiment_dir("summaries", f"batch_{'_'.join(batch_parts)}")
         combined.to_csv(out_dir / "summary.csv", index=False)
         print("\n=== Experiment Summary ===")
         display_cols = [
             col for col in [
-                "family", "feature_mode", "split_label", "config", "val_accuracy", "val_auc", "val_log_loss",
+                "family", "feature_mode", "recency_half_life_years", "split_label", "config",
+                "val_accuracy", "val_auc", "val_log_loss",
                 "test_accuracy", "test_auc", "test_log_loss", "test_brier", "test_ece"
             ] if col in combined.columns
         ]

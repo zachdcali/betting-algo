@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -71,6 +72,237 @@ def fmt(value):
     return value
 
 
+def pp(value: float | int | None) -> str:
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{value:+.1%}"
+
+
+def signed_number(value: float | int | None, digits: int = 2) -> str:
+    if value is None or pd.isna(value):
+        return "n/a"
+    return f"{value:+.{digits}f}"
+
+
+def render_dashboard_css():
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.4rem;
+            padding-bottom: 2.5rem;
+        }
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e7ebf0;
+            border-radius: 8px;
+            padding: 0.85rem 0.95rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+        div[data-testid="stMetricLabel"] p {
+            color: #475569;
+            font-size: 0.82rem;
+        }
+        .insight-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            border: 1px solid #dfe7ef;
+            border-radius: 8px;
+            padding: 0.95rem 1rem;
+            min-height: 132px;
+        }
+        .insight-card h4 {
+            margin: 0 0 0.45rem 0;
+            color: #0f172a;
+            font-size: 0.95rem;
+        }
+        .insight-card .big {
+            color: #111827;
+            font-size: 1.35rem;
+            font-weight: 650;
+            line-height: 1.2;
+        }
+        .insight-card .muted {
+            color: #64748b;
+            font-size: 0.82rem;
+            line-height: 1.35;
+            margin-top: 0.35rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+FEATURE_OVERRIDES = {
+    "Rank_Diff": ("Rank difference", "Player 1 rank minus Player 2 rank; lower ATP ranks are better."),
+    "Rank_Points_Diff": ("Rank points difference", "Player 1 ranking points minus Player 2 ranking points."),
+    "Rank_Ratio": ("Rank ratio", "Relative rank comparison between the two players."),
+    "Avg_Rank": ("Average rank", "Average ATP rank of the two players."),
+    "Avg_Rank_Points": ("Average rank points", "Average ranking points of the two players."),
+    "Age_Diff": ("Age difference", "Player 1 age minus Player 2 age."),
+    "Height_Diff": ("Height difference", "Player 1 height minus Player 2 height."),
+    "Avg_Age": ("Average age", "Average age of the two players."),
+    "Avg_Height": ("Average height", "Average height of the two players."),
+    "draw_size": ("Draw size", "Tournament draw size used for round and tournament context."),
+    "H2H_Total_Matches": ("Head-to-head matches", "Prior meetings between these two players."),
+    "H2H_P1_Wins": ("P1 head-to-head wins", "Prior head-to-head wins by Player 1."),
+    "H2H_P2_Wins": ("P2 head-to-head wins", "Prior head-to-head wins by Player 2."),
+    "H2H_P1_WinRate": ("P1 head-to-head win rate", "Player 1 win rate in prior meetings."),
+    "H2H_Recent_P1_Advantage": ("Recent H2H advantage", "Player 1 advantage over 50% in the most recent head-to-head meetings."),
+    "Clay_Season": ("Clay season", "Flag for clay-season timing."),
+    "Grass_Season": ("Grass season", "Flag for grass-season timing."),
+    "Indoor_Season": ("Indoor season", "Flag for the fall/winter indoor-season window."),
+    "Surface_Transition_Flag": ("Surface transition", "Whether the current surface differs from the player's recent surface context."),
+}
+
+
+def feature_side(feature: str) -> str:
+    if feature.startswith("P1_") or feature.startswith("Player1_"):
+        return "Player 1"
+    if feature.startswith("P2_") or feature.startswith("Player2_"):
+        return "Player 2"
+    if feature.startswith("H2H_"):
+        return "Head-to-head"
+    if feature.startswith(("Surface_", "Level_", "Round_", "Handedness_Matchup_")):
+        return "Context / flag"
+    return "Match context"
+
+
+def feature_group(feature: str) -> str:
+    text = feature.lower()
+    if "rank" in text:
+        return "Ranking"
+    if "surface" in text:
+        return "Surface"
+    if "winrate" in text or "form" in text or "winstreak" in text:
+        return "Form"
+    if "matches" in text or "sets" in text or "days_since" in text or "rust" in text:
+        return "Activity / fatigue"
+    if "h2h" in text:
+        return "Head-to-head"
+    if "age" in text or "height" in text:
+        return "Physical"
+    if "country" in text or "hand" in text:
+        return "Player profile"
+    if "round" in text or "level" in text or "draw" in text:
+        return "Tournament context"
+    if "season" in text:
+        return "Seasonality"
+    return "Other"
+
+
+def explain_feature(feature: str) -> tuple[str, str]:
+    if feature in FEATURE_OVERRIDES:
+        return FEATURE_OVERRIDES[feature]
+
+    label = feature
+    for prefix, replacement in [
+        ("P1_", "P1 "),
+        ("P2_", "P2 "),
+        ("Player1_", "P1 "),
+        ("Player2_", "P2 "),
+        ("H2H_", "H2H "),
+        ("Surface_", "Surface: "),
+        ("Level_", "Level: "),
+        ("Round_", "Round: "),
+        ("Handedness_Matchup_", "Handedness matchup: "),
+    ]:
+        if label.startswith(prefix):
+            label = replacement + label[len(prefix):]
+            break
+    label = label.replace("_", " ")
+
+    text = feature.lower()
+    if "form_trend_30d" in text:
+        desc = "Exponentially weighted win form over the last 30 days; recent matches count more."
+    elif "winrate_last10_120d" in text:
+        desc = "Win rate over the most recent 10 matches inside the last 120 days."
+    elif "winstreak_current" in text:
+        desc = "Current winning streak before this match."
+    elif "surface_winrate_90d" in text:
+        desc = "Win rate on this surface over the previous 90 days."
+    elif "surface_matches_30d" in text:
+        desc = "Matches on this surface in the previous 30 days."
+    elif "surface_matches_90d" in text:
+        desc = "Matches on this surface in the previous 90 days."
+    elif "surface_experience" in text:
+        desc = "Career match count on this surface before this match."
+    elif "level_winrate_career" in text:
+        desc = "Career win rate at this tournament level before this match."
+    elif "level_matches_career" in text:
+        desc = "Career match count at this tournament level before this match."
+    elif "round_winrate_career" in text:
+        desc = "Career win rate in this round before this match."
+    elif "finals_winrate" in text:
+        desc = "Career finals win rate before this match."
+    elif "semifinals_winrate" in text:
+        desc = "Career semifinals win rate before this match."
+    elif "bigmatch_winrate" in text:
+        desc = "Career win rate in Grand Slam and Masters-level matches."
+    elif "rank_change_30d" in text:
+        desc = "Ranking movement over roughly the previous 30 days."
+    elif "rank_change_90d" in text:
+        desc = "Ranking movement over roughly the previous 90 days."
+    elif "rank_volatility_90d" in text:
+        desc = "Standard deviation of recent ranks over a 90-day window."
+    elif "rank_momentum" in text:
+        desc = "Difference in recent ranking momentum between the players."
+    elif "days_since_last" in text:
+        desc = "Days since the player's last prior tournament week."
+    elif "rust_flag" in text:
+        desc = "Flag for more than 21 days since the player's last prior tournament week."
+    elif "matches_14d" in text:
+        desc = "Matches played in the previous 14 days."
+    elif "matches_30d" in text:
+        desc = "Matches played in the previous 30 days."
+    elif "sets_14d" in text:
+        desc = "Estimated sets played in the previous 14 days."
+    elif "vs_lefty_winrate" in text:
+        desc = "Career or historical win rate against left-handed opponents."
+    elif "peak_age" in text:
+        desc = "Flag for whether the player is in the modeled peak-age range."
+    elif feature.startswith(("Surface_", "Level_", "Round_", "P1_Country_", "P2_Country_", "P1_Hand_", "P2_Hand_", "Handedness_Matchup_")):
+        desc = "One-hot context/profile flag; active when the value is 1."
+    else:
+        desc = "Model input feature from the production feature snapshot."
+    return label, desc
+
+
+def format_feature_value(value) -> str:
+    if value is None or pd.isna(value):
+        return "n/a"
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return str(value)
+    if numeric in (0, 1):
+        return str(int(numeric))
+    if abs(numeric) < 1:
+        return f"{numeric:.3f}"
+    if abs(numeric) < 100:
+        return f"{numeric:.2f}"
+    return f"{numeric:,.0f}"
+
+
+def build_feature_display_df(feature_df: pd.DataFrame) -> pd.DataFrame:
+    if feature_df.empty:
+        return feature_df
+    rows = []
+    for row in feature_df.itertuples(index=False):
+        label, desc = explain_feature(str(row.feature))
+        rows.append(
+            {
+                "side": feature_side(str(row.feature)),
+                "group": feature_group(str(row.feature)),
+                "label": label,
+                "feature": row.feature,
+                "value": row.value,
+                "formatted": format_feature_value(row.value),
+                "description": desc,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def apply_history_filters(df: pd.DataFrame, *, trust_mode: str, surfaces, levels, rounds, statuses, versions, start_date, end_date) -> pd.DataFrame:
     if df.empty:
         return df
@@ -133,6 +365,71 @@ def render_summary_metrics(prediction_log: pd.DataFrame, live_latest: pd.DataFra
 
     freshness = latest_data_ts.strftime("%Y-%m-%d %H:%M:%S") if latest_data_ts is not None else "n/a"
     st.caption(f"Latest dashboard source update: {freshness}")
+
+
+def render_insight_strip(prediction_log: pd.DataFrame, live_latest: pd.DataFrame, run_history: pd.DataFrame):
+    cards = st.columns(4)
+
+    if not live_latest.empty and "largest_player_market_edge" in live_latest.columns:
+        top_edge = live_latest.sort_values("largest_player_market_edge", ascending=False).head(1)
+    else:
+        top_edge = pd.DataFrame()
+    if top_edge.empty:
+        edge_title = "No live edge"
+        edge_big = "n/a"
+        edge_note = "No current snapshots match the active filters."
+    else:
+        row = top_edge.iloc[0]
+        edge_title = "Largest live model-market gap"
+        edge_big = pp(row.get("largest_player_market_edge"))
+        edge_note = f"{row.get('match_label', 'n/a')} | consensus lean: {row.get('consensus_edge_player', 'n/a')}"
+
+    settled = prediction_log[prediction_log["is_settled"]] if not prediction_log.empty and "is_settled" in prediction_log else pd.DataFrame()
+    recent = settled.sort_values("settled_at", ascending=False).head(50) if "settled_at" in settled.columns else settled.tail(50)
+    if not recent.empty and {"xgb_correct", "market_correct"}.issubset(recent.columns):
+        xgb_recent = recent["xgb_correct"].mean()
+        market_recent = recent["market_correct"].mean()
+        model_title = "Recent XGB vs market"
+        model_big = pp(xgb_recent - market_recent)
+        model_note = f"{pct(xgb_recent)} model accuracy vs {pct(market_recent)} market across {len(recent):,} settled rows"
+    else:
+        model_title = "Recent XGB vs market"
+        model_big = "n/a"
+        model_note = "Needs settled rows with XGB and market correctness."
+
+    if not prediction_log.empty and "latest_feature_snapshot_id" in prediction_log.columns:
+        snapshot_rate = prediction_log["latest_feature_snapshot_id"].fillna("").astype(str).str.len().gt(0).mean()
+        lineage_big = pct(snapshot_rate)
+        lineage_note = "Rows with exact feature snapshot ids available for drilldown."
+    else:
+        lineage_big = "n/a"
+        lineage_note = "Feature snapshot lineage is unavailable in the active view."
+
+    if not run_history.empty and "started_at" in run_history.columns:
+        latest_run = run_history.sort_values("started_at", ascending=False).head(1).iloc[0]
+        run_big = str(latest_run.get("status", "unknown"))
+        run_note = f"{latest_run.get('run_id', 'n/a')} | predictions: {fmt(latest_run.get('prediction_rows_success', 'n/a'))}"
+    else:
+        run_big = "n/a"
+        run_note = "No audit run history found."
+
+    payload = [
+        (edge_title, edge_big, edge_note),
+        (model_title, model_big, model_note),
+        ("Feature lineage coverage", lineage_big, lineage_note),
+        ("Latest nightly run", run_big, run_note),
+    ]
+    for col, (title, big, note) in zip(cards, payload):
+        col.markdown(
+            f"""
+            <div class="insight-card">
+              <h4>{escape(str(title))}</h4>
+              <div class="big">{escape(str(big))}</div>
+              <div class="muted">{escape(str(note))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_apples_to_apples_section(prediction_log: pd.DataFrame):
@@ -292,64 +589,141 @@ def render_overview_tab(prediction_log: pd.DataFrame, family_results: pd.DataFra
     render_apples_to_apples_section(prediction_log)
 
 
-def render_live_slate_tab(live_latest: pd.DataFrame):
+def render_live_slate_tab(live_latest: pd.DataFrame, prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
     st.subheader("Live Slate")
     if live_latest.empty:
         st.info("No current prediction snapshots match the active filters.")
         return
 
+    lens_options = {
+        "Consensus": "consensus",
+        "NN": "nn",
+        "XGB": "xgb",
+        "RF": "rf",
+    }
+    lens_label = st.selectbox("Model lens", options=list(lens_options.keys()), key="live_slate_model_lens")
+    lens = lens_options[lens_label]
+    prob_prefix = "model" if lens == "nn" else lens
+    p1_prob_col = f"{prob_prefix}_p1_prob"
+    p2_prob_col = f"{prob_prefix}_p2_prob"
+    p1_edge_col = f"{lens}_p1_market_edge"
+    p2_edge_col = f"{lens}_p2_market_edge"
+    p1_lift_col = f"{lens}_p1_market_lift"
+    p2_lift_col = f"{lens}_p2_market_lift"
+
     summary_cols = st.columns(4)
     summary_cols[0].metric("Live matches", f"{len(live_latest):,}")
     summary_cols[1].metric("Highest disagreement", pct(live_latest["probability_range"].max()))
-    summary_cols[2].metric("Avg NN vs market edge", pct(live_latest["nn_vs_market_edge"].mean()))
-    summary_cols[3].metric("Avg XGB vs market edge", pct(live_latest["xgb_vs_market_edge"].mean()))
+    summary_cols[2].metric(f"Avg {lens_label} P1 edge", pp(live_latest[p1_edge_col].mean() if p1_edge_col in live_latest else None))
+    summary_cols[3].metric(f"Avg {lens_label} P2 edge", pp(live_latest[p2_edge_col].mean() if p2_edge_col in live_latest else None))
 
     disagreement = live_latest.sort_values("probability_range", ascending=False).copy()
-    disagreement_chart = px.scatter(
-        disagreement,
-        x="market_p1_prob",
-        y="model_p1_prob",
-        color="surface",
-        size=disagreement["probability_range"].clip(lower=0.01),
-        hover_name="match_label",
-        hover_data={
-            "tournament": True,
-            "round": True,
-            "xgb_p1_prob": ":.3f",
-            "rf_p1_prob": ":.3f",
-            "probability_range": ":.3f",
-        },
-        title="NN vs Market on Current Slate",
-        labels={"market_p1_prob": "Market P1 Prob", "model_p1_prob": "NN P1 Prob"},
-    )
-    st.plotly_chart(disagreement_chart, use_container_width=True)
+    chart_cols = st.columns([1.1, 0.9])
+    if p1_prob_col in disagreement.columns:
+        disagreement_chart = px.scatter(
+            disagreement,
+            x="market_p1_prob",
+            y=p1_prob_col,
+            color="surface",
+            size=disagreement["probability_range"].clip(lower=0.01),
+            hover_name="match_label",
+            hover_data={
+                "tournament": True,
+                "round": True,
+                "xgb_p1_prob": ":.3f",
+                "rf_p1_prob": ":.3f",
+                "consensus_p1_prob": ":.3f" if "consensus_p1_prob" in disagreement.columns else False,
+                "probability_range": ":.3f",
+            },
+            title=f"{lens_label} vs Market on Current Slate",
+            labels={"market_p1_prob": "Market P1 Prob", p1_prob_col: f"{lens_label} P1 Prob"},
+        )
+        disagreement_chart.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                line={"dash": "dash", "color": "#94a3b8"},
+                name="No edge",
+            )
+        )
+        chart_cols[0].plotly_chart(disagreement_chart, use_container_width=True)
 
-    slate_table = disagreement[
-        [
-            "logged_at",
-            "match_date",
-            "match_start_time",
-            "tournament",
-            "round",
-            "surface",
-            "match_label",
-            "model_p1_prob",
-            "xgb_p1_prob",
-            "rf_p1_prob",
-            "market_p1_prob",
-            "probability_range",
-            "nn_vs_market_edge",
-            "xgb_vs_market_edge",
-            "rf_vs_market_edge",
-            "model_version",
-            "xgb_model_version",
-            "rf_model_version",
-            "run_id",
-        ]
-    ].copy()
-    for col in ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob", "market_p1_prob", "probability_range", "nn_vs_market_edge", "xgb_vs_market_edge", "rf_vs_market_edge"]:
-        slate_table[col] = slate_table[col].map(pct)
+    if p1_edge_col in disagreement.columns:
+        top_edges = disagreement.copy()
+        top_edges["abs_edge"] = top_edges[p1_edge_col].abs()
+        top_edges = top_edges.sort_values("abs_edge", ascending=False).head(12)
+        edge_chart = px.bar(
+            top_edges.sort_values(p1_edge_col),
+            x=p1_edge_col,
+            y="match_label",
+            color=p1_edge_col,
+            color_continuous_scale="RdBu",
+            title=f"Largest {lens_label} P1 edges",
+            hover_data={"tournament": True, "round": True, "market_p1_prob": ":.3f", p1_prob_col: ":.3f"},
+            labels={p1_edge_col: "Probability point edge", "match_label": ""},
+        )
+        edge_chart.update_layout(xaxis_tickformat="+.0%", coloraxis_showscale=False)
+        chart_cols[1].plotly_chart(edge_chart, use_container_width=True)
+
+    table_cols = [
+        "logged_at",
+        "match_date",
+        "match_start_time",
+        "tournament",
+        "round",
+        "surface",
+        "p1",
+        "p2",
+        p1_prob_col,
+        "market_p1_prob",
+        p1_edge_col,
+        p1_lift_col,
+        p2_prob_col,
+        "market_p2_prob",
+        p2_edge_col,
+        p2_lift_col,
+        "probability_range",
+        "consensus_edge_player",
+        "run_id",
+        "match_uid",
+    ]
+    table_cols = [col for col in table_cols if col in disagreement.columns]
+    slate_table = disagreement[table_cols].copy()
+    rename_map = {
+        p1_prob_col: f"{lens_label} P1",
+        p2_prob_col: f"{lens_label} P2",
+        "market_p1_prob": "Market P1",
+        "market_p2_prob": "Market P2",
+        p1_edge_col: "P1 edge",
+        p2_edge_col: "P2 edge",
+        p1_lift_col: "P1 lift",
+        p2_lift_col: "P2 lift",
+        "probability_range": "Model spread",
+        "consensus_edge_player": "Consensus lean",
+    }
+    for col in [p1_prob_col, p2_prob_col, "market_p1_prob", "market_p2_prob", "probability_range", p1_lift_col, p2_lift_col]:
+        if col in slate_table.columns:
+            slate_table[col] = slate_table[col].map(pct)
+    for col in [p1_edge_col, p2_edge_col]:
+        if col in slate_table.columns:
+            slate_table[col] = slate_table[col].map(pp)
+    slate_table = slate_table.rename(columns=rename_map)
     st.dataframe(slate_table, use_container_width=True, hide_index=True)
+
+    labels = {
+        row.match_uid: f"{row.match_date.date() if pd.notna(row.match_date) else 'n/a'} | {row.tournament} | {row.match_label}"
+        for row in disagreement.itertuples(index=False)
+        if getattr(row, "match_uid", None)
+    }
+    if labels:
+        selected_uid = st.selectbox(
+            "Inspect live matchup",
+            options=list(labels.keys()),
+            format_func=lambda uid: labels.get(uid, uid),
+            key="live_match_select",
+        )
+        render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
 
 
 def render_feature_snapshot_panel(feature_snapshot_id: str):
@@ -401,32 +775,58 @@ def render_feature_snapshot_panel(feature_snapshot_id: str):
     if feature_df.empty:
         st.caption("No feature values were found in the snapshot row.")
         return
+    display_features = build_feature_display_df(feature_df)
 
     st.caption(f"Snapshot id: `{feature_snapshot_id}`")
     if metadata:
-        meta_df = pd.DataFrame(metadata.items(), columns=["field", "value"])
-        st.dataframe(meta_df, use_container_width=True, hide_index=True)
+        with st.expander("Snapshot metadata", expanded=False):
+            meta_df = pd.DataFrame(metadata.items(), columns=["field", "value"])
+            st.dataframe(meta_df, use_container_width=True, hide_index=True)
 
-    active_flags = feature_df[feature_df["value"].isin([1, 1.0, True])].copy().sort_values("feature")
-    nonzero = feature_df[feature_df["value"] != 0].copy()
-    numeric_mask = pd.to_numeric(feature_df["value"], errors="coerce").notna()
-    continuous = feature_df[numeric_mask & ~feature_df["value"].isin([0, 0.0, 1, 1.0, True, False])].copy()
-    continuous["abs_value"] = pd.to_numeric(continuous["value"], errors="coerce").abs()
-    continuous = continuous.sort_values("abs_value", ascending=False).drop(columns=["abs_value"])
+    numeric_values = pd.to_numeric(display_features["value"], errors="coerce")
+    display_features["abs_value"] = numeric_values.abs()
+    active_flags = display_features[display_features["value"].isin([1, 1.0, True])].copy().sort_values(["group", "label"])
+    nonzero = display_features[display_features["value"] != 0].copy().sort_values("abs_value", ascending=False)
+    continuous = display_features[
+        numeric_values.notna() & ~display_features["value"].isin([0, 0.0, 1, 1.0, True, False])
+    ].copy().sort_values("abs_value", ascending=False)
+    display_columns = ["side", "group", "label", "formatted", "description", "feature"]
 
-    tabs = st.tabs(["Active Flags", "Non-zero Features", "Full Feature Vector"])
+    overview_cols = st.columns(4)
+    overview_cols[0].metric("Feature values", f"{len(display_features):,}")
+    overview_cols[1].metric("Active flags", f"{len(active_flags):,}")
+    overview_cols[2].metric("Non-zero", f"{len(nonzero):,}")
+    overview_cols[3].metric("Largest absolute value", format_feature_value(continuous["value"].iloc[0]) if not continuous.empty else "n/a")
+
+    tabs = st.tabs(["Key Numeric", "Player 1", "Player 2", "Active Flags", "Full Vector"])
     with tabs[0]:
+        if continuous.empty:
+            st.caption("No continuous numeric feature values were found.")
+        else:
+            st.dataframe(continuous[display_columns].head(30), use_container_width=True, hide_index=True)
+    with tabs[1]:
+        p1_features = display_features[display_features["side"] == "Player 1"].sort_values(["group", "label"])
+        if p1_features.empty:
+            st.caption("No Player 1 features were found.")
+        else:
+            st.dataframe(p1_features[display_columns], use_container_width=True, hide_index=True)
+    with tabs[2]:
+        p2_features = display_features[display_features["side"] == "Player 2"].sort_values(["group", "label"])
+        if p2_features.empty:
+            st.caption("No Player 2 features were found.")
+        else:
+            st.dataframe(p2_features[display_columns], use_container_width=True, hide_index=True)
+    with tabs[3]:
         if active_flags.empty:
             st.caption("No active one-hot flags for this snapshot.")
         else:
-            st.dataframe(active_flags, use_container_width=True, hide_index=True)
-    with tabs[1]:
-        if nonzero.empty:
-            st.caption("All feature values are zero or missing.")
-        else:
-            st.dataframe(nonzero, use_container_width=True, hide_index=True)
-    with tabs[2]:
-        st.dataframe(feature_df.sort_values("feature"), use_container_width=True, hide_index=True)
+            st.dataframe(active_flags[display_columns], use_container_width=True, hide_index=True)
+    with tabs[4]:
+        st.dataframe(
+            display_features.sort_values(["side", "group", "label"])[display_columns],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
@@ -440,6 +840,8 @@ def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, predict
 
     if not log_row.empty:
         row = log_row.iloc[0]
+        st.markdown(f"### {fmt(row.get('match_label'))}")
+        st.caption(f"{fmt(row.get('tournament'))} | {fmt(row.get('surface'))} | {fmt(row.get('level'))} | {fmt(row.get('round'))}")
         top_cols = st.columns(6)
         top_cols[0].metric("Status", str(row.get("record_status", "unknown")))
         top_cols[1].metric("Decision-grade", "yes" if bool(row.get("decision_grade", False)) else "no")
@@ -447,6 +849,28 @@ def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, predict
         top_cols[3].metric("Settled", "yes" if bool(row.get("is_settled", False)) else "no")
         top_cols[4].metric("XGB version", str(row.get("effective_xgb_model_version", "n/a")))
         top_cols[5].metric("RF version", str(row.get("effective_rf_model_version", "n/a")))
+
+        market_p1 = row.get("market_p1_prob")
+        market_p2 = row.get("market_p2_prob")
+        probability_rows = []
+        for family, p1_col, p2_col in [
+            ("NN", "model_p1_prob", "model_p2_prob"),
+            ("XGB", "xgb_p1_prob", "xgb_p2_prob"),
+            ("RF", "rf_p1_prob", "rf_p2_prob"),
+            ("Market", "market_p1_prob", "market_p2_prob"),
+        ]:
+            p1_prob = row.get(p1_col)
+            p2_prob = row.get(p2_col)
+            probability_rows.append(
+                {
+                    "source": family,
+                    "P1 probability": pct(p1_prob),
+                    "P1 edge": pp(p1_prob - market_p1) if family != "Market" and pd.notna(p1_prob) and pd.notna(market_p1) else "baseline",
+                    "P2 probability": pct(p2_prob),
+                    "P2 edge": pp(p2_prob - market_p2) if family != "Market" and pd.notna(p2_prob) and pd.notna(market_p2) else "baseline",
+                }
+            )
+        st.dataframe(pd.DataFrame(probability_rows), use_container_width=True, hide_index=True)
 
     probability_fig = go.Figure()
     if not snap.empty:
@@ -561,6 +985,15 @@ def render_prediction_log_tab(prediction_log: pd.DataFrame, prediction_snapshots
         filtered = filtered[~filtered["is_settled"]]
 
     filtered = filtered.sort_values(["effective_logged_at", "effective_match_date"], ascending=[False, False]).copy()
+    for label, p1_col, p2_col in [
+        ("nn", "model_p1_prob", "model_p2_prob"),
+        ("xgb", "xgb_p1_prob", "xgb_p2_prob"),
+        ("rf", "rf_p1_prob", "rf_p2_prob"),
+    ]:
+        if p1_col in filtered.columns and "market_p1_prob" in filtered.columns:
+            filtered[f"{label}_p1_edge"] = filtered[p1_col] - filtered["market_p1_prob"]
+        if p2_col in filtered.columns and "market_p2_prob" in filtered.columns:
+            filtered[f"{label}_p2_edge"] = filtered[p2_col] - filtered["market_p2_prob"]
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Rows", f"{len(filtered):,}")
@@ -581,6 +1014,9 @@ def render_prediction_log_tab(prediction_log: pd.DataFrame, prediction_snapshots
             "xgb_p1_prob",
             "rf_p1_prob",
             "market_p1_prob",
+            "nn_p1_edge",
+            "xgb_p1_edge",
+            "rf_p1_edge",
             "effective_model_version",
             "effective_xgb_model_version",
             "effective_rf_model_version",
@@ -591,7 +1027,18 @@ def render_prediction_log_tab(prediction_log: pd.DataFrame, prediction_snapshots
         ]
     ].head(max_rows).copy()
     for col in ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob", "market_p1_prob"]:
-        table[col] = table[col].map(pct)
+        if col in table.columns:
+            table[col] = table[col].map(pct)
+    for col in ["nn_p1_edge", "xgb_p1_edge", "rf_p1_edge"]:
+        if col in table.columns:
+            table[col] = table[col].map(pp)
+    table = table.rename(
+        columns={
+            "nn_p1_edge": "NN P1 edge",
+            "xgb_p1_edge": "XGB P1 edge",
+            "rf_p1_edge": "RF P1 edge",
+        }
+    )
     st.dataframe(table, use_container_width=True, hide_index=True)
 
     if filtered.empty:
@@ -753,6 +1200,7 @@ def render_ops_tab(run_history: pd.DataFrame, prediction_snapshots: pd.DataFrame
 
 
 def main():
+    render_dashboard_css()
     st.title("Tennis Betting Operations Dashboard")
     st.caption("Live predictions, model-vs-market performance, odds movement, version lineage, and operations audit in one place.")
 
@@ -848,6 +1296,7 @@ def main():
         )
 
         render_summary_metrics(filtered_log, live_latest, family_summary, latest_data_ts)
+        render_insight_strip(filtered_log, live_latest, fresh["run_history"])
 
         tab_overview, tab_log, tab_live, tab_match, tab_bets, tab_ops = st.tabs(
             ["Overview", "Prediction Log", "Live Slate", "Match Explorer", "Bets", "Ops & Audit"]
@@ -874,7 +1323,7 @@ def main():
             render_prediction_log_tab(filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])
 
         with tab_live:
-            render_live_slate_tab(live_latest)
+            render_live_slate_tab(live_latest, filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])
 
         with tab_match:
             render_match_explorer_tab(filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])

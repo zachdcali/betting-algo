@@ -64,6 +64,51 @@ slug already has files, and batch summary directories include the selected
 booster flags. This keeps reruns from silently overwriting earlier side-model
 artifacts.
 
+Run XGBoost recency-weighting experiments with:
+
+```bash
+tennis_env/bin/python src/models/professional_tennis/run_side_experiments.py \
+  --mode fixed \
+  --only-recency-xgb \
+  --recency-half-lives 3,5,8,12
+```
+
+The recency weights are exponential and mean-normalized. A half-life of `8`
+means a training match eight years older than the most recent training match
+gets half the raw weight before normalization. Validation and test rows remain
+unweighted.
+
+## 2026-04-24 Recency-Weighted XGBoost Screening
+
+Recency weighting was tested as a side experiment only. No production artifact
+was promoted.
+
+Fixed split result, using the standard train `< 2022-01-01`, validation `2022`,
+test `>= 2023-01-01` protocol:
+
+- Unweighted XGBoost side baseline `xgb_depth5_balanced_regularized`: test log
+  loss `0.605837`, accuracy `0.665021`, AUC `0.730710`
+- 3-year half-life: test log loss `0.606398`, accuracy `0.665111`, AUC
+  `0.730449`
+- 5-year half-life: test log loss `0.605662`, accuracy `0.667132`, AUC
+  `0.731388`
+- 8-year half-life: test log loss `0.605131`, accuracy `0.667221`, AUC
+  `0.731787`
+- 12-year half-life: test log loss `0.605325`, accuracy `0.666291`, AUC
+  `0.731531`
+
+Blocked walk-forward sanity check:
+
+- Existing unweighted XGBoost baseline mean test log loss across the four
+  blocked windows: `0.605330`
+- 8-year half-life mean test log loss: `0.605339`
+- 12-year half-life mean test log loss: `0.605251`
+
+Takeaway: recency weighting is more promising than switching libraries because
+it gives a small fixed-split lift and is roughly stable in blocked windows
+without changing the production feature schema. The effect is still small; treat
+`8` to `12` years as the next tuning neighborhood, not as a promotion decision.
+
 ## 2026-04-24 Booster Screening
 
 CatBoost and LightGBM were tested as side models only. No production artifact was

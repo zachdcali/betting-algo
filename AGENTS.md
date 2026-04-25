@@ -41,6 +41,10 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   The `native_cat` feature mode is experimental and replaces one-hot
   surface/level/round/hand/country/handedness groups for side-model evaluation
   only.
+- Optional XGBoost recency-weighting screening uses:
+  `tennis_env/bin/python src/models/professional_tennis/run_side_experiments.py --mode fixed --only-recency-xgb --recency-half-lives 3,5,8,12`.
+  Validation/test rows stay unweighted; only training rows receive exponential,
+  mean-normalized recency weights.
 
 ## Logging And Lineage
 

@@ -26,9 +26,11 @@ The first version includes:
 
 - Overview metrics and cumulative model-vs-market charts
 - apples-to-apples evaluation metrics for NN, XGB, RF, and market including AUC, ROC, Brier, log loss, and ECE
+- insight cards for largest live model-market disagreement, recent model-vs-market performance, feature lineage coverage, and latest pipeline run status
 - a prediction log browser with tournament/player filtering
-- per-match drilldown showing model versions, snapshot lineage, and the exact feature vector when `feature_snapshot_id` exists
-- Live slate view for the latest pending snapshots
+- per-match drilldown showing model versions, player-vs-market probabilities, snapshot lineage, and the exact feature vector when `feature_snapshot_id` exists
+- readable feature snapshot tables with player/context grouping and plain-English descriptions for the main engineered features
+- Live slate view for the latest pending snapshots, including P1/P2 model-vs-market edge and lift columns
 - Match explorer with snapshot and odds timelines
 - Bets and bankroll view
 - Ops and audit view, with graceful fallback when audit CSVs do not exist yet
