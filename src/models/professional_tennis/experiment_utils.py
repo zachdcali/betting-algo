@@ -23,6 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATASET_PATH = REPO_ROOT / "data" / "JeffSackmann" / "jeffsackmann_ml_ready_SURFACE_FIX.csv"
 EXPERIMENTS_ROOT = REPO_ROOT / "results" / "professional_tennis" / "experiments"
 
+from performance_features import PERFORMANCE_FEATURES, PERFORMANCE_FEATURE_SET
+
 
 EXACT_141_FEATURES: List[str] = [
     'P2_WinStreak_Current', 'P1_WinStreak_Current', 'P2_Surface_Matches_30d', 'Height_Diff',
@@ -98,6 +100,9 @@ NATIVE_CAT_NUMERIC_FEATURES: List[str] = [
 ]
 NATIVE_CAT_ALL_FEATURES: List[str] = NATIVE_CAT_NUMERIC_FEATURES + NATIVE_CAT_FEATURES
 
+BASE_FEATURE_SET = "base_141"
+FEATURE_SETS = {BASE_FEATURE_SET, PERFORMANCE_FEATURE_SET}
+
 
 @dataclass
 class DataSplit:
@@ -140,8 +145,28 @@ def compute_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
     }
 
 
-def load_ml_ready_df(min_year: int = 1990) -> pd.DataFrame:
-    df = pd.read_csv(DATASET_PATH, low_memory=False)
+def resolve_feature_names(feature_set: str = BASE_FEATURE_SET, feature_mode: str = "one_hot") -> List[str]:
+    if feature_set not in FEATURE_SETS:
+        raise ValueError(f"Unsupported feature_set: {feature_set}")
+    if feature_mode not in {"one_hot", "native_cat"}:
+        raise ValueError(f"Unsupported feature_mode: {feature_mode}")
+
+    extras = PERFORMANCE_FEATURES if feature_set == PERFORMANCE_FEATURE_SET else []
+    if feature_mode == "native_cat":
+        return NATIVE_CAT_ALL_FEATURES + extras
+    return EXACT_141_FEATURES + extras
+
+
+def resolve_numeric_features(feature_set: str = BASE_FEATURE_SET, feature_mode: str = "one_hot") -> List[str]:
+    extras = PERFORMANCE_FEATURES if feature_set == PERFORMANCE_FEATURE_SET else []
+    if feature_mode == "native_cat":
+        return NATIVE_CAT_NUMERIC_FEATURES + extras
+    return EXACT_141_FEATURES + extras
+
+
+def load_ml_ready_df(min_year: int = 1990, dataset_path: Path | str | None = None) -> pd.DataFrame:
+    path = Path(dataset_path) if dataset_path else DATASET_PATH
+    df = pd.read_csv(path, low_memory=False)
     df["tourney_date"] = pd.to_datetime(df["tourney_date"])
     df["year"] = df["tourney_date"].dt.year
     df = df[df["year"] >= min_year].copy()
@@ -149,11 +174,18 @@ def load_ml_ready_df(min_year: int = 1990) -> pd.DataFrame:
     return df
 
 
-def prepare_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_feature_frame(df: pd.DataFrame, feature_set: str = BASE_FEATURE_SET) -> pd.DataFrame:
     out = df.copy()
     for col in EXACT_141_FEATURES:
         if col not in out.columns:
             out[col] = 0.0
+    if feature_set == PERFORMANCE_FEATURE_SET:
+        missing = [col for col in PERFORMANCE_FEATURES if col not in out.columns]
+        if missing:
+            raise ValueError(
+                f"Dataset is missing {len(missing)} {PERFORMANCE_FEATURE_SET} features. "
+                f"Build it first with build_feature_set.py. First missing: {missing[:5]}"
+            )
     return out
 
 
@@ -271,33 +303,37 @@ def split_xy(
     split: DataSplit,
     feature_mode: str = "one_hot",
     recency_half_life_years: float | None = None,
+    feature_set: str = BASE_FEATURE_SET,
 ) -> Dict[str, pd.DataFrame | np.ndarray]:
-    if feature_mode not in {"one_hot", "native_cat"}:
-        raise ValueError(f"Unsupported feature_mode: {feature_mode}")
-
-    feature_names = EXACT_141_FEATURES if feature_mode == "one_hot" else NATIVE_CAT_ALL_FEATURES
-    numeric_features = EXACT_141_FEATURES if feature_mode == "one_hot" else NATIVE_CAT_NUMERIC_FEATURES
+    feature_names = resolve_feature_names(feature_set, feature_mode)
+    numeric_features = resolve_numeric_features(feature_set, feature_mode)
     categorical_features = [] if feature_mode == "one_hot" else NATIVE_CAT_FEATURES
 
     out: Dict[str, pd.DataFrame | np.ndarray] = {
         "label": split.label,
         "feature_mode": feature_mode,
+        "feature_set": feature_set,
         "feature_names": feature_names,
         "numeric_features": numeric_features,
         "categorical_features": categorical_features,
+        "n_features": len(feature_names),
     }
     for prefix, frame in (("train", split.train_df), ("val", split.val_df), ("test", split.test_df)):
-        prepared = prepare_feature_frame(frame)
+        prepared = prepare_feature_frame(frame, feature_set=feature_set)
         if feature_mode == "native_cat":
             X = prepare_native_categorical_frame(prepared)
+            if feature_set == PERFORMANCE_FEATURE_SET:
+                for col in PERFORMANCE_FEATURES:
+                    X[col] = prepared[col]
+                X = X[feature_names]
             X[numeric_features] = X[numeric_features].astype(float)
             for col in categorical_features:
                 X[col] = X[col].fillna("Unknown").astype(str)
         else:
-            X = prepared[EXACT_141_FEATURES].astype(float)
+            X = prepared[feature_names].astype(float)
         medians = None
         if prefix == "train":
-            medians = X[numeric_features].median()
+            medians = X[numeric_features].median().fillna(0.0)
             out["_train_medians"] = medians
         else:
             medians = out["_train_medians"]

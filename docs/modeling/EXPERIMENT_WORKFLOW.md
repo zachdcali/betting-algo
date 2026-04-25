@@ -29,6 +29,19 @@ Run side experiments with:
 tennis_env/bin/python src/models/professional_tennis/run_side_experiments.py --mode all
 ```
 
+Build the optional score/stat side feature set with:
+
+```bash
+PYTHONUNBUFFERED=1 tennis_env/bin/python \
+  src/models/professional_tennis/build_feature_set.py \
+  --feature-set performance_v1
+```
+
+This writes a local dataset under
+`results/professional_tennis/feature_sets/performance_v1/<date>/` and checks row
+alignment against the canonical 141-feature ML-ready CSV before saving. It does
+not replace `data/JeffSackmann/jeffsackmann_ml_ready_SURFACE_FIX.csv`.
+
 Modes:
 
 - `fixed`
@@ -61,6 +74,12 @@ Useful booster flags:
   compare the production 141-feature one-hot schema against a native categorical
   view that replaces surface/level/round/hand/country/handedness one-hot groups
   with categorical columns
+- `--feature-set base_141|performance_v1`
+  choose the canonical 141-feature set or the optional score/stat feature set
+- `--dataset-path <csv>`
+  train on a versioned side dataset instead of the canonical ML-ready CSV
+- `--only-xgb`
+  run only the standard XGBoost configs from the default NN/XGBoost block
 
 Same-day output directories append `__run_HHMMSS` when a matching experiment
 slug already has files, and batch summary directories include the selected
@@ -80,6 +99,66 @@ The recency weights are exponential and mean-normalized. A half-life of `8`
 means a training match eight years older than the most recent training match
 gets half the raw weight before normalization. Validation and test rows remain
 unweighted.
+
+XGBoost side runs save `feature_importance.csv` next to `model.json`.
+
+## 2026-04-25 Performance V1 Feature Screening
+
+`performance_v1` was tested as a side feature set only. No production artifact
+was promoted.
+
+The feature set appends 57 score/stat features to the active 141-feature
+schema, for 198 model features. It uses data already present in the local Jeff
+Sackmann aggregate: score, minutes, aces, double faults, serve points,
+first/second serve points won, service games, and break points. Tennis Abstract
+also exposes these columns in live player match arrays, and the scraper now
+preserves them for future parity work.
+
+Local side dataset:
+
+```text
+results/professional_tennis/feature_sets/performance_v1/2026-04-25/jeffsackmann_ml_ready_performance_v1.csv
+```
+
+Fixed split result, using train `< 2022-01-01`, validation `2022`, test
+`>= 2023-01-01`:
+
+- Base XGBoost side baseline from 2026-04-24:
+  test log loss `0.605837`, accuracy `0.665021`, AUC `0.730710`
+- `performance_v1` XGBoost depth5:
+  test log loss `0.601662`, accuracy `0.670548`, AUC `0.736136`
+- `performance_v1` XGBoost depth6:
+  test log loss `0.601464`, accuracy `0.670136`, AUC `0.736525`
+- `performance_v1` LightGBM native categorical:
+  test log loss `0.601656`, accuracy `0.670798`, AUC `0.736161`
+- `performance_v1` CatBoost one-hot:
+  test log loss `0.601993`, accuracy `0.670423`, AUC `0.735749`
+- `performance_v1` XGBoost depth5 with 8-year recency weighting:
+  test log loss `0.601044`, accuracy `0.671281`, AUC `0.737051`
+- `performance_v1` XGBoost depth5 with 12-year recency weighting:
+  test log loss `0.600838`, accuracy `0.671192`, AUC `0.737407`
+- Best `performance_v1` NN screen:
+  test log loss `0.603891`, accuracy `0.667382`, AUC `0.732995`
+
+Blocked sanity check for `performance_v1` XGBoost depth5 with 12-year recency
+weighting:
+
+- Mean test log loss across four blocked windows: `0.601320`
+- Prior 2026-04-24 base 141-feature recency XGBoost 12-year mean test log loss:
+  `0.605251`
+
+Feature-importance takeaway from the fixed 12-year recency run:
+`Game_WinRate_Last10_Diff` was the fourth-highest gain feature after rank and
+rank-points features. `Game_WinRate_90d_Diff`, `Stat_Matches_Last10_Diff`, and
+`Service_Points_Won_Last10_Diff` also ranked highly. This suggests score/stat
+features are carrying real tennis signal, not just adding noise.
+
+Remaining risks:
+
+- The feature set is not live-ready until production feature calculation uses
+  the preserved TA stat columns to compute the same fields pre-match.
+- Serve/stat coverage is uneven by source and era, especially for Futures.
+- NN performance improved but still trails tree models on this fixed split.
 
 ## 2026-04-24 Recency-Weighted XGBoost Screening
 

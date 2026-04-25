@@ -46,6 +46,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `tennis_env/bin/python src/models/professional_tennis/run_side_experiments.py --mode fixed --only-recency-xgb --recency-half-lives 3,5,8,12`.
   Validation/test rows stay unweighted; only training rows receive exponential,
   mean-normalized recency weights.
+- Optional score/stat side features use:
+  `tennis_env/bin/python src/models/professional_tennis/build_feature_set.py --feature-set performance_v1`.
+  Train them with `run_side_experiments.py --feature-set performance_v1 --dataset-path <side_csv>`.
+  This is not live-ready until the TA production feature calculator computes the
+  same fields from preserved TA match stats.
 
 ## Logging And Lineage
 
@@ -72,6 +77,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   generic same-day slug as a stable ledger.
 - Candidate feature-set preprocessing should write versioned side outputs and
   should not silently replace the active 141-feature ML-ready dataset.
+- Large local side datasets under `results/professional_tennis/feature_sets/`
+  should remain uncommitted unless an explicit small manifest/summary is being
+  promoted as documentation.
 
 ## When To Update This File
 

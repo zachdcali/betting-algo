@@ -45,6 +45,9 @@ points/age at much lower levels.
 The next high-value work is probably not a new model library by itself. The
 best current candidates are better player-state and match-performance features
 from data we already have or can mirror in production from Tennis Abstract.
+The first `performance_v1` score/stat screen on 2026-04-25 supported this:
+fixed-split XGBoost improved from the prior `0.605837` test log loss baseline
+to `0.601464` unweighted and `0.600838` with 12-year recency weighting.
 
 CatBoost and LightGBM remain worth screening, but their native categorical
 advantage is limited with the current categorical set. We collapsed the one-hot
@@ -65,6 +68,10 @@ categories can memorize historical strength and overstate performance.
 
 This is the cleanest next feature family because `score` is present in the
 historical Jeff Sackmann data and Tennis Abstract live histories.
+
+Status: initial `performance_v1` side implementation exists for historical
+screening. It is promising, but not live-ready until production feature
+calculation computes the same fields from TA match stats.
 
 Candidate features:
 

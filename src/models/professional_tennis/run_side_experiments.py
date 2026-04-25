@@ -16,6 +16,8 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
 from experiment_utils import (
+    BASE_FEATURE_SET,
+    FEATURE_SETS,
     build_blocked_windows,
     build_fixed_split,
     compute_metrics,
@@ -29,6 +31,12 @@ from experiment_utils import (
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BOOSTER_FAMILIES = {"catboost", "lightgbm"}
+
+
+def experiment_slug(config_slug: str, feature_set: str) -> str:
+    if feature_set == BASE_FEATURE_SET:
+        return config_slug
+    return f"{feature_set}__{config_slug}"
 
 
 class TennisLogitsNet(nn.Module):
@@ -155,6 +163,9 @@ def train_nn_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dict
         "family": "nn",
         "config": config,
         "split_label": split_payload["label"],
+        "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "feature_set": split_payload.get("feature_set", BASE_FEATURE_SET),
+        "n_features": split_payload.get("n_features"),
         "device": str(DEVICE),
         "best_val_loss": best_val_loss,
         "epochs_run": len(history),
@@ -187,11 +198,14 @@ def train_xgb_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dic
     test_metrics = compute_metrics(split_payload["test_y"], test_prob)
 
     model.save_model(output_dir / "model.json")
+    save_xgb_feature_importance(model, output_dir)
     summary = {
         "family": "xgboost",
         "config": config,
         "split_label": split_payload["label"],
         "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "feature_set": split_payload.get("feature_set", BASE_FEATURE_SET),
+        "n_features": split_payload.get("n_features"),
         "recency_half_life_years": split_payload.get("recency_half_life_years"),
         "train_weight_min": split_payload.get("train_weight_min"),
         "train_weight_max": split_payload.get("train_weight_max"),
@@ -201,6 +215,21 @@ def train_xgb_config(split_payload: Dict, config: Dict, output_dir: Path) -> Dic
     }
     save_json(output_dir / "summary.json", summary)
     return summary
+
+
+def save_xgb_feature_importance(model: xgb.XGBClassifier, output_dir: Path) -> None:
+    booster = model.get_booster()
+    feature_names_attr = getattr(model, "feature_names_in_", None)
+    names = list(feature_names_attr) if feature_names_attr is not None else list(booster.feature_names or [])
+    if not names:
+        return
+
+    rows = pd.DataFrame({"feature": names})
+    for importance_type in ["gain", "weight", "cover"]:
+        scores = booster.get_score(importance_type=importance_type)
+        rows[importance_type] = rows["feature"].map(scores).fillna(0.0)
+    rows = rows.sort_values(["gain", "weight"], ascending=False)
+    rows.to_csv(output_dir / "feature_importance.csv", index=False)
 
 
 def _require_catboost():
@@ -275,6 +304,8 @@ def train_catboost_config(split_payload: Dict, config: Dict, output_dir: Path) -
         "config": config,
         "split_label": split_payload["label"],
         "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "feature_set": split_payload.get("feature_set", BASE_FEATURE_SET),
+        "n_features": split_payload.get("n_features"),
         "recency_half_life_years": split_payload.get("recency_half_life_years"),
         "train_weight_min": split_payload.get("train_weight_min"),
         "train_weight_max": split_payload.get("train_weight_max"),
@@ -346,6 +377,8 @@ def train_lightgbm_config(split_payload: Dict, config: Dict, output_dir: Path) -
         "config": config,
         "split_label": split_payload["label"],
         "feature_mode": split_payload.get("feature_mode", "one_hot"),
+        "feature_set": split_payload.get("feature_set", BASE_FEATURE_SET),
+        "n_features": split_payload.get("n_features"),
         "recency_half_life_years": split_payload.get("recency_half_life_years"),
         "train_weight_min": split_payload.get("train_weight_min"),
         "train_weight_max": split_payload.get("train_weight_max"),
@@ -358,8 +391,13 @@ def train_lightgbm_config(split_payload: Dict, config: Dict, output_dir: Path) -
     return summary
 
 
-def run_fixed_experiments(df: pd.DataFrame) -> pd.DataFrame:
-    split = split_xy(build_fixed_split(df))
+def run_fixed_experiments(
+    df: pd.DataFrame,
+    feature_set: str = BASE_FEATURE_SET,
+    include_nn: bool = True,
+    include_xgb: bool = True,
+) -> pd.DataFrame:
+    split = split_xy(build_fixed_split(df), feature_set=feature_set)
 
     nn_configs = [
         {
@@ -443,12 +481,14 @@ def run_fixed_experiments(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     rows = []
-    for config in nn_configs:
-        out = make_experiment_dir("nn", config["slug"])
-        rows.append(train_nn_config(split, config, out))
-    for config in xgb_configs:
-        out = make_experiment_dir("xgboost", config["slug"])
-        rows.append(train_xgb_config(split, config, out))
+    if include_nn:
+        for config in nn_configs:
+            out = make_experiment_dir("nn", experiment_slug(config["slug"], feature_set))
+            rows.append(train_nn_config(split, config, out))
+    if include_xgb:
+        for config in xgb_configs:
+            out = make_experiment_dir("xgboost", experiment_slug(config["slug"], feature_set))
+            rows.append(train_xgb_config(split, config, out))
 
     return pd.DataFrame(rows)
 
@@ -532,18 +572,30 @@ def recency_xgb_config(half_life: float, blocked: bool = False) -> Dict:
     }
 
 
-def run_recency_xgb_fixed_experiments(df: pd.DataFrame, half_lives: List[float]) -> pd.DataFrame:
+def run_recency_xgb_fixed_experiments(
+    df: pd.DataFrame,
+    half_lives: List[float],
+    feature_set: str = BASE_FEATURE_SET,
+) -> pd.DataFrame:
     fixed_split = build_fixed_split(df)
     rows = []
     for half_life in half_lives:
-        payload = split_xy(fixed_split, recency_half_life_years=half_life)
+        payload = split_xy(
+            fixed_split,
+            recency_half_life_years=half_life,
+            feature_set=feature_set,
+        )
         config = recency_xgb_config(half_life)
-        out = make_experiment_dir("xgboost", config["slug"])
+        out = make_experiment_dir("xgboost", experiment_slug(config["slug"], feature_set))
         rows.append(train_xgb_config(payload, config, out))
     return pd.DataFrame(rows)
 
 
-def run_recency_xgb_blocked_eval(df: pd.DataFrame, half_lives: List[float]) -> pd.DataFrame:
+def run_recency_xgb_blocked_eval(
+    df: pd.DataFrame,
+    half_lives: List[float],
+    feature_set: str = BASE_FEATURE_SET,
+) -> pd.DataFrame:
     splits = build_blocked_windows(
         df,
         train_years=6,
@@ -557,9 +609,16 @@ def run_recency_xgb_blocked_eval(df: pd.DataFrame, half_lives: List[float]) -> p
     rows = []
     for split in splits:
         for half_life in half_lives:
-            payload = split_xy(split, recency_half_life_years=half_life)
+            payload = split_xy(
+                split,
+                recency_half_life_years=half_life,
+                feature_set=feature_set,
+            )
             config = recency_xgb_config(half_life, blocked=True)
-            out = make_experiment_dir("xgboost", f"{config['slug']}__{split.label}")
+            out = make_experiment_dir(
+                "xgboost",
+                experiment_slug(f"{config['slug']}__{split.label}", feature_set),
+            )
             rows.append(train_xgb_config(payload, config, out))
     return pd.DataFrame(rows)
 
@@ -568,15 +627,16 @@ def run_booster_fixed_experiments(
     df: pd.DataFrame,
     families: List[str],
     feature_modes: List[str],
+    feature_set: str = BASE_FEATURE_SET,
 ) -> pd.DataFrame:
     rows = []
     fixed_split = build_fixed_split(df)
     for feature_mode in feature_modes:
-        split = split_xy(fixed_split, feature_mode=feature_mode)
+        split = split_xy(fixed_split, feature_mode=feature_mode, feature_set=feature_set)
         for family in families:
             for config in get_booster_configs(family):
                 slug = _as_native_cat_slug(feature_mode, config["slug"])
-                out = make_experiment_dir(family, slug)
+                out = make_experiment_dir(family, experiment_slug(slug, feature_set))
                 rows.append(train_booster_config(family, split, config, out))
     return pd.DataFrame(rows)
 
@@ -585,6 +645,7 @@ def run_booster_blocked_eval(
     df: pd.DataFrame,
     families: List[str],
     feature_modes: List[str],
+    feature_set: str = BASE_FEATURE_SET,
 ) -> pd.DataFrame:
     splits = build_blocked_windows(
         df,
@@ -599,16 +660,21 @@ def run_booster_blocked_eval(
     rows = []
     for window in splits:
         for feature_mode in feature_modes:
-            payload = split_xy(window, feature_mode=feature_mode)
+            payload = split_xy(window, feature_mode=feature_mode, feature_set=feature_set)
             for family in families:
                 config = get_booster_configs(family, blocked=True)[0]
                 slug = _as_native_cat_slug(feature_mode, f"{config['slug']}__{window.label}")
-                out = make_experiment_dir(family, slug)
+                out = make_experiment_dir(family, experiment_slug(slug, feature_set))
                 rows.append(train_booster_config(family, payload, config, out))
     return pd.DataFrame(rows)
 
 
-def run_blocked_eval(df: pd.DataFrame) -> pd.DataFrame:
+def run_blocked_eval(
+    df: pd.DataFrame,
+    feature_set: str = BASE_FEATURE_SET,
+    include_nn: bool = True,
+    include_xgb: bool = True,
+) -> pd.DataFrame:
     splits = build_blocked_windows(
         df,
         train_years=6,
@@ -647,11 +713,13 @@ def run_blocked_eval(df: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
     for split in splits:
-        payload = split_xy(split)
-        nn_out = make_experiment_dir("nn", f"{nn_config['slug']}__{split.label}")
-        xgb_out = make_experiment_dir("xgboost", f"{xgb_config['slug']}__{split.label}")
-        rows.append(train_nn_config(payload, nn_config, nn_out))
-        rows.append(train_xgb_config(payload, xgb_config, xgb_out))
+        payload = split_xy(split, feature_set=feature_set)
+        if include_nn:
+            nn_out = make_experiment_dir("nn", experiment_slug(f"{nn_config['slug']}__{split.label}", feature_set))
+            rows.append(train_nn_config(payload, nn_config, nn_out))
+        if include_xgb:
+            xgb_out = make_experiment_dir("xgboost", experiment_slug(f"{xgb_config['slug']}__{split.label}", feature_set))
+            rows.append(train_xgb_config(payload, xgb_config, xgb_out))
     return pd.DataFrame(rows)
 
 
@@ -695,13 +763,35 @@ def main() -> None:
         help="Run only XGBoost recency-weighting experiments for the selected mode.",
     )
     parser.add_argument(
+        "--only-xgb",
+        action="store_true",
+        help="Run only the standard XGBoost configs from the default NN/XGBoost block.",
+    )
+    parser.add_argument(
+        "--only-nn",
+        action="store_true",
+        help="Run only the standard neural-network configs from the default NN/XGBoost block.",
+    )
+    parser.add_argument(
         "--recency-half-lives",
         default="3,5,8,12",
         help="Comma-separated training half-lives in years for --include-recency-xgb.",
     )
+    parser.add_argument(
+        "--feature-set",
+        choices=sorted(FEATURE_SETS),
+        default=BASE_FEATURE_SET,
+        help="Feature set to train on. performance_v1 requires a side dataset built by build_feature_set.py.",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        default=None,
+        help="Optional ML-ready CSV path. Required for most non-base feature-set runs.",
+    )
     args = parser.parse_args()
 
-    df = load_ml_ready_df()
+    df = load_ml_ready_df(dataset_path=args.dataset_path)
     summaries: List[pd.DataFrame] = []
     booster_families: List[str] = []
     recency_half_lives: List[float] = []
@@ -709,11 +799,27 @@ def main() -> None:
         args.include_boosters = True
     if args.only_recency_xgb:
         args.include_recency_xgb = True
+    if args.only_xgb and args.only_nn:
+        raise ValueError("--only-xgb and --only-nn are mutually exclusive.")
 
     if not args.only_boosters and not args.only_recency_xgb and args.mode in {"fixed", "all"}:
-        summaries.append(run_fixed_experiments(df))
+        summaries.append(
+            run_fixed_experiments(
+                df,
+                feature_set=args.feature_set,
+                include_nn=not args.only_xgb,
+                include_xgb=not args.only_nn,
+            )
+        )
     if not args.only_boosters and not args.only_recency_xgb and args.mode in {"blocked", "all"}:
-        summaries.append(run_blocked_eval(df))
+        summaries.append(
+            run_blocked_eval(
+                df,
+                feature_set=args.feature_set,
+                include_nn=not args.only_xgb,
+                include_xgb=not args.only_nn,
+            )
+        )
     if args.include_boosters:
         booster_families = [family.strip() for family in args.booster_families.split(",") if family.strip()]
         unknown_families = sorted(set(booster_families) - BOOSTER_FAMILIES)
@@ -725,21 +831,27 @@ def main() -> None:
             else [args.booster_feature_mode]
         )
         if args.mode in {"fixed", "all"}:
-            summaries.append(run_booster_fixed_experiments(df, booster_families, feature_modes))
+            summaries.append(run_booster_fixed_experiments(df, booster_families, feature_modes, feature_set=args.feature_set))
         if args.mode in {"blocked", "all"}:
-            summaries.append(run_booster_blocked_eval(df, booster_families, feature_modes))
+            summaries.append(run_booster_blocked_eval(df, booster_families, feature_modes, feature_set=args.feature_set))
     if args.include_recency_xgb:
         recency_half_lives = parse_half_lives(args.recency_half_lives)
         if args.mode in {"fixed", "all"}:
-            summaries.append(run_recency_xgb_fixed_experiments(df, recency_half_lives))
+            summaries.append(run_recency_xgb_fixed_experiments(df, recency_half_lives, feature_set=args.feature_set))
         if args.mode in {"blocked", "all"}:
-            summaries.append(run_recency_xgb_blocked_eval(df, recency_half_lives))
+            summaries.append(run_recency_xgb_blocked_eval(df, recency_half_lives, feature_set=args.feature_set))
 
     if summaries:
         combined = pd.concat(summaries, ignore_index=True)
         batch_parts = [args.mode]
+        if args.feature_set != BASE_FEATURE_SET:
+            batch_parts.append(args.feature_set)
         if args.only_recency_xgb:
             batch_parts.append("recency_xgb_only")
+        elif args.only_xgb:
+            batch_parts.append("xgb_only")
+        elif args.only_nn:
+            batch_parts.append("nn_only")
         elif args.only_boosters:
             batch_parts.append("boosters_only")
         elif args.include_boosters:
@@ -756,6 +868,7 @@ def main() -> None:
         display_cols = [
             col for col in [
                 "family", "feature_mode", "recency_half_life_years", "split_label", "config",
+                "feature_set", "n_features",
                 "val_accuracy", "val_auc", "val_log_loss",
                 "test_accuracy", "test_auc", "test_log_loss", "test_brier", "test_ece"
             ] if col in combined.columns

@@ -13,6 +13,7 @@ import requests
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
+import numpy as np
 import pandas as pd
 import ast
 
@@ -404,6 +405,47 @@ class TennisAbstractScraper:
 
         # Score
         df_normalized['score'] = df.get('score', '')
+
+        # Seed/entry context. These are optional for current production models but
+        # useful for side feature-set experiments and future live parity.
+        df_normalized['seed'] = df.get('seed', '')
+        df_normalized['entry'] = df.get('entry', '')
+        df_normalized['opp_seed'] = df.get('oseed', '')
+        df_normalized['opp_entry'] = df.get('oentry', '')
+        df_normalized['max_sets'] = pd.to_numeric(df.get('max', ''), errors='coerce')
+
+        def _numeric_col(*names):
+            for name in names:
+                if name in df.columns:
+                    return pd.to_numeric(df[name], errors='coerce')
+            return pd.Series(np.nan, index=df.index)
+
+        # Player-perspective match stats from TA matchmx. Column names mirror the
+        # raw array where possible; `games` has had escaped quote variants in
+        # historical debug captures, so support those aliases too.
+        stat_mappings = {
+            'minutes': ('time',),
+            'aces': ('aces',),
+            'double_faults': ('dfs',),
+            'serve_points': ('pts',),
+            'first_serves_in': ('firsts',),
+            'first_serve_won': ('fwon',),
+            'second_serve_won': ('swon',),
+            'service_games': ('games', "'games", "\\'games"),
+            'bp_saved': ('saved',),
+            'bp_faced': ('chances',),
+            'opp_aces': ('oaces',),
+            'opp_double_faults': ('odfs',),
+            'opp_serve_points': ('opts',),
+            'opp_first_serves_in': ('ofirsts',),
+            'opp_first_serve_won': ('ofwon',),
+            'opp_second_serve_won': ('oswon',),
+            'opp_service_games': ('ogames', "'ogames", "\\'ogames"),
+            'opp_bp_saved': ('osaved',),
+            'opp_bp_faced': ('ochances',),
+        }
+        for output_col, source_names in stat_mappings.items():
+            df_normalized[output_col] = _numeric_col(*source_names)
 
         # Result: W/L from 'wl' column
         df_normalized['result'] = df.get('wl', '').str.upper()

@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime
 from collections import defaultdict, deque
+from pathlib import Path
 
 # Import shared round offset function
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'production', 'features'))
@@ -584,7 +585,7 @@ def get_last_tournament_date(match_history, current_date):
     else:
         return None
 
-def preprocess_jeffsackmann_data_for_ml():
+def preprocess_jeffsackmann_data_for_ml(output_path=None, include_performance_features=False):
     """
     Enhanced preprocessing with comprehensive temporal features.
     This replaces the old preprocessing with all AI-recommended features.
@@ -788,6 +789,15 @@ def preprocess_jeffsackmann_data_for_ml():
     for _, r in df[['tourney_name', 'round', 'tourney_date', 'inferred_match_date']].head(3).iterrows():
         print(f"     {r['tourney_name']} {r['round']}: {r['tourney_date'].date()} -> {r['inferred_match_date'].date()}")
 
+    performance_features = []
+    if include_performance_features:
+        print("\n   Calculating performance feature-set add-ons...")
+        from performance_features import PERFORMANCE_FEATURES, add_performance_features
+
+        df = add_performance_features(df)
+        performance_features = [col for col in PERFORMANCE_FEATURES if col in df.columns]
+        print(f"   Added {len(performance_features)} score/stat performance features")
+
     print("\n   Calculating enhanced temporal features...")
     print("   This is the major enhancement - adding 60+ temporal features!")
 
@@ -823,7 +833,16 @@ def preprocess_jeffsackmann_data_for_ml():
     print(f"   Added {len(temporal_features)} temporal features!")
     
     # Combine all features
-    feature_columns = core_features + surface_features + level_features + round_features + hand_features + country_features + temporal_features
+    feature_columns = (
+        core_features
+        + surface_features
+        + level_features
+        + round_features
+        + hand_features
+        + country_features
+        + temporal_features
+        + performance_features
+    )
     
     # Keep only features that actually exist in the dataframe
     feature_columns = [col for col in feature_columns if col in df_with_temporal.columns]
@@ -852,13 +871,19 @@ def preprocess_jeffsackmann_data_for_ml():
     print(f"   - Country features: {len(country_features)}")
     print(f"   - TEMPORAL features: {len(temporal_features)}")
     
-    # 8. Save the enhanced ML-ready dataset (REPLACES old file)
+    # 8. Save the enhanced ML-ready dataset
     print("\n8. Saving enhanced ML-ready dataset...")
     
-    output_path = os.path.join(_base, "jeffsackmann_ml_ready_SURFACE_FIX.csv")
+    if output_path is None:
+        output_path = os.path.join(_base, "jeffsackmann_ml_ready_SURFACE_FIX.csv")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     ml_df.to_csv(output_path, index=False)
     
-    print(f"   ✅ REPLACED old dataset with enhanced version: {output_path}")
+    if include_performance_features:
+        print(f"   ✅ Saved side feature-set dataset: {output_path}")
+    else:
+        print(f"   ✅ REPLACED old dataset with enhanced version: {output_path}")
     print(f"   Final dataset shape: {ml_df.shape}")
     
     # 9. Summary statistics
@@ -870,6 +895,8 @@ def preprocess_jeffsackmann_data_for_ml():
     print(f"Total features for training: {len(feature_columns)}")
     print(f"  -> Basic features: {len(core_features + surface_features + level_features + round_features + hand_features + country_features)}")
     print(f"  -> NEW temporal features: {len(temporal_features)}")
+    if include_performance_features:
+        print(f"  -> Performance feature-set add-ons: {len(performance_features)}")
     print(f"Target balance: {ml_df['Player1_Wins'].mean()*100:.1f}% Player1 wins")
     print(f"Data spans: {ml_df['tourney_date'].min().date()} to {ml_df['tourney_date'].max().date()}")
     if 'year' in ml_df.columns:
