@@ -2,6 +2,9 @@
 
 This is the project-specific workflow for side-model tuning and walk-forward evaluation.
 
+Feature-engineering priorities and candidate feature-set guardrails live in
+[Feature Roadmap](/Users/zachdodson/Documents/betting-algo/docs/modeling/FEATURE_ROADMAP.md).
+
 ## Goals
 
 - test model tweaks without touching promoted production models

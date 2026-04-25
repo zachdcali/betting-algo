@@ -8,6 +8,7 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Versioning rules live in [docs/production/VERSIONING.md](/Users/zachdodson/Documents/betting-algo/docs/production/VERSIONING.md).
 - Human-readable promoted model notes live in [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md).
 - Side-model tuning workflow lives in [docs/modeling/EXPERIMENT_WORKFLOW.md](/Users/zachdodson/Documents/betting-algo/docs/modeling/EXPERIMENT_WORKFLOW.md).
+- Feature-engineering priorities and candidate feature-set guardrails live in [docs/modeling/FEATURE_ROADMAP.md](/Users/zachdodson/Documents/betting-algo/docs/modeling/FEATURE_ROADMAP.md).
 - The live orchestrator is [production/main.py](/Users/zachdodson/Documents/betting-algo/production/main.py).
 - The active live features path is TA-based, not the older UTR path.
 - CatBoost and LightGBM are supported only as side experiments for now; do not
@@ -69,6 +70,8 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Experiment output dirs are date/family/slug based and append
   `__run_HHMMSS` when a same-day slug already contains files; avoid relying on a
   generic same-day slug as a stable ledger.
+- Candidate feature-set preprocessing should write versioned side outputs and
+  should not silently replace the active 141-feature ML-ready dataset.
 
 ## When To Update This File
 
