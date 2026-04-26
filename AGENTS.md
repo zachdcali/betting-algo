@@ -59,6 +59,8 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the immutable lineage layer.
 - `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
   not an operational betting log.
+- `logs/performance_v1_shadow_backfill.csv` is also side-model evidence only.
+  Keep it separate from forward shadow logs and mark rows by backfill quality.
 - Treat `logging_quality = snapshot_v2` rows as decision-grade.
 - Treat `legacy_backfilled` rows as context, not exact lineage.
 - Settlement should enrich existing predictions; it should not recompute historical inference.

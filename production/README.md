@@ -40,6 +40,9 @@ Supporting run artifacts:
 - `logs/performance_v1_shadow_predictions.csv`
   Forward-only side-model predictions for the score/stat `performance_v1`
   experiment; useful for evaluation, not live betting decisions
+- `logs/performance_v1_shadow_backfill.csv`
+  Controlled side-model backfill over exact feature snapshots; useful as
+  experiment evidence only
 - `logs/odds/bovada_tennis_*.csv`
   Raw odds scrapes
 - `logs/all_bets.csv`

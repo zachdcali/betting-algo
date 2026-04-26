@@ -172,6 +172,33 @@ The shadow predictor requires both `model.json` and `feature_medians.json`.
 The medians should be generated from the training split for the same side
 dataset/model run; do not use live rows or the test era to choose them.
 
+For a controlled historical live-log check, backfill only exact feature-snapshot
+rows into a separate side log:
+
+```bash
+tennis_env/bin/python production/shadow/backfill_performance_v1.py
+```
+
+The command reads `prediction_log.csv` with `write=False`, joins exact
+`logs/features_*.csv` rows, recomputes only the new score/stat features from TA
+history as of the logged match date, and writes
+`production/logs/performance_v1_shadow_backfill.csv`. Treat rows with
+`backfill_quality = snapshot_v2_performance_v1_backfill` as useful side
+evidence, not as a production promotion by itself.
+
+Initial 2026-04-26 exact-snapshot backfill:
+
+- Cohort: `180` settled `snapshot_v2` rows with exact feature snapshots.
+- `performance_v1` shadow XGBoost: accuracy `67.222%`, log loss `0.616584`,
+  Brier `0.213315`, AUC `0.733135`.
+- Current live XGBoost on the same rows: accuracy `66.667%`, log loss
+  `0.631443`, Brier `0.219144`, AUC `0.713976`.
+- Market on the same rows: accuracy `63.889%`, log loss `0.622425`, Brier
+  `0.216457`, AUC `0.719122`.
+
+This is encouraging, but it is still a small, rescraped backfill cohort. Keep
+collecting forward shadow rows before promotion.
+
 ## 2026-04-24 Recency-Weighted XGBoost Screening
 
 Recency weighting was tested as a side experiment only. No production artifact

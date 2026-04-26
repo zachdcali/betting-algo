@@ -87,6 +87,9 @@ What that does:
 - `logs/performance_v1_shadow_predictions.csv`
   Optional forward side-model log for the `performance_v1` score/stat
   experiment. It is not used for staking or production settlement.
+- `logs/performance_v1_shadow_backfill.csv`
+  Optional controlled backfill for exact feature-snapshot rows. It should not be
+  mixed with forward live-shadow evidence.
 - `docs/production/VERSIONING.md`
   Current rules for model-family versions, logging schema versions, and lineage quality.
 - `logs/all_bets.csv`
