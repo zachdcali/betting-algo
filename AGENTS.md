@@ -49,13 +49,16 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Optional score/stat side features use:
   `tennis_env/bin/python src/models/professional_tennis/build_feature_set.py --feature-set performance_v1`.
   Train them with `run_side_experiments.py --feature-set performance_v1 --dataset-path <side_csv>`.
-  This is not live-ready until the TA production feature calculator computes the
-  same fields from preserved TA match stats.
+  Live pipeline runs may compute these fields and log side-model shadow
+  predictions, but they must not affect betting decisions or promotion status
+  without explicit registry/versioning work.
 
 ## Logging And Lineage
 
 - `prediction_log.csv` is the operational log.
 - `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the immutable lineage layer.
+- `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
+  not an operational betting log.
 - Treat `logging_quality = snapshot_v2` rows as decision-grade.
 - Treat `legacy_backfilled` rows as context, not exact lineage.
 - Settlement should enrich existing predictions; it should not recompute historical inference.

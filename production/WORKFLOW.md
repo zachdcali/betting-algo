@@ -84,6 +84,9 @@ What that does:
   Per-attempt settlement audit with reason codes.
 - `logs/features_*.csv`
   Per-run feature snapshots keyed by stable match identifiers.
+- `logs/performance_v1_shadow_predictions.csv`
+  Optional forward side-model log for the `performance_v1` score/stat
+  experiment. It is not used for staking or production settlement.
 - `docs/production/VERSIONING.md`
   Current rules for model-family versions, logging schema versions, and lineage quality.
 - `logs/all_bets.csv`

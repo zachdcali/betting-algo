@@ -155,10 +155,22 @@ features are carrying real tennis signal, not just adding noise.
 
 Remaining risks:
 
-- The feature set is not live-ready until production feature calculation uses
-  the preserved TA stat columns to compute the same fields pre-match.
+- Forward live-shadow logging is available through the production orchestrator.
+  It writes `production/logs/performance_v1_shadow_predictions.csv` when the
+  local side artifact and `feature_medians.json` exist, and it does not affect
+  betting decisions, `prediction_log.csv`, or the production model registry.
 - Serve/stat coverage is uneven by source and era, especially for Futures.
 - NN performance improved but still trails tree models on this fixed split.
+
+To enable this specific side model locally, keep the side artifact under:
+
+```text
+results/professional_tennis/experiments/2026-04-25/xgboost/performance_v1__xgb_depth5_recency_hl_12y/
+```
+
+The shadow predictor requires both `model.json` and `feature_medians.json`.
+The medians should be generated from the training split for the same side
+dataset/model run; do not use live rows or the test era to choose them.
 
 ## 2026-04-24 Recency-Weighted XGBoost Screening
 

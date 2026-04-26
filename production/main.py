@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from odds.fetch_bovada import fetch_bovada_tennis_odds, save_odds_data
 from features.ta_feature_calculator import TAFeatureCalculator, UnsafeToInferError
+from features.performance_v1 import PERFORMANCE_FEATURES, build_match_performance_features
 from models.inference import (
     EXACT_141_FEATURES,
     MODEL_VERSION,
@@ -33,6 +34,11 @@ from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
+from shadow.performance_v1_shadow import (
+    PerformanceV1ShadowPredictor,
+    log_shadow_predictions,
+    shadow_row_from_prediction,
+)
 from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
 from scraping.atp_rankings_scraper import fetch_atp_rankings, save_rankings
@@ -55,6 +61,8 @@ class LiveBettingOrchestrator:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.bet_tracker = BetTracker(str(self.logs_dir))
         self.feature_engine = TAFeatureCalculator()
+        self.performance_shadow_enabled = bool(self.config.get('performance_shadow_enabled', True))
+        self.performance_shadow_predictor = PerformanceV1ShadowPredictor()
         self.run_id = None
         self.run_started_at = None
         self.run_metrics = {}
@@ -96,6 +104,8 @@ class LiveBettingOrchestrator:
             'settlement_newly_settled': 0,
             'settlement_auto_settled_bets': 0,
             'settlement_reason_summary': {},
+            'performance_shadow_attempts': 0,
+            'performance_shadow_logged': 0,
             'error_message': '',
         }
         upsert_run_history(self.run_metrics)
@@ -286,6 +296,7 @@ class LiveBettingOrchestrator:
             'logs_dir': './logs',
             'models_dir': '../results/professional_tennis/Neural_Network',
             'pre_match_inference_buffer_minutes': 5,
+            'performance_shadow_enabled': True,
         }
         
         if config_path and Path(config_path).exists():
@@ -436,6 +447,45 @@ class LiveBettingOrchestrator:
                     else match_date.date().isoformat()
                 )
 
+            performance_status = "not_attempted"
+            performance_error = ""
+            if status == "ok" and self.performance_shadow_enabled:
+                try:
+                    slug1 = self.feature_engine.find_slug(p1)
+                    slug2 = self.feature_engine.find_slug(p2)
+                    if not slug1 or not slug2:
+                        raise RuntimeError(f"missing_slug:{p1 if not slug1 else p2}")
+                    matches1 = self.feature_engine.scraper.get_player_matches(
+                        slug1,
+                        years=[],
+                        force_refresh=False,
+                        persist=False,
+                        session_cache=session_cache,
+                    )
+                    matches2 = self.feature_engine.scraper.get_player_matches(
+                        slug2,
+                        years=[],
+                        force_refresh=False,
+                        persist=False,
+                        session_cache=session_cache,
+                    )
+                    performance_features = build_match_performance_features(
+                        matches1,
+                        matches2,
+                        resolved_match_date,
+                    )
+                    ordered_features.update(performance_features)
+                    performance_status = "ok"
+                except Exception as e:
+                    performance_error = str(e)
+                    performance_status = "error"
+                    for feature_name in PERFORMANCE_FEATURES:
+                        ordered_features[feature_name] = pd.NA
+                    print(f"      ⚠️ performance_v1 shadow feature extraction failed: {e}")
+            else:
+                for feature_name in PERFORMANCE_FEATURES:
+                    ordered_features[feature_name] = pd.NA
+
             match_uid = build_match_uid(
                 row.get('player1_raw', p1),
                 row.get('player2_raw', p2),
@@ -473,7 +523,10 @@ class LiveBettingOrchestrator:
                 'meta_match_date': resolved_match_date,
                 'meta_defaulted_features': features.get('_defaulted_features') or '',
                 'meta_draw_input': draw_size,
-                'meta_resolver_source': resolver_source
+                'meta_resolver_source': resolver_source,
+                'performance_v1_features_available': performance_status == "ok",
+                'performance_v1_status': performance_status,
+                'performance_v1_error': performance_error,
             })
 
             if status == "skip":
@@ -840,6 +893,57 @@ class LiveBettingOrchestrator:
             import traceback; traceback.print_exc()
         return stats
 
+    def _find_odds_row(self, p1: str, p2: str, odds_df: pd.DataFrame):
+        p1_lower = str(p1).lower()
+        p2_lower = str(p2).lower()
+        match_odds = odds_df[
+            (
+                (odds_df['player1_normalized'].str.lower() == p1_lower) &
+                (odds_df['player2_normalized'].str.lower() == p2_lower)
+            ) | (
+                (odds_df['player1_normalized'].str.lower() == p2_lower) &
+                (odds_df['player2_normalized'].str.lower() == p1_lower)
+            )
+        ]
+        return None if match_odds.empty else match_odds.iloc[0]
+
+    def _log_performance_shadow_predictions(self, predictions_df: pd.DataFrame, odds_df: pd.DataFrame):
+        """Run and log performance_v1 shadow predictions without affecting bets."""
+        stats = {'attempts': 0, 'logged': 0}
+        if not self.performance_shadow_enabled:
+            return stats
+        if predictions_df.empty:
+            return stats
+        if not self.performance_shadow_predictor.is_loaded and not self.performance_shadow_predictor.load_model():
+            return stats
+
+        shadow_rows = []
+        for _, pred_row in predictions_df.iterrows():
+            if pred_row.get('prediction_status') != 'success':
+                continue
+            if not bool(pred_row.get('performance_v1_features_available', False)):
+                continue
+            p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
+            p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
+            odds_row = self._find_odds_row(p1, p2, odds_df)
+            result = self.performance_shadow_predictor.predict_match_probability(pred_row.to_dict())
+            stats['attempts'] += 1
+            shadow_rows.append(
+                shadow_row_from_prediction(
+                    pred_row,
+                    odds_row,
+                    result,
+                    model_version=self.performance_shadow_predictor.model_version,
+                )
+            )
+
+        if shadow_rows:
+            path = self.logs_dir / "performance_v1_shadow_predictions.csv"
+            logged = log_shadow_predictions(path, shadow_rows)
+            stats['logged'] = logged
+            print(f"🧪 performance_v1 shadow: {logged}/{len(shadow_rows)} rows logged to {path}")
+        return stats
+
     def _refresh_atp_rankings(self):
         """Fetch and cache current ATP rankings (rank + points) from atptour.com."""
         print("📊 Refreshing ATP rankings...")
@@ -934,6 +1038,9 @@ class LiveBettingOrchestrator:
             self.run_metrics['prediction_log_created'] = prediction_log_stats.get('created', 0)
             self.run_metrics['prediction_log_updated'] = prediction_log_stats.get('updated', 0)
             self.run_metrics['prediction_log_skipped_incomplete'] = prediction_log_stats.get('skipped_incomplete', 0)
+            shadow_stats = self._log_performance_shadow_predictions(predictions_df, odds_df)
+            self.run_metrics['performance_shadow_attempts'] = shadow_stats.get('attempts', 0)
+            self.run_metrics['performance_shadow_logged'] = shadow_stats.get('logged', 0)
             self.run_metrics['bet_opportunities'] = len(bet_slips_df)
 
             # Step 5: Save, log, and display results

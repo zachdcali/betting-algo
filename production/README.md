@@ -37,6 +37,9 @@ Supporting run artifacts:
 
 - `logs/features_*.csv`
   Per-run feature snapshots with stable `match_uid` and `feature_snapshot_id`
+- `logs/performance_v1_shadow_predictions.csv`
+  Forward-only side-model predictions for the score/stat `performance_v1`
+  experiment; useful for evaluation, not live betting decisions
 - `logs/odds/bovada_tennis_*.csv`
   Raw odds scrapes
 - `logs/all_bets.csv`
@@ -82,3 +85,4 @@ tennis_env/bin/streamlit run dashboard/app.py
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.
 - The dashboard under `dashboard/` reads `prediction_log.csv` for settled performance, `prediction_snapshots.csv` and `odds_history.csv` for live lineage, and the audit CSVs when they exist.
+- `performance_v1` shadow logging is allowed as experiment evidence, but it stays outside the production registry and outside the operational betting log until explicitly promoted.
