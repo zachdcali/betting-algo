@@ -745,35 +745,13 @@ class LiveBettingOrchestrator:
                 stats['attempts'] += 1
                 model_p2 = 1.0 - float(model_p1)
 
-                # features_complete: False if the calculator reported any noisy defaults
+                # features_complete: False if the calculator reported any noisy defaults.
+                # Still log these rows below; analysis excludes incomplete-feature rows
+                # from clean accuracy, but operational settlement needs the prediction.
                 features_complete = not bool(pred_row.get('_has_defaulted_features', False))
                 if not features_complete:
                     defaulted = pred_row.get('meta_defaulted_features', '')
-                    print(f"  ⛔ Skipping prediction log for {p1} vs {p2} — incomplete features: {defaulted}")
-                    stats['skipped_incomplete'] += 1
-                    log_skipped_live_match(
-                        run_id=pred_row.get('run_id', self.run_id),
-                        run_started_at=self.run_started_at,
-                        stage='prediction_logging',
-                        skip_reason_code='incomplete_features',
-                        skip_reason_detail=defaulted,
-                        match_uid=pred_row.get('match_uid', ''),
-                        feature_snapshot_id=pred_row.get('feature_snapshot_id', ''),
-                        match_date=pred_row.get('meta_match_date', '') or today,
-                        match_start_time=pred_row.get('match_time', ''),
-                        match_start_dt_local=pred_row.get('match_start_dt_local', ''),
-                        odds_scraped_at=pred_row.get('timestamp', ''),
-                        tournament=pred_row.get('event', ''),
-                        event_title=pred_row.get('event', ''),
-                        surface=pred_row.get('meta_surface_input', ''),
-                        level=pred_row.get('meta_level_input', ''),
-                        round_code=pred_row.get('meta_round_input', ''),
-                        resolver_source=pred_row.get('meta_resolver_source', ''),
-                        p1=p1,
-                        p2=p2,
-                        defaulted_features=defaulted,
-                    )
-                    continue
+                    print(f"  ⚠️ Logging prediction for {p1} vs {p2} with incomplete features: {defaulted}")
 
                 # Try to get market odds from odds_df — match BOTH players to avoid
                 # picking up futures/outright lines (e.g. Alcaraz vs The Field)

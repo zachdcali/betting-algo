@@ -140,8 +140,29 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
         force_refresh=True,
         session_cache=session_cache,
     )
+    upcoming = SCRAPER.get_upcoming_match(slug1, p2, session_cache=session_cache)
+
+    def _unfinished_response() -> dict:
+        raw_date = str(upcoming.get('date', '')) if upcoming else ''
+        ta_date = raw_date
+        if len(raw_date) == 8 and raw_date.isdigit():
+            try:
+                ta_date = datetime.strptime(raw_date, '%Y%m%d').strftime('%Y-%m-%d')
+            except Exception:
+                ta_date = raw_date
+        return {
+            'status': 'ta_match_unfinished',
+            'outcome_detail': f"TA lists an upcoming/unfinished match vs '{p2}', but no result is posted yet",
+            'ta_player_slug': slug1,
+            'ta_match_date_found': ta_date,
+            'ta_event_found': str(upcoming.get('event', '')) if upcoming else '',
+            'ta_round_found': str(upcoming.get('round', '')) if upcoming else '',
+        }
 
     if matches.empty:
+        if upcoming:
+            print(f"    TA lists upcoming/unfinished match vs '{p2}', no result posted yet")
+            return _unfinished_response()
         print(f"    No match data found for {slug1}")
         return {
             'status': 'ta_empty',
@@ -163,6 +184,9 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
     ].copy()
 
     if recent.empty:
+        if upcoming:
+            print(f"    TA lists upcoming/unfinished match vs '{p2}', no result posted yet")
+            return _unfinished_response()
         print(f"    No matches found within window of {match_date_str}")
         return {
             'status': 'outside_window',
@@ -174,6 +198,9 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
     found = recent[recent['opp_name'].apply(lambda n: _names_match(str(n), p2))]
 
     if found.empty:
+        if upcoming:
+            print(f"    TA lists upcoming/unfinished match vs '{p2}', no result posted yet")
+            return _unfinished_response()
         print(f"    No result found yet vs '{p2}'")
         return {
             'status': 'opponent_not_found',

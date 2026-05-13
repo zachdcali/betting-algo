@@ -22,6 +22,9 @@ There are now two logging layers:
 
 - `prediction_log.csv`
   This is the operational, deduped match log. It preserves the opening snapshot for upcoming matches and tracks settlement.
+  Rows with noisy/defaulted live features are still logged with
+  `features_complete=False`; clean accuracy reporting excludes them, but the
+  operational row remains available for settlement and bet reconciliation.
 - `prediction_snapshots.csv`
   This is append-only. Every logged prediction snapshot is preserved with immutable IDs.
 - `odds_history.csv`
@@ -87,5 +90,8 @@ tennis_env/bin/streamlit run dashboard/app.py
 - For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.
+- Settlement uses `ta_match_unfinished` when Tennis Abstract still lists the
+  matchup as upcoming/unfinished, instead of grouping that state into
+  `opponent_not_found`.
 - The dashboard under `dashboard/` reads `prediction_log.csv` for settled performance, `prediction_snapshots.csv` and `odds_history.csv` for live lineage, and the audit CSVs when they exist.
 - `performance_v1` shadow logging is allowed as experiment evidence, but it stays outside the production registry and outside the operational betting log until explicitly promoted.

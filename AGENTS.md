@@ -63,7 +63,12 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   Keep it separate from forward shadow logs and mark rows by backfill quality.
 - Treat `logging_quality = snapshot_v2` rows as decision-grade.
 - Treat `legacy_backfilled` rows as context, not exact lineage.
+- Live predictions with noisy/defaulted features should still be logged with
+  `features_complete=False` rather than skipped; clean accuracy excludes them,
+  but settlement and bet reconciliation need the operational row.
 - Settlement should enrich existing predictions; it should not recompute historical inference.
+- `ta_match_unfinished` in settlement audit means TA still lists the matchup as
+  upcoming/unfinished and no completed result has posted yet.
 
 ## Audit And Dashboard
 
