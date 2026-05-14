@@ -130,6 +130,11 @@ def level_hint_from_title(title: str) -> Optional[str]:
     # ITF Futures M15  
     if re.search(r"\bm15\b|\b15k\b", t):
         return "15"
+
+    # Some Bovada ITF buckets omit M15/M25 and say only "ITF Men's".
+    # Default to Futures instead of ATP-level metadata.
+    if "itf" in t and "men" in t:
+        return "15"
     
     # ATP (500/250) - only if it explicitly says ATP and not Challenger
     if "atp" in t and "challenger" not in t:
@@ -175,6 +180,14 @@ def _round_from_text(txt: Optional[str]) -> Optional[str]:
     m = re.match(r"^r(128|64|32|16|8)$", t)
     return f"R{m.group(1)}" if m else None
 
+def _coerce_level_from_name(canonical_name: str, level: str) -> str:
+    name = str(canonical_name or "").strip().lower()
+    if re.match(r"^m15\b", name):
+        return "15"
+    if re.match(r"^m25\b", name):
+        return "25"
+    return str(level).strip()
+
 class TournamentResolver:
     """CSV schema: canonical_name,aliases,surface,level,draw_size"""
     def __init__(self, csv_path: str):
@@ -194,7 +207,9 @@ class TournamentResolver:
         for _, row in self.df.iterrows():
             city_sig = str(row.get("city_sig", "")).strip()
             if city_sig:  # Only track non-empty city signatures
-                levels_by_city.setdefault(city_sig, set()).add(str(row["level"]).upper())
+                levels_by_city.setdefault(city_sig, set()).add(
+                    _coerce_level_from_name(row.get("canonical_name", ""), row["level"]).upper()
+                )
         
         self._ambiguous_cities = {sig for sig, lvls in levels_by_city.items() if len(lvls) > 1}
 
@@ -244,7 +259,7 @@ class TournamentResolver:
             same_city_level_candidates = []
             for name_tokens, i in self._name_tokens:
                 row = self.df.iloc[i]
-                row_level = str(row["level"]).upper()
+                row_level = _coerce_level_from_name(row.get("canonical_name", ""), row["level"]).upper()
                 row_city_sig = str(row.get("city_sig", "")).strip()
                 
                 if (row_level == level_hint and 
@@ -313,7 +328,7 @@ class TournamentResolver:
         candidates = []
         for name_tokens, i in self._name_tokens:
             row = self.df.iloc[i]
-            row_level = str(row["level"]).upper()
+            row_level = _coerce_level_from_name(row.get("canonical_name", ""), row["level"]).upper()
             
             # Calculate base Jaccard score
             base_score = _jaccard(query_tokens, name_tokens)
@@ -374,7 +389,7 @@ class TournamentResolver:
             return None
         row = self.df.iloc[idx]
         surface = str(row["surface"]).strip().title()
-        level = str(row["level"]).strip()
+        level = _coerce_level_from_name(row.get("canonical_name", ""), row["level"])
         draw = int(row.get("draw_size", default_draw))
         rc = _round_from_text(round_hint) if round_hint else None
         return TournamentMeta(surface, level, draw, rc)
@@ -391,7 +406,7 @@ class TournamentResolver:
             
         row = self.df.iloc[idx]
         surface = str(row["surface"]).strip().title()
-        level = str(row["level"]).strip()
+        level = _coerce_level_from_name(row.get("canonical_name", ""), row["level"])
         draw = int(row.get("draw_size", default_draw))
         rc = _round_from_text(round_hint) if round_hint else None
         return TournamentMeta(surface, level, draw, rc), score

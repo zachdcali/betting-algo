@@ -169,13 +169,14 @@ def test_bet_tracker_skips_duplicate_pending_bets():
 
 
 def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():
-    from tournaments.resolve_tournament import TournamentResolver
+    from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 
     resolver = TournamentResolver(str(REPO_ROOT / "data" / "tournaments_map.csv"))
 
     rome, _ = resolver.resolve_soft("ATP - Rome (2)")
     bengaluru, _ = resolver.resolve_soft("Challenger - Bengaluru (4)")
     oeiras, _ = resolver.resolve_soft("Challenger - Oeiras (4)")
+    reggio, _ = resolver.resolve_soft("ITF Men's - ITF Men Reggio Emilia (4)")
 
     assert rome is not None
     assert rome.level == "M"
@@ -187,6 +188,9 @@ def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():
     assert oeiras is not None
     assert oeiras.surface == "Clay"
     assert oeiras.level == "C"
+    assert reggio is not None
+    assert reggio.level == "15"
+    assert level_hint_from_title("ITF Men's - ITF Men Gaborone (8)") == "15"
 
 
 def test_betting_edges_preserve_event_for_bet_slips():
