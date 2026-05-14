@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import tempfile
 
 import pandas as pd
 
@@ -123,3 +124,45 @@ def test_auto_settle_reports_ta_unfinished_before_opponent_not_found(monkeypatch
     assert result["ta_round_found"] == "R32"
     assert result["ta_event_found"] == "Rome"
     assert result["ta_match_date_found"] == "2026-05-13"
+
+
+def test_bet_tracker_skips_duplicate_pending_bets():
+    from utils.bet_tracker import BetTracker
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = BetTracker(tmp)
+        session_id = tracker.start_session(1000.0, 0.18, "duplicate test")
+        bet_slips = pd.DataFrame(
+            [
+                {
+                    "event": "Rome",
+                    "match": "Player One vs Player Two",
+                    "match_uid": "match_test",
+                    "feature_snapshot_id": "feature_test",
+                    "run_id": "run_test",
+                    "bet_on": "Player One",
+                    "bet_on_player1": True,
+                    "odds_decimal": 1.90,
+                    "stake": 10.0,
+                    "stake_fraction": 0.01,
+                    "model_prob": 0.62,
+                    "market_prob": 0.53,
+                    "edge": 0.09,
+                    "kelly_fraction": 0.03,
+                    "potential_profit": 9.0,
+                    "potential_loss": 10.0,
+                    "bankroll": 1000.0,
+                    "model_version": "v-test",
+                    "match_date": "2026-05-13",
+                    "match_start_time": "5/13/26 6:00 AM",
+                }
+            ]
+        )
+
+        first_count = tracker.log_bets(bet_slips, session_id, 1000.0)
+        second_count = tracker.log_bets(bet_slips, session_id, 1000.0)
+        all_bets = pd.read_csv(tracker.bets_file)
+
+        assert first_count == 1
+        assert second_count == 0
+        assert len(all_bets) == 1

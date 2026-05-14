@@ -94,13 +94,51 @@ class BetTracker:
     def log_bets(self, bet_slips_df: pd.DataFrame, session_id: str, current_bankroll: float):
         """Log new bets from bet slips"""
         if bet_slips_df.empty:
-            return
+            return 0
+
+        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        pending = all_bets_df[
+            all_bets_df.get('status', pd.Series(dtype=str)).fillna('').astype(str).str.lower() == 'pending'
+        ].copy()
+
+        def _text(value) -> str:
+            if pd.isna(value):
+                return ''
+            return str(value).strip()
+
+        def _norm(value) -> str:
+            return normalize_name(_text(value))
+
+        def _already_pending(record: dict) -> bool:
+            if pending.empty:
+                return False
+
+            bet_on = _norm(record.get('bet_on', ''))
+            match_uid = _text(record.get('match_uid', ''))
+            if match_uid:
+                uid_mask = pending.get('match_uid', pd.Series('', index=pending.index)).fillna('').astype(str).str.strip() == match_uid
+                bet_mask = pending.get('bet_on', pd.Series('', index=pending.index)).apply(_norm) == bet_on
+                if (uid_mask & bet_mask).any():
+                    return True
+
+            match_label = _norm(record.get('match', ''))
+            match_date = _text(record.get('match_date', ''))
+            event = _norm(record.get('event', ''))
+            match_mask = pending.get('match', pd.Series('', index=pending.index)).apply(_norm) == match_label
+            bet_mask = pending.get('bet_on', pd.Series('', index=pending.index)).apply(_norm) == bet_on
+            date_mask = pending.get('match_date', pd.Series('', index=pending.index)).fillna('').astype(str).str.strip() == match_date
+            event_mask = pending.get('event', pd.Series('', index=pending.index)).apply(_norm) == event
+            return bool((match_mask & bet_mask & date_mask & event_mask).any())
         
         # Prepare bet records
         bet_records = []
+        skipped_duplicates = 0
         for _, bet in bet_slips_df.iterrows():
+            bet_id = bet.get('bet_id')
+            if pd.isna(bet_id) or not str(bet_id).strip():
+                bet_id = f"bet_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(bet_records)}"
             bet_record = {
-                'bet_id': bet.get('bet_id', f"bet_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(bet_records)}"),
+                'bet_id': bet_id,
                 'session_id': session_id,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'event': bet['event'],
@@ -130,10 +168,17 @@ class BetTracker:
                 'match_start_time': bet.get('match_start_time', ''),
                 'notes': ''
             }
+            if _already_pending(bet_record):
+                skipped_duplicates += 1
+                continue
             bet_records.append(bet_record)
+
+        if not bet_records:
+            print(f"📝 No new bets logged ({skipped_duplicates} duplicate pending bet(s) skipped)")
+            self._refresh_session_record(session_id)
+            return 0
         
         # Append to all bets file
-        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
         new_bets_df = pd.DataFrame(bet_records)
         all_bets_df = pd.concat([all_bets_df, new_bets_df], ignore_index=True)
         all_bets_df.to_csv(self.bets_file, index=False)
@@ -146,7 +191,10 @@ class BetTracker:
         self._refresh_session_record(session_id)
         
         print(f"📝 Logged {len(bet_records)} new bets")
+        if skipped_duplicates:
+            print(f"   Skipped duplicate pending bets: {skipped_duplicates}")
         print(f"   Total stakes: ${total_staked:.2f}")
+        return len(bet_records)
     
     def settle_bet(self, bet_id: str, won: bool, notes: str = "") -> float:
         """Settle a specific bet and return profit/loss"""

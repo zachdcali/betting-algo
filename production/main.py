@@ -938,7 +938,7 @@ class LiveBettingOrchestrator:
             print(f"  ⚠️  ATP rankings refresh failed (non-fatal): {e}")
             print("       Rank_Points will default to 500 for this run")
 
-    def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True) -> bool:
+    def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True, dry_run: bool = False) -> bool:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
         try:
@@ -952,6 +952,8 @@ class LiveBettingOrchestrator:
             print(f"⚙️  Kelly multiplier: {kelly_mult:.1%}")
             print(f"⚙️  Edge threshold: {self.config.get('edge_threshold', 0.02):.1%}")
             print(f"⚙️  Bankroll: ${bankroll:.2f}")
+            if dry_run:
+                print("🧪 Dry run: no betting session or tracked bets will be written")
             
             # Start betting session
             if start_session:
@@ -964,7 +966,7 @@ class LiveBettingOrchestrator:
                 try:
                     from auto_settle import run as auto_settle_run
                     print("\n📋 Auto-settling pending predictions...")
-                    settle_summary = auto_settle_run(dry_run=False, run_id=self.run_id, record_run_history=False)
+                    settle_summary = auto_settle_run(dry_run=dry_run, run_id=self.run_id, record_run_history=False)
                     if isinstance(settle_summary, dict):
                         self.run_metrics['settlement_candidates'] = settle_summary.get('settlement_candidates', 0)
                         self.run_metrics['settlement_newly_settled'] = settle_summary.get('settlement_newly_settled', 0)
@@ -1027,8 +1029,7 @@ class LiveBettingOrchestrator:
                 
                 # Log bets to tracking system
                 if session_id:
-                    self.bet_tracker.log_bets(bet_slips_df, session_id, bankroll)
-                    self.run_metrics['bets_logged'] = len(bet_slips_df)
+                    self.run_metrics['bets_logged'] = self.bet_tracker.log_bets(bet_slips_df, session_id, bankroll)
                 
                 self.print_summary(bet_slips_df)
                 
@@ -1083,7 +1084,11 @@ def main():
         orchestrator._refresh_atp_rankings = lambda: print("📊 ATP rankings refresh skipped (--skip-rankings-refresh)")
 
     # Run pipeline
-    success = orchestrator.run_full_pipeline(auto_settle=not args.skip_auto_settle)
+    success = orchestrator.run_full_pipeline(
+        start_session=not args.dry_run,
+        auto_settle=not args.skip_auto_settle,
+        dry_run=args.dry_run,
+    )
     
     if args.dry_run:
         print("\n🧪 DRY RUN - No bets would actually be placed")

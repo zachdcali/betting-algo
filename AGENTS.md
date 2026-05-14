@@ -57,6 +57,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 
 - `prediction_log.csv` is the operational log.
 - `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the immutable lineage layer.
+- `python main.py --dry-run` should not start a betting session or write
+  `logs/all_bets.csv`; use it for pipeline smoke checks when duplicate live
+  bet logging would be risky.
+- `BetTracker.log_bets()` should skip duplicate pending bets for the same match
+  and bet side, so reruns do not double-log open recommendations.
 - `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
   not an operational betting log.
 - `logs/performance_v1_shadow_backfill.csv` is also side-model evidence only.

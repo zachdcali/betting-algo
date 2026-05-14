@@ -88,6 +88,10 @@ tennis_env/bin/streamlit run dashboard/app.py
 - `prediction_log.csv` is for the original live call on a match; use `prediction_snapshots.csv` and `logs/features_*.csv` for full historical lineage.
 - `sync_bet_tracker.py` is useful for backfilling tracked bets from already-settled prediction rows.
 - For future hourly cloud runs, `python main.py --skip-auto-settle` is the safer default. Settlement can run on its own cadence.
+- `BetTracker.log_bets()` skips duplicate pending bets for the same match and
+  bet side, so rerunning a slate should not double-log open recommendations.
+- `python main.py --dry-run` does not start a betting session or write
+  `logs/all_bets.csv`, although it still exercises odds/features/predictions.
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.
 - Settlement uses `ta_match_unfinished` when Tennis Abstract still lists the

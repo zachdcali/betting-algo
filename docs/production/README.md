@@ -30,6 +30,10 @@ Current production principles:
   log and does not imply promotion.
 - Old rows without immutable snapshot ids are legacy history and should be treated differently from new schema-backed rows.
 - Bovada scheduled start times and TA match-state checks are part of the safety layer: the orchestrator skips feature generation once a match is at/past the configured pre-start cutoff or appears to have already completed in TA history, so delayed runs do not drift into post-start inference.
+- Rerunning a slate should not double-log open betting recommendations:
+  `BetTracker.log_bets()` dedupes pending bets by match and bet side. Use
+  `python main.py --dry-run` when you want odds/features/predictions exercised
+  without starting a betting session or writing `logs/all_bets.csv`.
 - `logs/audit/run_history.csv`, `logs/audit/skipped_live_matches.csv`, and `logs/audit/settlement_audit.csv` are the audit layer for dashboards and ops debugging.
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.
