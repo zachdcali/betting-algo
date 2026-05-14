@@ -166,3 +166,63 @@ def test_bet_tracker_skips_duplicate_pending_bets():
         assert first_count == 1
         assert second_count == 0
         assert len(all_bets) == 1
+
+
+def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():
+    from tournaments.resolve_tournament import TournamentResolver
+
+    resolver = TournamentResolver(str(REPO_ROOT / "data" / "tournaments_map.csv"))
+
+    rome, _ = resolver.resolve_soft("ATP - Rome (2)")
+    bengaluru, _ = resolver.resolve_soft("Challenger - Bengaluru (4)")
+    oeiras, _ = resolver.resolve_soft("Challenger - Oeiras (4)")
+
+    assert rome is not None
+    assert rome.level == "M"
+    assert rome.surface == "Clay"
+    assert rome.draw_size >= 96
+    assert bengaluru is not None
+    assert bengaluru.level == "C"
+    assert bengaluru.draw_size == 32
+    assert oeiras is not None
+    assert oeiras.surface == "Clay"
+    assert oeiras.level == "C"
+
+
+def test_betting_edges_preserve_event_for_bet_slips():
+    from models.inference import calculate_betting_edges
+    from utils.stake_calculator import KellyStakeCalculator
+
+    predictions = pd.DataFrame(
+        [
+            {
+                "player1_raw": "Player One",
+                "player2_raw": "Player Two",
+                "player1_win_prob": 0.65,
+                "player2_win_prob": 0.35,
+                "event": "ATP - Rome (2)",
+                "match_time": "5/13/26 6:00 AM",
+            }
+        ]
+    )
+    odds = pd.DataFrame(
+        [
+            {
+                "player1_raw": "Player One",
+                "player2_raw": "Player Two",
+                "player1_odds_decimal": 2.10,
+                "player2_odds_decimal": 1.80,
+                "player1_implied_prob": 0.48,
+                "player2_implied_prob": 0.52,
+                "event": "ATP - Rome (2)",
+                "match_time": "5/13/26 6:00 AM",
+            }
+        ]
+    )
+
+    edges = calculate_betting_edges(predictions, odds)
+    calculator = KellyStakeCalculator(edge_threshold=0.01, min_stake_dollars=1.0)
+    slips = calculator.generate_bet_slips(calculator.allocate_block_stakes(edges, bankroll=1000.0))
+
+    assert edges.loc[0, "event"] == "ATP - Rome (2)"
+    assert slips.loc[0, "event"] == "ATP - Rome (2)"

@@ -42,6 +42,20 @@ LEVEL_TOKENS = {
     "c": {"challenger"},
 }
 
+MASTERS_CITIES = {
+    "indian wells",
+    "miami",
+    "monte carlo",
+    "madrid",
+    "rome",
+    "toronto",
+    "montreal",
+    "canada",
+    "cincinnati",
+    "shanghai",
+    "paris",
+}
+
 def norm_title(s: str) -> str:
     """Enhanced normalization for tournament titles (for fuzzy matching - strips level tokens)"""
     s = str(s or "").strip()
@@ -98,6 +112,12 @@ def level_hint_from_title(title: str) -> Optional[str]:
     # Masters 1000
     if "masters" in t or "1000" in t:
         return "M"
+
+    # Bovada often labels Masters buckets generically, e.g. "ATP - Rome (2)".
+    if "atp" in t:
+        city = city_sig_from_title(title)
+        if city in MASTERS_CITIES:
+            return "M"
     
     # Challenger
     if "challenger" in t:
@@ -233,6 +253,12 @@ class TournamentResolver:
                     
                     base_score = _jaccard(query_tokens, name_tokens)
                     overlap = len(query_tokens & name_tokens)
+                    if (
+                        level_hint == "M"
+                        and event_city_sig in MASTERS_CITIES
+                        and "masters" in str(row["canonical_name"]).lower()
+                    ):
+                        base_score += 0.60
                     
                     # Minimal requirements for same-city, same-level
                     if base_score >= 0.25 or overlap >= 1:
@@ -247,6 +273,32 @@ class TournamentResolver:
                 if len(same_city_level_candidates) > 1:
                     second_score = same_city_level_candidates[1][1]
                     if (best_score - second_score) <= 0.05:  # tie threshold
+                        tied = [
+                            (i, score)
+                            for i, score in same_city_level_candidates
+                            if (best_score - score) <= 0.05
+                        ]
+                        tied_rows = self.df.iloc[[i for i, _ in tied]]
+                        canonical_names = tied_rows["canonical_name"].astype(str).str.lower()
+                        if level_hint == "M" and event_city_sig in MASTERS_CITIES and canonical_names.str.contains("masters").any():
+                            keep_mask = canonical_names.str.contains("masters")
+                            tied_rows = tied_rows[keep_mask]
+                            tied = [(int(idx), score) for idx, score in tied if idx in set(tied_rows.index)]
+                        elif (~canonical_names.str.contains(r"\d", regex=True)).any():
+                            keep_mask = ~canonical_names.str.contains(r"\d", regex=True)
+                            tied_rows = tied_rows[keep_mask]
+                            tied = [(int(idx), score) for idx, score in tied if idx in set(tied_rows.index)]
+                        surfaces = {str(v).strip().title() for v in tied_rows["surface"]}
+                        levels = {str(v).strip().upper() for v in tied_rows["level"]}
+                        if len(surfaces) == 1 and len(levels) == 1:
+                            # Multiple recurring aliases for the same city+level
+                            # are operationally equivalent; prefer the largest draw.
+                            ranked_ties = tied_rows.assign(
+                                _idx=[i for i, _ in tied],
+                                _draw_size=pd.to_numeric(tied_rows["draw_size"], errors="coerce").fillna(0),
+                            )
+                            best_idx = int(ranked_ties.sort_values("_draw_size", ascending=False).iloc[0]["_idx"])
+                            return best_idx, best_score
                         print(f"⚠️ Tie in same-city+level candidates for '{event_name}' — returning None")
                         return None, 0.0
                 
