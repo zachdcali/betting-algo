@@ -58,6 +58,11 @@ def parse_level_from_title(title: str) -> str:
     # ITF Futures M15  
     if re.search(r"\bm15\b|\b15k\b", title_lower):
         return "15"
+
+    # Bovada sometimes labels ITF events as "ITF Men's - ITF Men City"
+    # without the M15/M25 tier. Default to Futures, not ATP.
+    if "itf" in title_lower and "men" in title_lower:
+        return "15"
     
     # ATP (500/250) - default for most tournaments
     return "A"

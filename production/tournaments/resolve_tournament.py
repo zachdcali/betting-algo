@@ -97,10 +97,18 @@ def norm_exact(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+def canonicalize_event_title(title: str) -> str:
+    """Normalize common live-book labels that differ from Sackmann names."""
+    text = str(title or "")
+    if "french open" in text.lower():
+        return "Roland Garros"
+    return text
+
 def level_hint_from_title(title: str) -> Optional[str]:
     """Parse tournament level from Bovada title and return Sackmann code"""
     if not title:
         return None
+    title = canonicalize_event_title(title)
         
     t = title.lower()
     
@@ -145,6 +153,7 @@ def level_hint_from_title(title: str) -> Optional[str]:
 
 def city_sig_from_title(s: str) -> str:
     """Extract city signature from tournament title (place words only)"""
+    s = canonicalize_event_title(s)
     toks = re.findall(r"[a-z0-9]+", norm_title(s))
     # Drop level tokens, organizational words, and numbers
     drop = {"atp","challenger","ch","m15","m25","itf","men","mens","tennis",
@@ -239,6 +248,7 @@ class TournamentResolver:
 
     def best_match(self, event_name: str, level_hint: Optional[str] = None) -> Tuple[Optional[int], float]:
         """Find best matching tournament row with city+level-aware disambiguation"""
+        event_name = canonicalize_event_title(event_name)
         
         # 1) Fast path: exact alias or exact signature match (preserves level tokens)
         idx = self._alias_row.get(norm_exact(event_name))
@@ -382,6 +392,7 @@ class TournamentResolver:
 
     def resolve(self, event_name: str, round_hint: Optional[str]=None, default_draw: int=32):
         """Original resolve method (exact matching only)"""
+        event_name = canonicalize_event_title(event_name)
         idx = self._alias_row.get(_norm(event_name))
         if idx is None:
             idx = self._sig_row.get(tuple(sorted(_tokens(event_name))))
@@ -396,6 +407,7 @@ class TournamentResolver:
 
     def resolve_soft(self, event_name: str, round_hint: Optional[str]=None, default_draw: int=32):
         """Resolve with level-aware fuzzy matching fallback"""
+        event_name = canonicalize_event_title(event_name)
         # Parse level hint from event name
         level_hint = level_hint_from_title(event_name)
         

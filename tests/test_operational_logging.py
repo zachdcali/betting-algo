@@ -173,11 +173,16 @@ def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():
 
     resolver = TournamentResolver(str(REPO_ROOT / "data" / "tournaments_map.csv"))
 
+    french_open, _ = resolver.resolve_soft("French Open - French Open Men's Singles (41)")
     rome, _ = resolver.resolve_soft("ATP - Rome (2)")
     bengaluru, _ = resolver.resolve_soft("Challenger - Bengaluru (4)")
     oeiras, _ = resolver.resolve_soft("Challenger - Oeiras (4)")
     reggio, _ = resolver.resolve_soft("ITF Men's - ITF Men Reggio Emilia (4)")
 
+    assert french_open is not None
+    assert french_open.level == "G"
+    assert french_open.surface == "Clay"
+    assert french_open.draw_size == 128
     assert rome is not None
     assert rome.level == "M"
     assert rome.surface == "Clay"
@@ -191,6 +196,19 @@ def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():
     assert reggio is not None
     assert reggio.level == "15"
     assert level_hint_from_title("ITF Men's - ITF Men Gaborone (8)") == "15"
+
+
+def test_fallback_heuristics_do_not_default_known_events_to_atp():
+    from tournaments.fallback_heuristics import get_fallback_tournament_meta
+
+    french_open = get_fallback_tournament_meta("French Open - French Open Men's Singles (41)")
+    generic_itf = get_fallback_tournament_meta("ITF Men's - ITF Men Gaborone (8)")
+
+    assert french_open.level == "G"
+    assert french_open.surface == "Clay"
+    assert french_open.draw_size == 128
+    assert generic_itf.level == "15"
+    assert generic_itf.draw_size == 32
 
 
 def test_betting_edges_preserve_event_for_bet_slips():

@@ -32,6 +32,7 @@ from models.inference import (
 )
 from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
+from tournaments.fallback_heuristics import get_fallback_tournament_meta
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
 from shadow.performance_v1_shadow import (
@@ -366,11 +367,18 @@ class LiveBettingOrchestrator:
                     resolver_source = "resolved"
                     print(f"      📍 {surface}, Level:{tournament_level}, Draw:{draw_size} (score:{score:.3f})")
                 else:
-                    tournament_level = level_hint_from_title(row['event']) or "A"
-                    resolver_source = "level_hint"
-                    print(f"      ⚠️  Inferred level: {tournament_level}")
+                    fallback_meta = get_fallback_tournament_meta(row['event'])
+                    surface = fallback_meta.surface or surface
+                    tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
+                    draw_size = fallback_meta.draw_size or draw_size
+                    resolver_source = "fallback_heuristic"
+                    print(f"      ⚠️  Fallback metadata: {surface}, Level:{tournament_level}, Draw:{draw_size}")
             else:
-                tournament_level = level_hint_from_title(row['event']) or "A"
+                fallback_meta = get_fallback_tournament_meta(row['event'])
+                surface = fallback_meta.surface or surface
+                tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
+                draw_size = fallback_meta.draw_size or draw_size
+                resolver_source = "fallback_heuristic"
 
             if not round_code:
                 round_code = self.parse_round_from_text(row.get('event', ''))
