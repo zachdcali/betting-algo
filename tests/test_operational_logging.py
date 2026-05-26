@@ -211,6 +211,14 @@ def test_fallback_heuristics_do_not_default_known_events_to_atp():
     assert generic_itf.draw_size == 32
 
 
+def test_ta_upcoming_surface_overrides_fallback_metadata_only():
+    from features.ta_feature_calculator import reconcile_upcoming_surface
+
+    assert reconcile_upcoming_surface("Hard", "Clay", "fallback_heuristic") == ("Clay", True)
+    assert reconcile_upcoming_surface("Hard", "Clay", "default") == ("Clay", True)
+    assert reconcile_upcoming_surface("Hard", "Clay", "resolved") == ("Hard", False)
+
+
 def test_betting_edges_preserve_event_for_bet_slips():
     from models.inference import calculate_betting_edges
     from utils.stake_calculator import KellyStakeCalculator

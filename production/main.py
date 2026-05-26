@@ -415,6 +415,7 @@ class LiveBettingOrchestrator:
                         persist=False,
                         session_cache=session_cache,
                         match_date_is_explicit=match_date_is_explicit,
+                        metadata_source=resolver_source,
                     )
                     # features_complete=False if ANY meaningful feature was defaulted
                     # (includes ATP points fallback, round=None, structural defaults)
@@ -454,6 +455,7 @@ class LiveBettingOrchestrator:
                     if pd.notna(fallback_dt)
                     else match_date.date().isoformat()
                 )
+            resolved_surface = features.get('_resolved_surface') or surface
 
             performance_status = "not_attempted"
             performance_error = ""
@@ -500,7 +502,7 @@ class LiveBettingOrchestrator:
                 resolved_match_date,
                 row.get('event', ''),
                 resolved_round,
-                surface,
+                resolved_surface,
             )
             feature_snapshot_id = build_feature_snapshot_id(
                 match_uid,
@@ -526,7 +528,7 @@ class LiveBettingOrchestrator:
                 'status': status,
                 'status_detail': status_detail,
                 'meta_level_input': tournament_level,
-                'meta_surface_input': surface,
+                'meta_surface_input': resolved_surface,
                 'meta_round_input': resolved_round,
                 'meta_match_date': resolved_match_date,
                 'meta_defaulted_features': features.get('_defaulted_features') or '',
@@ -553,7 +555,7 @@ class LiveBettingOrchestrator:
                     odds_scraped_at=row.get('scrape_time_utc', '') or row.get('timestamp', ''),
                     tournament=row.get('tourney_name', '') or row.get('event', ''),
                     event_title=row.get('event', ''),
-                    surface=surface,
+                    surface=resolved_surface,
                     level=tournament_level,
                     round_code=resolved_round,
                     resolver_source=resolver_source,

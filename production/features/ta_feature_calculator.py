@@ -35,6 +35,15 @@ class UnsafeToInferError(RuntimeError):
     """Raised when the current matchup appears to have already completed on TA."""
 
 
+def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
+    """Prefer explicit TA upcoming surface over heuristic/default tournament metadata."""
+    if not ta_surface or ta_surface.lower() == str(surface or "").lower():
+        return surface, False
+    if metadata_source in {"fallback_heuristic", "default", "level_hint"}:
+        return ta_surface, True
+    return surface, False
+
+
 class TAFeatureCalculator:
     """
     Calculate the exact 143 features from Tennis Abstract data.
@@ -673,6 +682,7 @@ class TAFeatureCalculator:
         persist: bool = False,
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
+        metadata_source: str = "resolved",
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract data.
@@ -689,6 +699,8 @@ class TAFeatureCalculator:
             round_code: Round code (R32/QF/SF/F/etc)
             match_date_is_explicit: If True, match_date came from a reliable source (e.g. Bovada
                 absolute date) and should not be overridden by the TA round-offset heuristic.
+            metadata_source: Source label for tournament metadata. Fallback/default sources
+                may be overridden by TA's explicit upcoming-match surface.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -749,6 +761,7 @@ class TAFeatureCalculator:
             persist=persist,
             session_cache=session_cache,
             match_date_is_explicit=match_date_is_explicit,
+            metadata_source=metadata_source,
         )
 
     def build_141_features_from_slugs(
@@ -765,6 +778,7 @@ class TAFeatureCalculator:
         persist: bool = False,
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
+        metadata_source: str = "resolved",
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract slugs.
@@ -946,7 +960,19 @@ class TAFeatureCalculator:
                     pass
             _ta_surface = _upcoming.get('surface', '')
             if _ta_surface and _ta_surface.lower() != surface.lower():
-                print(f"      ⚠️  Surface mismatch: resolver={surface}, TA upcoming={_ta_surface} — using resolver")
+                reconciled_surface, used_ta_surface = reconcile_upcoming_surface(
+                    surface,
+                    _ta_surface,
+                    metadata_source,
+                )
+                if used_ta_surface:
+                    print(
+                        f"      📋 Surface from TA: {_ta_surface} "
+                        f"(overriding {metadata_source}={surface})"
+                    )
+                    surface = reconciled_surface
+                else:
+                    print(f"      ⚠️  Surface mismatch: resolver={surface}, TA upcoming={_ta_surface} — using resolver")
 
         # Apply round-day offsets to historical match data to match training methodology.
         # Training (preprocess.py) used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
@@ -1224,6 +1250,7 @@ class TAFeatureCalculator:
         # Expose resolved round_code and inferred match date so caller (main.py) can log correctly
         final['_resolved_round_code'] = round_code or ''
         final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
+        final['_resolved_surface'] = surface or ''
 
         return final
 
