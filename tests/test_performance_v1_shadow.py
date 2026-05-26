@@ -9,7 +9,11 @@ PRODUCTION_DIR = REPO_ROOT / "production"
 if str(PRODUCTION_DIR) not in sys.path:
     sys.path.insert(0, str(PRODUCTION_DIR))
 
-from shadow.performance_v1_shadow import log_shadow_predictions, shadow_row_from_prediction  # noqa: E402
+from shadow.performance_v1_shadow import (  # noqa: E402
+    log_shadow_predictions,
+    shadow_row_from_prediction,
+    sync_shadow_settlements,
+)
 
 
 def test_shadow_row_devigs_market_and_uses_model_version():
@@ -48,9 +52,11 @@ def test_shadow_row_devigs_market_and_uses_model_version():
         odds_row,
         {"shadow_p1_prob": 0.57, "shadow_p2_prob": 0.43},
         model_version="custom_shadow_v1",
+        model_family="catboost",
     )
 
     assert row["model_version"] == "custom_shadow_v1"
+    assert row["model_family"] == "catboost"
     assert row["shadow_status"] == "success"
     assert row["market_p1_prob"] == 0.4
     assert row["market_p2_prob"] == 0.6
@@ -71,3 +77,42 @@ def test_log_shadow_predictions_is_append_only_by_uid(tmp_path):
     df = pd.read_csv(path)
     assert len(df) == 1
     assert df.iloc[0]["shadow_prediction_uid"] == "shadow_1"
+
+
+def test_sync_shadow_settlements_scores_shadow_rows(tmp_path):
+    shadow_path = tmp_path / "shadow.csv"
+    prediction_log_path = tmp_path / "prediction_log.csv"
+    pd.DataFrame(
+        [
+            {
+                "shadow_prediction_uid": "shadow_1",
+                "run_id": "run_test",
+                "match_uid": "match_test",
+                "feature_snapshot_id": "feat_test",
+                "p1": "Player A",
+                "p2": "Player B",
+                "shadow_p1_prob": 0.57,
+                "market_p1_prob": 0.48,
+            }
+        ]
+    ).to_csv(shadow_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "match_uid": "match_test",
+                "feature_snapshot_id": "feat_test",
+                "actual_winner": 1,
+                "score": "6-4 6-4",
+                "settled_at": "2026-04-27T12:00:00",
+                "p1": "Player A",
+                "p2": "Player B",
+            }
+        ]
+    ).to_csv(prediction_log_path, index=False)
+
+    assert sync_shadow_settlements(shadow_path, prediction_log_path) == 1
+    synced = pd.read_csv(shadow_path)
+    assert synced.loc[0, "actual_winner"] == 1
+    assert synced.loc[0, "shadow_pick"] == "Player A"
+    assert synced.loc[0, "shadow_correct"] == 1
+    assert synced.loc[0, "market_correct"] == 0

@@ -36,7 +36,7 @@ from tournaments.fallback_heuristics import get_fallback_tournament_meta
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
 from prediction_logger import log_prediction
 from shadow.performance_v1_shadow import (
-    PerformanceV1ShadowPredictor,
+    PerformanceV1ShadowEnsemble,
     log_shadow_predictions,
     shadow_row_from_prediction,
 )
@@ -63,7 +63,7 @@ class LiveBettingOrchestrator:
         self.bet_tracker = BetTracker(str(self.logs_dir))
         self.feature_engine = TAFeatureCalculator()
         self.performance_shadow_enabled = bool(self.config.get('performance_shadow_enabled', True))
-        self.performance_shadow_predictor = PerformanceV1ShadowPredictor()
+        self.performance_shadow_predictor = PerformanceV1ShadowEnsemble()
         self.run_id = None
         self.run_started_at = None
         self.run_metrics = {}
@@ -107,6 +107,7 @@ class LiveBettingOrchestrator:
             'settlement_reason_summary': {},
             'performance_shadow_attempts': 0,
             'performance_shadow_logged': 0,
+            'performance_shadow_models_loaded': 0,
             'error_message': '',
         }
         upsert_run_history(self.run_metrics)
@@ -897,13 +898,14 @@ class LiveBettingOrchestrator:
 
     def _log_performance_shadow_predictions(self, predictions_df: pd.DataFrame, odds_df: pd.DataFrame):
         """Run and log performance_v1 shadow predictions without affecting bets."""
-        stats = {'attempts': 0, 'logged': 0}
+        stats = {'attempts': 0, 'logged': 0, 'models_loaded': 0}
         if not self.performance_shadow_enabled:
             return stats
         if predictions_df.empty:
             return stats
         if not self.performance_shadow_predictor.is_loaded and not self.performance_shadow_predictor.load_model():
             return stats
+        stats['models_loaded'] = len(self.performance_shadow_predictor.loaded_predictors)
 
         shadow_rows = []
         for _, pred_row in predictions_df.iterrows():
@@ -914,22 +916,28 @@ class LiveBettingOrchestrator:
             p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
             p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
             odds_row = self._find_odds_row(p1, p2, odds_df)
-            result = self.performance_shadow_predictor.predict_match_probability(pred_row.to_dict())
-            stats['attempts'] += 1
-            shadow_rows.append(
-                shadow_row_from_prediction(
-                    pred_row,
-                    odds_row,
-                    result,
-                    model_version=self.performance_shadow_predictor.model_version,
+            for predictor, result in self.performance_shadow_predictor.predict_match_probabilities(pred_row.to_dict()):
+                stats['attempts'] += 1
+                shadow_rows.append(
+                    shadow_row_from_prediction(
+                        pred_row,
+                        odds_row,
+                        result,
+                        model_version=predictor.model_version,
+                        model_family=predictor.family,
+                        feature_set=predictor.feature_set,
+                        n_features=len(predictor.feature_names),
+                    )
                 )
-            )
 
         if shadow_rows:
             path = self.logs_dir / "performance_v1_shadow_predictions.csv"
             logged = log_shadow_predictions(path, shadow_rows)
             stats['logged'] = logged
-            print(f"🧪 performance_v1 shadow: {logged}/{len(shadow_rows)} rows logged to {path}")
+            print(
+                f"🧪 performance_v1 shadow: {logged}/{len(shadow_rows)} rows logged "
+                f"across {stats['models_loaded']} model(s) to {path}"
+            )
         return stats
 
     def _refresh_atp_rankings(self):
@@ -1031,6 +1039,7 @@ class LiveBettingOrchestrator:
             shadow_stats = self._log_performance_shadow_predictions(predictions_df, odds_df)
             self.run_metrics['performance_shadow_attempts'] = shadow_stats.get('attempts', 0)
             self.run_metrics['performance_shadow_logged'] = shadow_stats.get('logged', 0)
+            self.run_metrics['performance_shadow_models_loaded'] = shadow_stats.get('models_loaded', 0)
             self.run_metrics['bet_opportunities'] = len(bet_slips_df)
 
             # Step 5: Save, log, and display results

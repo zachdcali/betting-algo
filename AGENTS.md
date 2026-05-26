@@ -50,8 +50,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `tennis_env/bin/python src/models/professional_tennis/build_feature_set.py --feature-set performance_v1`.
   Train them with `run_side_experiments.py --feature-set performance_v1 --dataset-path <side_csv>`.
   Live pipeline runs may compute these fields and log side-model shadow
-  predictions, but they must not affect betting decisions or promotion status
-  without explicit registry/versioning work.
+  predictions for the configured `performance_v1` XGBoost, CatBoost,
+  LightGBM, and NN side candidates, but they must not affect betting decisions
+  or promotion status without explicit registry/versioning work.
 
 ## Logging And Lineage
 
@@ -63,7 +64,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - `BetTracker.log_bets()` should skip duplicate pending bets for the same match
   and bet side, so reruns do not double-log open recommendations.
 - `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
-  not an operational betting log.
+  not an operational betting log. It can contain multiple `performance_v1`
+  model families/versions and settlement scoring columns populated after the
+  corresponding operational prediction settles.
 - `logs/performance_v1_shadow_backfill.csv` is also side-model evidence only.
   Keep it separate from forward shadow logs and mark rows by backfill quality.
 - Treat `logging_quality = snapshot_v2` rows as decision-grade.
@@ -72,6 +75,13 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `features_complete=False` rather than skipped; clean accuracy excludes them,
   but settlement and bet reconciliation need the operational row.
 - Settlement should enrich existing predictions; it should not recompute historical inference.
+- Settlement uses a conservative TA identity score across opponent, date
+  window, tournament, surface, and round. Ambiguous/low-confidence matches
+  should remain pending rather than guessed.
+- Standalone settlement is intentionally paced for Tennis Abstract:
+  `auto_settle.py` defaults to an 18-hour post-start grace period, 75 eligible
+  candidates per run, an 8-second request delay, and early stop/cooldown on TA
+  429s. Use CLI flags only when you deliberately want a deeper backlog pass.
 - `ta_match_unfinished` in settlement audit means TA still lists the matchup as
   upcoming/unfinished and no completed result has posted yet.
 

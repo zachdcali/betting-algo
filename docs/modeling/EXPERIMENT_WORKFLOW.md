@@ -156,9 +156,15 @@ features are carrying real tennis signal, not just adding noise.
 Remaining risks:
 
 - Forward live-shadow logging is available through the production orchestrator.
-  It writes `production/logs/performance_v1_shadow_predictions.csv` when the
-  local side artifact and `feature_medians.json` exist, and it does not affect
-  betting decisions, `prediction_log.csv`, or the production model registry.
+  It writes `production/logs/performance_v1_shadow_predictions.csv` when local
+  side artifacts are present. The default forward set logs one-hot
+  `performance_v1` candidates for XGBoost, CatBoost, LightGBM, and the best NN
+  screen. These rows do not affect betting decisions, `prediction_log.csv`, or
+  the production model registry.
+- When `auto_settle.py` settles the corresponding operational prediction, it
+  also copies `actual_winner`, score, and correctness fields onto matching
+  forward shadow rows. This is scoring already-logged probabilities, not
+  recomputing historical inference.
 - Serve/stat coverage is uneven by source and era, especially for Futures.
 - NN performance improved but still trails tree models on this fixed split.
 
@@ -168,9 +174,10 @@ To enable this specific side model locally, keep the side artifact under:
 results/professional_tennis/experiments/2026-04-25/xgboost/performance_v1__xgb_depth5_recency_hl_12y/
 ```
 
-The shadow predictor requires both `model.json` and `feature_medians.json`.
-The medians should be generated from the training split for the same side
-dataset/model run; do not use live rows or the test era to choose them.
+The XGBoost shadow predictor requires both `model.json` and
+`feature_medians.json`. The CatBoost, LightGBM, and NN one-hot shadow candidates
+reuse the same training-split medians for missing live features. Do not use live
+rows or the test era to choose fill values.
 
 For a controlled historical live-log check, backfill only exact feature-snapshot
 rows into a separate side log:

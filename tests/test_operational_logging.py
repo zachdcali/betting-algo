@@ -126,6 +126,106 @@ def test_auto_settle_reports_ta_unfinished_before_opponent_not_found(monkeypatch
     assert result["ta_match_date_found"] == "2026-05-13"
 
 
+def test_auto_settle_prefers_context_match_over_closer_wrong_event():
+    import auto_settle
+
+    candidates = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-13",
+                "event": "Lyon",
+                "surface": "Clay",
+                "round": "R32",
+                "opp_name": "Player Two",
+                "result": "W",
+            },
+            {
+                "date": "2026-05-10",
+                "event": "Rome",
+                "surface": "Clay",
+                "round": "R32",
+                "opp_name": "Player Two",
+                "result": "L",
+            },
+        ]
+    )
+    context = auto_settle._build_settlement_context(
+        tournament="ATP - Rome",
+        round_code="R32",
+        surface="Clay",
+    )
+
+    row, status, evidence = auto_settle._select_best_settlement_candidate(
+        candidates,
+        pd.Timestamp("2026-05-13"),
+        context,
+    )
+
+    assert status == "matched"
+    assert row["event"] == "Rome"
+    assert evidence["score"] >= auto_settle.MIN_SETTLEMENT_SCORE
+
+
+def test_auto_settle_leaves_repeated_same_opponent_ambiguous():
+    import auto_settle
+
+    candidates = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-13",
+                "event": "Rome",
+                "surface": "Clay",
+                "round": "R32",
+                "opp_name": "Player Two",
+                "result": "W",
+            },
+            {
+                "date": "2026-05-13",
+                "event": "Rome",
+                "surface": "Clay",
+                "round": "R32",
+                "opp_name": "Player Two",
+                "result": "L",
+            },
+        ]
+    )
+    context = auto_settle._build_settlement_context(
+        tournament="Rome",
+        round_code="R32",
+        surface="Clay",
+    )
+
+    row, status, evidence = auto_settle._select_best_settlement_candidate(
+        candidates,
+        pd.Timestamp("2026-05-13"),
+        context,
+    )
+
+    assert row is None
+    assert status == "ambiguous_match"
+    assert evidence["candidates"] == 2
+
+
+def test_auto_settle_skips_rows_before_settlement_grace_period():
+    import auto_settle
+
+    row = pd.Series(
+        {
+            "match_start_time": "5/13/26 6:00 AM",
+            "match_date": "2026-05-13",
+        }
+    )
+
+    eligible, reason = auto_settle._is_old_enough_to_settle(
+        row,
+        min_age_hours=18,
+        now=pd.Timestamp("2026-05-13 12:00:00").to_pydatetime(),
+    )
+
+    assert eligible is False
+    assert "min_age_hours=18.0" in reason
+
+
 def test_bet_tracker_skips_duplicate_pending_bets():
     from utils.bet_tracker import BetTracker
 

@@ -35,6 +35,9 @@ class TennisAbstractScraper:
     def __init__(self, rate_limit_delay: float = DEFAULT_DELAY):
         self.rate_limit_delay = rate_limit_delay
         self.last_request_time = 0
+        self.rate_limit_hits = 0
+        self.last_http_status = None
+        self.last_fetch_url = ""
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -50,14 +53,18 @@ class TennisAbstractScraper:
     def _fetch_with_retry(self, url: str, retries: int = MAX_RETRIES) -> Optional[str]:
         """Fetch URL with retries and rate limiting"""
         import requests as _requests
+        self.last_fetch_url = url
         for attempt in range(retries):
             try:
                 self._rate_limit()
                 response = self.session.get(url, timeout=15)
+                self.last_http_status = response.status_code
                 response.raise_for_status()
                 return response.text
             except _requests.exceptions.HTTPError as e:
+                self.last_http_status = e.response.status_code if e.response is not None else None
                 if e.response is not None and e.response.status_code == 429:
+                    self.rate_limit_hits += 1
                     wait = 30 + (attempt * 15)  # 30s, 45s, 60s
                     print(f"  429 rate limited — waiting {wait}s before retry {attempt + 1}/{retries}...")
                     time.sleep(wait)

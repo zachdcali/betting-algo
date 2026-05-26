@@ -71,6 +71,9 @@ SETTLEMENT_AUDIT_COLUMNS = [
     "ta_match_date_found",
     "ta_event_found",
     "ta_round_found",
+    "ta_surface_found",
+    "settlement_score",
+    "settlement_evidence",
     "actual_winner",
     "score",
 ]
@@ -102,6 +105,9 @@ RUN_HISTORY_COLUMNS = [
     "settlement_newly_settled",
     "settlement_auto_settled_bets",
     "settlement_reason_summary",
+    "performance_shadow_attempts",
+    "performance_shadow_logged",
+    "performance_shadow_models_loaded",
     "error_message",
 ]
 
@@ -204,6 +210,9 @@ def log_settlement_event(
     ta_match_date_found: str = "",
     ta_event_found: str = "",
     ta_round_found: str = "",
+    ta_surface_found: str = "",
+    settlement_score=None,
+    settlement_evidence=None,
     actual_winner=None,
     score: str = "",
 ) -> bool:
@@ -239,6 +248,9 @@ def log_settlement_event(
         "ta_match_date_found": ta_match_date_found,
         "ta_event_found": ta_event_found,
         "ta_round_found": ta_round_found,
+        "ta_surface_found": ta_surface_found,
+        "settlement_score": settlement_score,
+        "settlement_evidence": _serialize(settlement_evidence or ""),
         "actual_winner": actual_winner,
         "score": score,
     }

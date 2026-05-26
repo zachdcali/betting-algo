@@ -44,6 +44,8 @@ What that does:
 - builds 141 live features from Tennis Abstract
 - skips matches that have already reached the configured pre-start cutoff, or that already appear in TA history as completed, to keep the current match from leaking into features
 - scores the slate with NN, XGBoost, and Random Forest
+- logs configured `performance_v1` side-model shadow probabilities when the
+  granular score/stat features are available; these do not affect bet selection
 - writes per-run feature logs and bet slips
 - logs immutable prediction and odds snapshots
 - updates the deduped live prediction log
@@ -62,7 +64,8 @@ What that does:
 - `prediction_logger.py`
   Deduped opening log plus append-only prediction/odds history
 - `auto_settle.py`
-  Settles `prediction_log.csv` from Tennis Abstract and now syncs tracked bets too
+  Settles `prediction_log.csv` from Tennis Abstract, syncs tracked bets, and
+  scores matching rows in the `performance_v1` shadow log
 - `sync_bet_tracker.py`
   Backfills tracked bet settlement from already-settled prediction rows
 - `analyze_predictions.py`
@@ -86,7 +89,8 @@ What that does:
   Per-run feature snapshots keyed by stable match identifiers.
 - `logs/performance_v1_shadow_predictions.csv`
   Optional forward side-model log for the `performance_v1` score/stat
-  experiment. It is not used for staking or production settlement.
+  experiment. It can include the configured XGBoost, CatBoost, LightGBM, and NN
+  side candidates. It is not used for staking or production settlement.
 - `logs/performance_v1_shadow_backfill.csv`
   Optional controlled backfill for exact feature-snapshot rows. It should not be
   mixed with forward live-shadow evidence.
@@ -106,6 +110,12 @@ For predictions:
 ```bash
 python auto_settle.py
 ```
+
+Defaults are intentionally gentle on Tennis Abstract and conservative about
+identity matching: 18-hour post-start grace period, 75 eligible rows per run,
+8 seconds between TA requests, and early stop/cooldown on repeated 429s. The
+settler scores opponent/date/tournament/surface/round evidence; ambiguous or
+low-confidence matches remain pending for a later pass.
 
 For tracked bets that predate the new auto-sync path:
 

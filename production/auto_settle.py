@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import os
 import re
@@ -22,6 +23,7 @@ from collections import Counter
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+from difflib import SequenceMatcher
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "scraping"))
@@ -34,7 +36,15 @@ from logging_utils import make_run_id, utc_now
 from prediction_logger import upgrade_prediction_log
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
-SCRAPER = TennisAbstractScraper(rate_limit_delay=3.0)
+DEFAULT_RATE_LIMIT_DELAY = 8.0
+DEFAULT_MIN_SETTLEMENT_AGE_HOURS = 18.0
+DEFAULT_MAX_CANDIDATES = 75
+DEFAULT_MAX_RATE_LIMITS = 5
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
+MIN_SETTLEMENT_SCORE = 65
+AMBIGUITY_MARGIN = 6
+
+SCRAPER = TennisAbstractScraper(rate_limit_delay=DEFAULT_RATE_LIMIT_DELAY)
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +116,257 @@ def _resolve_slug(player_name: str, calc: TAFeatureCalculator) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Match identity scoring
+# ---------------------------------------------------------------------------
+
+def _clean_optional(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "none", "null"}:
+        return ""
+    return text
+
+
+def _normalize_text(value) -> str:
+    text = _clean_optional(value).lower()
+    text = re.sub(r"[^a-z0-9\s]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _token_set(value) -> set[str]:
+    stop = {
+        "atp",
+        "wta",
+        "itf",
+        "men",
+        "mens",
+        "women",
+        "womens",
+        "singles",
+        "open",
+        "cup",
+        "challenger",
+        "french",
+    }
+    return {tok for tok in _normalize_text(value).split() if len(tok) > 2 and tok not in stop}
+
+
+def _event_similarity(expected: str, found: str) -> float | None:
+    expected_clean = _normalize_text(expected)
+    found_clean = _normalize_text(found)
+    if not expected_clean or not found_clean:
+        return None
+    expected_tokens = _token_set(expected_clean)
+    found_tokens = _token_set(found_clean)
+    token_score = 0.0
+    if expected_tokens and found_tokens:
+        token_score = len(expected_tokens & found_tokens) / len(expected_tokens | found_tokens)
+    text_score = SequenceMatcher(None, expected_clean, found_clean).ratio()
+    return max(token_score, text_score)
+
+
+def _normalize_round(value: str) -> str:
+    text = _clean_optional(value).upper().replace(" ", "")
+    aliases = {
+        "ROUND128": "R128",
+        "ROUND64": "R64",
+        "ROUND32": "R32",
+        "ROUND16": "R16",
+        "1R": "R128",
+        "2R": "R64",
+        "3R": "R32",
+        "4R": "R16",
+        "QUARTERFINAL": "QF",
+        "QUARTERFINALS": "QF",
+        "SEMIFINAL": "SF",
+        "SEMIFINALS": "SF",
+        "FINAL": "F",
+    }
+    return aliases.get(text, text)
+
+
+def _normalize_surface(value: str) -> str:
+    text = _clean_optional(value).strip().title()
+    aliases = {"Indoor Hard": "Hard"}
+    return aliases.get(text, text)
+
+
+def _score_date_diff(diff_days: float | None) -> int:
+    if diff_days is None:
+        return 0
+    if diff_days <= 1:
+        return 25
+    if diff_days <= 7:
+        return 20
+    if diff_days <= 14:
+        return 12
+    if diff_days <= 21:
+        return 4
+    return -18
+
+
+def _build_settlement_context(
+    *,
+    tournament: str = "",
+    round_code: str = "",
+    surface: str = "",
+) -> dict:
+    return {
+        "tournament": _clean_optional(tournament),
+        "round": _normalize_round(round_code),
+        "surface": _normalize_surface(surface),
+    }
+
+
+def _score_settlement_candidate(candidate: pd.Series, match_date, context: dict) -> tuple[int, dict]:
+    """
+    Score a same-opponent TA result against the logged prediction metadata.
+
+    TA dates are tournament start dates in this table, not exact match dates, so
+    the score intentionally combines a wide date signal with tournament,
+    surface, and round evidence instead of requiring exact date equality.
+    """
+    score = 50
+    evidence: dict[str, object] = {}
+
+    found_date = pd.to_datetime(candidate.get("date"), errors="coerce")
+    diff_days = None
+    if pd.notna(found_date) and pd.notna(match_date):
+        diff_days = abs((found_date.normalize() - match_date.normalize()).days)
+    evidence["date_diff_days"] = diff_days
+    score += _score_date_diff(diff_days)
+
+    expected_event = context.get("tournament", "")
+    found_event = _clean_optional(candidate.get("event", ""))
+    event_similarity = _event_similarity(expected_event, found_event)
+    evidence["event_similarity"] = round(event_similarity, 3) if event_similarity is not None else None
+    if event_similarity is not None:
+        if event_similarity >= 0.72:
+            score += 22
+        elif event_similarity >= 0.45:
+            score += 10
+        elif expected_event and found_event:
+            score -= 14
+
+    expected_surface = context.get("surface", "")
+    found_surface = _normalize_surface(candidate.get("surface", ""))
+    evidence["surface_match"] = None
+    if expected_surface:
+        evidence["surface_match"] = found_surface == expected_surface
+        score += 10 if found_surface == expected_surface else -12
+
+    expected_round = context.get("round", "")
+    found_round = _normalize_round(candidate.get("round", ""))
+    evidence["round_match"] = None
+    if expected_round:
+        evidence["round_match"] = found_round == expected_round
+        score += 12 if found_round == expected_round else -6
+
+    evidence["ta_event"] = found_event
+    evidence["ta_surface"] = found_surface
+    evidence["ta_round"] = found_round
+    evidence["score"] = score
+    return score, evidence
+
+
+def _select_best_settlement_candidate(
+    found: pd.DataFrame,
+    match_date,
+    context: dict,
+) -> tuple[pd.Series | None, str, dict]:
+    scored = []
+    for _, candidate in found.iterrows():
+        score, evidence = _score_settlement_candidate(candidate, match_date, context)
+        scored.append((score, evidence, candidate))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if not scored:
+        return None, "opponent_not_found", {}
+
+    top_score, top_evidence, top_row = scored[0]
+    if top_score < MIN_SETTLEMENT_SCORE:
+        return None, "low_confidence_match", {
+            "best_score": top_score,
+            "best_evidence": top_evidence,
+            "candidates": len(scored),
+        }
+
+    if len(scored) > 1:
+        second_score, second_evidence, _ = scored[1]
+        if top_score - second_score <= AMBIGUITY_MARGIN:
+            return None, "ambiguous_match", {
+                "best_score": top_score,
+                "second_score": second_score,
+                "best_evidence": top_evidence,
+                "second_evidence": second_evidence,
+                "candidates": len(scored),
+            }
+
+    top_evidence["candidates"] = len(scored)
+    return top_row, "matched", top_evidence
+
+
+def _parse_match_start_time(match_start_time: str, match_date: str = "", now: datetime | None = None):
+    now = now or datetime.now()
+    text = _clean_optional(match_start_time)
+    for fmt in ("%m/%d/%y %I:%M %p", "%m/%d/%Y %I:%M %p", "%m/%d/%y", "%m/%d/%Y"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if "%I:%M %p" not in fmt:
+                parsed = parsed.replace(hour=12, minute=0)
+            return parsed
+        except ValueError:
+            pass
+
+    time_match = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", text, re.I)
+    parsed_time = None
+    if time_match:
+        try:
+            parsed_time = datetime.strptime(time_match.group(1).upper(), "%I:%M %p")
+        except ValueError:
+            parsed_time = None
+
+    lower = text.lower()
+    if lower.startswith("today") and parsed_time:
+        return now.replace(hour=parsed_time.hour, minute=parsed_time.minute, second=0, microsecond=0)
+    if lower.startswith("tomorrow") and parsed_time:
+        base = now + timedelta(days=1)
+        return base.replace(hour=parsed_time.hour, minute=parsed_time.minute, second=0, microsecond=0)
+
+    parsed_date = pd.to_datetime(match_date, errors="coerce")
+    if pd.notna(parsed_date):
+        fallback = parsed_date.to_pydatetime()
+        if parsed_time:
+            return fallback.replace(hour=parsed_time.hour, minute=parsed_time.minute, second=0, microsecond=0)
+        return fallback.replace(hour=12, minute=0, second=0, microsecond=0)
+    return None
+
+
+def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime | None = None) -> tuple[bool, str]:
+    now = now or datetime.now()
+    start_dt = _parse_match_start_time(
+        str(row.get("match_start_time", "")),
+        str(row.get("match_date", "")),
+        now=now,
+    )
+    if start_dt is None:
+        return True, ""
+    age_hours = (now - start_dt).total_seconds() / 3600
+    if age_hours < min_age_hours:
+        return False, f"match_start_age_hours={age_hours:.1f} < min_age_hours={min_age_hours:.1f}"
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
 # Core settle logic
 # ---------------------------------------------------------------------------
 
 def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
                         calc: TAFeatureCalculator,
+                        tournament: str = "",
+                        round_code: str = "",
+                        surface: str = "",
                         session_cache: dict | None = None,
                         dry_run: bool = False) -> dict:
     """
@@ -128,10 +384,15 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 
     slug1 = _resolve_slug(p1, calc)
     current_year = datetime.now().year
-    years = [current_year]
-    # Include previous year if match_date was in prior year
-    if match_date.year < current_year:
-        years.append(match_date.year)
+    start_year = min(int(match_date.year), current_year)
+    end_year = max(int(match_date.year), current_year)
+    years = list(range(start_year, end_year + 1))
+
+    context = _build_settlement_context(
+        tournament=tournament,
+        round_code=round_code,
+        surface=surface,
+    )
 
     print(f"  Checking TA for {p1} ({slug1}) vs {p2}...")
     matches = SCRAPER.get_player_matches(
@@ -208,13 +469,27 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
             'ta_player_slug': slug1,
         }
 
-    # If multiple matches vs same opponent in window, pick closest to logged date
-    if len(found) > 1:
-        found = found.copy()
-        found['_date_diff'] = (found['date'] - match_date).abs()
-        found = found.sort_values('_date_diff')
+    row, selection_status, selection_evidence = _select_best_settlement_candidate(
+        found,
+        match_date,
+        context,
+    )
+    if row is None:
+        detail = json.dumps(selection_evidence, sort_keys=True)
+        if selection_status == "ambiguous_match":
+            print(f"    Ambiguous TA matches vs '{p2}' — leaving unsettled")
+            return {
+                'status': 'ambiguous_match',
+                'outcome_detail': detail,
+                'ta_player_slug': slug1,
+            }
+        print(f"    Low-confidence TA match vs '{p2}' — leaving unsettled")
+        return {
+            'status': selection_status,
+            'outcome_detail': detail,
+            'ta_player_slug': slug1,
+        }
 
-    row = found.iloc[0]
     result = str(row.get('result', '')).upper()
     score = str(row.get('score', ''))
     match_date_found = row['date'].strftime('%Y-%m-%d') if pd.notna(row['date']) else '?'
@@ -234,6 +509,9 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
             'ta_match_date_found': match_date_found,
             'ta_event_found': str(row.get('event', '')),
             'ta_round_found': str(row.get('round', '')),
+            'ta_surface_found': str(row.get('surface', '')),
+            'settlement_score': selection_evidence.get('score'),
+            'settlement_evidence': selection_evidence,
         }
 
     print(f"    Found result ({match_date_found}): {winner_name} won  |  score: {score}")
@@ -246,7 +524,13 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
         'ta_match_date_found': match_date_found,
         'ta_event_found': str(row.get('event', '')),
         'ta_round_found': str(row.get('round', '')),
-        'outcome_detail': f"{winner_name} won",
+        'ta_surface_found': str(row.get('surface', '')),
+        'settlement_score': selection_evidence.get('score'),
+        'settlement_evidence': selection_evidence,
+        'outcome_detail': (
+            f"{winner_name} won | settlement_score={selection_evidence.get('score')} | "
+            f"evidence={json.dumps(selection_evidence, sort_keys=True)}"
+        ),
     }
 
 
@@ -342,6 +626,11 @@ def run(
     include_market_only: bool = False,
     run_id: str | None = None,
     record_run_history: bool | None = None,
+    min_age_hours: float = DEFAULT_MIN_SETTLEMENT_AGE_HOURS,
+    max_candidates: int | None = DEFAULT_MAX_CANDIDATES,
+    rate_limit_delay: float = DEFAULT_RATE_LIMIT_DELAY,
+    max_rate_limits: int = DEFAULT_MAX_RATE_LIMITS,
+    rate_limit_cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
 ):
     started = utc_now()
     owns_run_id = run_id is None
@@ -379,6 +668,9 @@ def run(
         'settlement_reason_summary': {},
         'error_message': '',
     }
+    SCRAPER.rate_limit_delay = rate_limit_delay
+    if hasattr(SCRAPER, 'rate_limit_hits'):
+        SCRAPER.rate_limit_hits = 0
     if record_run_history:
         upsert_run_history(summary)
 
@@ -405,9 +697,29 @@ def run(
         pending = pending[~pending['record_status'].isin(['stale_no_model'])]
     if not include_market_only:
         pending = pending[pending['model_p1_prob'].notna()]
+    age_skip_reasons = []
+    if min_age_hours > 0 and not pending.empty:
+        eligible_mask = []
+        for _, candidate in pending.iterrows():
+            eligible, reason = _is_old_enough_to_settle(candidate, min_age_hours=min_age_hours)
+            eligible_mask.append(eligible)
+            if not eligible:
+                age_skip_reasons.append(reason)
+        pending = pending[pd.Series(eligible_mask, index=pending.index)].copy()
+
+    if not pending.empty:
+        sort_cols = [col for col in ["match_date", "match_start_time", "p1", "p2"] if col in pending.columns]
+        pending = pending.sort_values(sort_cols) if sort_cols else pending
+        if max_candidates and max_candidates > 0:
+            pending = pending.head(max_candidates)
+
     summary['settlement_candidates'] = len(pending)
     if pending.empty:
-        print("No unsettled predictions.")
+        if age_skip_reasons:
+            print(f"No old-enough unsettled predictions. Skipped {len(age_skip_reasons)} too-recent row(s).")
+            summary['settlement_reason_summary'] = {'too_recent_to_settle': len(age_skip_reasons)}
+        else:
+            print("No unsettled predictions.")
         show_stats(df)
         summary['status'] = 'success'
         summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
@@ -415,7 +727,10 @@ def run(
             upsert_run_history(summary)
         return summary
 
-    print(f"Found {len(pending)} unsettled prediction(s) to check\n")
+    print(f"Found {len(pending)} unsettled prediction(s) to check")
+    if age_skip_reasons:
+        print(f"Skipped {len(age_skip_reasons)} too-recent prediction(s) before hitting TA")
+    print(f"TA pacing: {rate_limit_delay:.1f}s minimum between requests, stop after {max_rate_limits} rate-limit hit(s)\n")
 
     # Load player mapping once
     calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
@@ -426,6 +741,9 @@ def run(
     newly_settled = 0
     newly_settled_bets = 0
     reason_counts = Counter()
+    if age_skip_reasons:
+        reason_counts['too_recent_to_settle'] = len(age_skip_reasons)
+    stopped_for_rate_limit = False
 
     for idx, row in pending.iterrows():
         p1 = str(row['p1'])
@@ -434,16 +752,21 @@ def run(
         print(f"\n[{idx}] {p1} vs {p2}  ({row.get('tournament', '')}  {match_date})")
         print(f"     Model: {float(row['model_p1_prob']):.0%} P1 | Market: {float(row['market_p1_prob']):.0%} P1")
 
+        rate_hits_before = getattr(SCRAPER, 'rate_limit_hits', 0)
         result = try_settle_from_ta(
             p1,
             p2,
             match_date,
             calc,
+            tournament=str(row.get('tournament', '')),
+            round_code=str(row.get('round', '')),
+            surface=str(row.get('surface', '')),
             session_cache=session_cache,
             dry_run=dry_run,
         )
         outcome_code = result.get('status', 'unknown')
         reason_counts[outcome_code] += 1
+        rate_hits_after = getattr(SCRAPER, 'rate_limit_hits', 0)
         log_settlement_event(
             run_id=run_id,
             dry_run=dry_run,
@@ -465,9 +788,24 @@ def run(
             ta_match_date_found=result.get('ta_match_date_found', ''),
             ta_event_found=result.get('ta_event_found', ''),
             ta_round_found=result.get('ta_round_found', ''),
+            ta_surface_found=result.get('ta_surface_found', ''),
+            settlement_score=result.get('settlement_score', ''),
+            settlement_evidence=result.get('settlement_evidence', {}),
             actual_winner=result.get('actual_winner'),
             score=result.get('score', ''),
         )
+
+        if rate_hits_after > rate_hits_before:
+            hit_delta = rate_hits_after - rate_hits_before
+            reason_counts['ta_rate_limited'] += hit_delta
+            print(f"  ⚠️ TA rate limit observed ({rate_hits_after} total hit(s))")
+            if rate_hits_after >= max_rate_limits:
+                print("  Stopping settlement early to protect TA access; rerun later to resume.")
+                stopped_for_rate_limit = True
+                break
+            if rate_limit_cooldown_seconds > 0:
+                print(f"  Cooling down {rate_limit_cooldown_seconds:.0f}s before the next candidate...")
+                time.sleep(rate_limit_cooldown_seconds)
 
         if outcome_code != 'matched_and_settled':
             print(f"  → Not settled yet ({outcome_code})")
@@ -532,12 +870,20 @@ def run(
             print(f"  💰 Auto-settled {settled_bets} pending bet(s)")
             newly_settled_bets += settled_bets
 
-        # Rate limit between players
-        time.sleep(3.0)
-
     if not dry_run:
         df.to_csv(LOG_PATH, index=False)
         df = upgrade_prediction_log(LOG_PATH, stale_days=stale_days, write=True)
+        try:
+            from shadow.performance_v1_shadow import sync_shadow_settlements
+
+            shadow_synced = sync_shadow_settlements(
+                Path(__file__).parent / "logs" / "performance_v1_shadow_predictions.csv",
+                LOG_PATH,
+            )
+            if shadow_synced:
+                print(f"Synced settlement outcomes onto {shadow_synced} shadow prediction row(s)")
+        except Exception as exc:
+            print(f"  ⚠️ Shadow settlement sync failed (non-fatal): {exc}")
         print(f"\nSaved {newly_settled} newly settled prediction(s) to prediction_log.csv")
         if newly_settled_bets:
             print(f"Auto-settled {newly_settled_bets} pending tracked bet(s)")
@@ -545,7 +891,7 @@ def run(
     summary['settlement_newly_settled'] = newly_settled
     summary['settlement_auto_settled_bets'] = newly_settled_bets
     summary['settlement_reason_summary'] = dict(reason_counts)
-    summary['status'] = 'success'
+    summary['status'] = 'stopped_rate_limited' if stopped_for_rate_limit else 'success'
     summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
     if record_run_history:
         upsert_run_history(summary)
@@ -560,6 +906,11 @@ if __name__ == '__main__':
     parser.add_argument('--stats', action='store_true', help='Show accuracy stats only')
     parser.add_argument('--stale-days', type=int, default=7, help='Mark legacy no-model rows older than this as stale and skip them')
     parser.add_argument('--include-market-only', action='store_true', help='Also check old market-only rows with no model prediction')
+    parser.add_argument('--min-age-hours', type=float, default=DEFAULT_MIN_SETTLEMENT_AGE_HOURS, help='Only check matches at least this many hours after scheduled start/date fallback')
+    parser.add_argument('--max-candidates', type=int, default=DEFAULT_MAX_CANDIDATES, help='Maximum eligible unsettled rows to check in this run; use 0 for no cap')
+    parser.add_argument('--rate-limit-delay', type=float, default=DEFAULT_RATE_LIMIT_DELAY, help='Minimum seconds between Tennis Abstract HTTP requests')
+    parser.add_argument('--max-rate-limits', type=int, default=DEFAULT_MAX_RATE_LIMITS, help='Stop the run after this many observed TA 429 responses')
+    parser.add_argument('--rate-limit-cooldown-seconds', type=float, default=DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS, help='Cooldown after a TA 429 response before continuing')
     args = parser.parse_args()
 
     run(
@@ -567,4 +918,9 @@ if __name__ == '__main__':
         stats_only=args.stats,
         stale_days=args.stale_days,
         include_market_only=args.include_market_only,
+        min_age_hours=args.min_age_hours,
+        max_candidates=None if args.max_candidates == 0 else args.max_candidates,
+        rate_limit_delay=args.rate_limit_delay,
+        max_rate_limits=args.max_rate_limits,
+        rate_limit_cooldown_seconds=args.rate_limit_cooldown_seconds,
     )

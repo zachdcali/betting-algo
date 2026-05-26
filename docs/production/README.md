@@ -26,14 +26,21 @@ Current production principles:
   `prediction_log.csv` with `features_complete=False`; clean accuracy reports
   exclude them, but settlement and bet reconciliation should not lose the row.
 - `logs/performance_v1_shadow_predictions.csv`, when present, is side-model
-  evidence only. It is intentionally separate from the operational prediction
-  log and does not imply promotion.
+  evidence only. It may contain multiple `performance_v1` side candidates
+  (currently XGBoost, CatBoost, LightGBM, and NN one-hot artifacts) plus
+  settlement scoring columns. It is intentionally separate from the operational
+  prediction log and does not imply promotion.
 - Old rows without immutable snapshot ids are legacy history and should be treated differently from new schema-backed rows.
 - Bovada scheduled start times and TA match-state checks are part of the safety layer: the orchestrator skips feature generation once a match is at/past the configured pre-start cutoff or appears to have already completed in TA history, so delayed runs do not drift into post-start inference.
 - Rerunning a slate should not double-log open betting recommendations:
   `BetTracker.log_bets()` dedupes pending bets by match and bet side. Use
   `python main.py --dry-run` when you want odds/features/predictions exercised
   without starting a betting session or writing `logs/all_bets.csv`.
+- Standalone settlement is paced and conservative by default: only matches at
+  least 18 hours past start/date fallback are checked, at most 75 eligible rows
+  are attempted per run, TA requests are spaced by 8 seconds, and repeated 429s
+  stop the run early. The matcher scores opponent/date/tournament/surface/round
+  evidence and leaves ambiguous or low-confidence results pending.
 - `logs/audit/run_history.csv`, `logs/audit/skipped_live_matches.csv`, and `logs/audit/settlement_audit.csv` are the audit layer for dashboards and ops debugging.
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.
