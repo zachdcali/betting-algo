@@ -226,6 +226,39 @@ def test_auto_settle_skips_rows_before_settlement_grace_period():
     assert "min_age_hours=18.0" in reason
 
 
+def test_auto_settle_recent_attempt_backoff_ignores_dry_runs(tmp_path):
+    import auto_settle
+
+    audit_path = tmp_path / "settlement_audit.csv"
+    pd.DataFrame(
+        [
+            {
+                "logged_at": "2026-05-13T12:00:00+00:00",
+                "dry_run": False,
+                "row_index": 12,
+            },
+            {
+                "logged_at": "2026-05-13T12:00:00+00:00",
+                "dry_run": True,
+                "row_index": 13,
+            },
+            {
+                "logged_at": "2026-05-12T12:00:00+00:00",
+                "dry_run": False,
+                "row_index": 14,
+            },
+        ]
+    ).to_csv(audit_path, index=False)
+
+    recent = auto_settle._recently_attempted_row_indexes(
+        audit_path=audit_path,
+        backoff_hours=18,
+        now=pd.Timestamp("2026-05-13T18:00:00+00:00"),
+    )
+
+    assert recent == {12}
+
+
 def test_bet_tracker_skips_duplicate_pending_bets():
     from utils.bet_tracker import BetTracker
 

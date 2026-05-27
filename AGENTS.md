@@ -81,7 +81,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Standalone settlement is intentionally paced for Tennis Abstract:
   `auto_settle.py` defaults to an 18-hour post-start grace period, 75 eligible
   candidates per run, an 8-second request delay, and early stop/cooldown on TA
-  429s. Use CLI flags only when you deliberately want a deeper backlog pass.
+  429s. It also skips rows attempted by real settlement runs within the last
+  18 hours so repeated catch-up passes move beyond stubborn old rows. Use CLI
+  flags only when you deliberately want a deeper backlog pass.
 - `ta_match_unfinished` in settlement audit means TA still lists the matchup as
   upcoming/unfinished and no completed result has posted yet.
 

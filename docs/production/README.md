@@ -39,8 +39,10 @@ Current production principles:
 - Standalone settlement is paced and conservative by default: only matches at
   least 18 hours past start/date fallback are checked, at most 75 eligible rows
   are attempted per run, TA requests are spaced by 8 seconds, and repeated 429s
-  stop the run early. The matcher scores opponent/date/tournament/surface/round
-  evidence and leaves ambiguous or low-confidence results pending.
+  stop the run early. Rows attempted by real settlement runs in the last 18
+  hours are skipped so immediate catch-up passes can progress through the
+  backlog. The matcher scores opponent/date/tournament/surface/round evidence
+  and leaves ambiguous or low-confidence results pending.
 - `logs/audit/run_history.csv`, `logs/audit/skipped_live_matches.csv`, and `logs/audit/settlement_audit.csv` are the audit layer for dashboards and ops debugging.
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.

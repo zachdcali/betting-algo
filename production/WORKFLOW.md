@@ -113,7 +113,8 @@ python auto_settle.py
 
 Defaults are intentionally gentle on Tennis Abstract and conservative about
 identity matching: 18-hour post-start grace period, 75 eligible rows per run,
-8 seconds between TA requests, and early stop/cooldown on repeated 429s. The
+8 seconds between TA requests, early stop/cooldown on repeated 429s, and an
+18-hour retry backoff for rows that a real settlement run just attempted. The
 settler scores opponent/date/tournament/surface/round evidence; ambiguous or
 low-confidence matches remain pending for a later pass.
 

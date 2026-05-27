@@ -98,9 +98,10 @@ tennis_env/bin/streamlit run dashboard/app.py
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - `auto_settle.py` now defaults to a safe backlog pace: 18-hour settlement
   grace period, 75 eligible rows per run, 8 seconds between TA requests, and
-  early stop/cooldown on repeated TA 429s. The matcher uses opponent plus
-  date/tournament/surface/round evidence and leaves ambiguous or
-  low-confidence rows pending.
+  early stop/cooldown on repeated TA 429s. It skips rows attempted by real
+  settlement runs in the last 18 hours so catch-up reruns move past stubborn
+  old misses. The matcher uses opponent plus date/tournament/surface/round
+  evidence and leaves ambiguous or low-confidence rows pending.
 - The audit CSVs under `logs/audit/` are the easiest foundation for future dashboards because they explain run outcomes, skipped matches, and settlement reasons directly instead of forcing you to reconstruct them from `prediction_log.csv`.
 - Settlement uses `ta_match_unfinished` when Tennis Abstract still lists the
   matchup as upcoming/unfinished, instead of grouping that state into

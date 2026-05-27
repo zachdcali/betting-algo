@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
 from features.ta_feature_calculator import TAFeatureCalculator
 from utils.bet_tracker import BetTracker
-from audit_logger import log_settlement_event, upsert_run_history
+from audit_logger import SETTLEMENT_AUDIT_LOG_PATH, log_settlement_event, upsert_run_history
 from logging_utils import make_run_id, utc_now
 from prediction_logger import upgrade_prediction_log
 
@@ -41,6 +41,7 @@ DEFAULT_MIN_SETTLEMENT_AGE_HOURS = 18.0
 DEFAULT_MAX_CANDIDATES = 75
 DEFAULT_MAX_RATE_LIMITS = 5
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
+DEFAULT_RETRY_BACKOFF_HOURS = 18.0
 MIN_SETTLEMENT_SCORE = 65
 AMBIGUITY_MARGIN = 6
 
@@ -358,6 +359,40 @@ def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime
     return True, ""
 
 
+def _recently_attempted_row_indexes(
+    *,
+    audit_path: Path = SETTLEMENT_AUDIT_LOG_PATH,
+    backoff_hours: float = DEFAULT_RETRY_BACKOFF_HOURS,
+    now=None,
+) -> set[int]:
+    """
+    Return prediction-log row indexes attempted recently by real settlement runs.
+
+    This keeps catch-up runs moving forward: an unresolved old row should not
+    block every immediate rerun while TA has no matching result.
+    """
+    if backoff_hours <= 0 or not Path(audit_path).exists():
+        return set()
+    try:
+        audit = pd.read_csv(audit_path, usecols=["logged_at", "dry_run", "row_index"])
+    except Exception:
+        return set()
+    if audit.empty:
+        return set()
+
+    logged_at = pd.to_datetime(audit["logged_at"], errors="coerce", utc=True)
+    reference = pd.Timestamp(now if now is not None else utc_now())
+    if reference.tzinfo is None:
+        reference = reference.tz_localize("UTC")
+    cutoff = reference.tz_convert("UTC") - pd.Timedelta(hours=backoff_hours)
+
+    dry_run = audit.get("dry_run", pd.Series(False, index=audit.index)).fillna(False).astype(str).str.lower()
+    is_real_attempt = ~dry_run.isin({"true", "1", "yes"})
+    recent = audit[is_real_attempt & logged_at.ge(cutoff)].copy()
+    indexes = pd.to_numeric(recent["row_index"], errors="coerce").dropna().astype(int)
+    return set(indexes)
+
+
 # ---------------------------------------------------------------------------
 # Core settle logic
 # ---------------------------------------------------------------------------
@@ -631,6 +666,7 @@ def run(
     rate_limit_delay: float = DEFAULT_RATE_LIMIT_DELAY,
     max_rate_limits: int = DEFAULT_MAX_RATE_LIMITS,
     rate_limit_cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    retry_backoff_hours: float = DEFAULT_RETRY_BACKOFF_HOURS,
 ):
     started = utc_now()
     owns_run_id = run_id is None
@@ -707,6 +743,13 @@ def run(
                 age_skip_reasons.append(reason)
         pending = pending[pd.Series(eligible_mask, index=pending.index)].copy()
 
+    recent_attempt_indexes = _recently_attempted_row_indexes(backoff_hours=retry_backoff_hours)
+    recent_attempt_count = 0
+    if recent_attempt_indexes and not pending.empty:
+        before_recent_filter = len(pending)
+        pending = pending[~pending.index.isin(recent_attempt_indexes)].copy()
+        recent_attempt_count = before_recent_filter - len(pending)
+
     if not pending.empty:
         sort_cols = [col for col in ["match_date", "match_start_time", "p1", "p2"] if col in pending.columns]
         pending = pending.sort_values(sort_cols) if sort_cols else pending
@@ -718,6 +761,9 @@ def run(
         if age_skip_reasons:
             print(f"No old-enough unsettled predictions. Skipped {len(age_skip_reasons)} too-recent row(s).")
             summary['settlement_reason_summary'] = {'too_recent_to_settle': len(age_skip_reasons)}
+        elif recent_attempt_count:
+            print(f"No unsettled predictions outside retry backoff. Skipped {recent_attempt_count} recently-attempted row(s).")
+            summary['settlement_reason_summary'] = {'recently_attempted': recent_attempt_count}
         else:
             print("No unsettled predictions.")
         show_stats(df)
@@ -730,6 +776,8 @@ def run(
     print(f"Found {len(pending)} unsettled prediction(s) to check")
     if age_skip_reasons:
         print(f"Skipped {len(age_skip_reasons)} too-recent prediction(s) before hitting TA")
+    if recent_attempt_count:
+        print(f"Skipped {recent_attempt_count} recently-attempted prediction(s) inside {retry_backoff_hours:.1f}h retry backoff")
     print(f"TA pacing: {rate_limit_delay:.1f}s minimum between requests, stop after {max_rate_limits} rate-limit hit(s)\n")
 
     # Load player mapping once
@@ -743,6 +791,8 @@ def run(
     reason_counts = Counter()
     if age_skip_reasons:
         reason_counts['too_recent_to_settle'] = len(age_skip_reasons)
+    if recent_attempt_count:
+        reason_counts['recently_attempted'] = recent_attempt_count
     stopped_for_rate_limit = False
 
     for idx, row in pending.iterrows():
@@ -911,6 +961,7 @@ if __name__ == '__main__':
     parser.add_argument('--rate-limit-delay', type=float, default=DEFAULT_RATE_LIMIT_DELAY, help='Minimum seconds between Tennis Abstract HTTP requests')
     parser.add_argument('--max-rate-limits', type=int, default=DEFAULT_MAX_RATE_LIMITS, help='Stop the run after this many observed TA 429 responses')
     parser.add_argument('--rate-limit-cooldown-seconds', type=float, default=DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS, help='Cooldown after a TA 429 response before continuing')
+    parser.add_argument('--retry-backoff-hours', type=float, default=DEFAULT_RETRY_BACKOFF_HOURS, help='Skip rows attempted by real settlement runs within this many hours; use 0 to disable')
     args = parser.parse_args()
 
     run(
@@ -923,4 +974,5 @@ if __name__ == '__main__':
         rate_limit_delay=args.rate_limit_delay,
         max_rate_limits=args.max_rate_limits,
         rate_limit_cooldown_seconds=args.rate_limit_cooldown_seconds,
+        retry_backoff_hours=args.retry_backoff_hours,
     )
