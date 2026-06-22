@@ -20,6 +20,12 @@ Feature-engineering priorities and candidate feature-set guardrails live in
 - promoted production versions:
   `production/models/model_registry.json`
   plus `docs/production/MODEL_RELEASES.md`
+- consolidated performance comparison (live settled + offline backtest):
+  the model evaluation ledger ([docs/modeling/MODEL_LEDGER.md](/Users/zachdodson/Documents/betting-algo/docs/modeling/MODEL_LEDGER.md)).
+  `python -m evaluation.ledger` ingests every experiment `summary.json` under
+  `results/professional_tennis/experiments/` into one offline table and scores
+  the live/shadow models on settled cohorts. Offline rows from different `split`
+  labels use different test eras and are not comparable across splits.
 
 ## Current Harness
 
