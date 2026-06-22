@@ -124,6 +124,29 @@ def _verdict(live: pd.DataFrame) -> str:
             )
         else:
             lines.append("No model beats the market on log loss on this cohort.")
+
+    # Calibration flag: slope << 1 means over-confident, the usual cause of bad log loss.
+    nonmkt = block[block.model != "market"].dropna(subset=["cal_slope"])
+    if not nonmkt.empty:
+        worst_cal = nonmkt.sort_values("cal_slope").iloc[0]
+        if float(worst_cal["cal_slope"]) < 0.6:
+            lines.append(
+                f"**Calibration:** `{worst_cal['model']}` is severely over-confident "
+                f"(slope {_fmt(worst_cal['cal_slope'],2)}; 1.0 = calibrated) — post-hoc "
+                f"calibration is the obvious lever."
+            )
+
+    # Best realized ROI across the full gold tier (includes shadows on their own coverage).
+    gold = live[live.tier == "gold"].dropna(subset=["roi_flat"])
+    if not gold.empty:
+        bestroi = gold.sort_values("roi_flat", ascending=False).iloc[0]
+        caveat = " (small sample — treat as a lead, not proof)" if int(bestroi["n"]) < 250 else ""
+        sign = "positive" if float(bestroi["roi_flat"]) > 0 else "negative (all models)"
+        lines.append(
+            f"**ROI:** best flat ROI on GOLD is `{bestroi['model']}` at "
+            f"{_fmt(100*bestroi['roi_flat'],1)}% over {int(bestroi['n_bets_flat'])} bets "
+            f"(n={int(bestroi['n'])}){caveat}. Sign: {sign}."
+        )
     return "\n".join(lines)
 
 
