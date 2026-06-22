@@ -136,17 +136,23 @@ def _verdict(live: pd.DataFrame) -> str:
                 f"calibration is the obvious lever."
             )
 
-    # Best realized ROI across the full gold tier (includes shadows on their own coverage).
-    gold = live[live.tier == "gold"].dropna(subset=["roi_flat"])
+    # Profitable models across the full gold tier (includes shadows on their own coverage).
+    # market is excluded: its edge versus the de-vigged market is ~0 by construction.
+    gold = live[(live.tier == "gold") & (live.model != "market")].dropna(subset=["roi_flat"])
     if not gold.empty:
-        bestroi = gold.sort_values("roi_flat", ascending=False).iloc[0]
-        caveat = " (small sample — treat as a lead, not proof)" if int(bestroi["n"]) < 250 else ""
-        sign = "positive" if float(bestroi["roi_flat"]) > 0 else "negative (all models)"
-        lines.append(
-            f"**ROI:** best flat ROI on GOLD is `{bestroi['model']}` at "
-            f"{_fmt(100*bestroi['roi_flat'],1)}% over {int(bestroi['n_bets_flat'])} bets "
-            f"(n={int(bestroi['n'])}){caveat}. Sign: {sign}."
-        )
+        pos = gold[gold["roi_flat"] > 0].sort_values("roi_flat", ascending=False)
+        if not pos.empty:
+            items = "; ".join(
+                f"`{r['model']}` {_fmt(100*r['roi_flat'],1)}% flat / {_fmt(100*r['roi_kelly'],1)}% Kelly "
+                f"({int(r['n_bets_flat'])} bets, n={int(r['n'])})"
+                for _, r in pos.iterrows()
+            )
+            lines.append(
+                f"**ROI (GOLD, profitable models):** {items}. Beating the vig (>0%) is the bar; "
+                f"treat n<250 as a lead, not proof."
+            )
+        else:
+            lines.append("**ROI:** no model is profitable on GOLD — every flat ROI is negative.")
     return "\n".join(lines)
 
 
