@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score, roc_curve
+from sklearn.metrics import roc_curve
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_DIR = REPO_ROOT / "production"
+if str(PRODUCTION_DIR) not in sys.path:
+    sys.path.insert(0, str(PRODUCTION_DIR))
+
+from evaluation import metrics as eval_metrics  # noqa: E402
+
 AUDIT_DIR = PRODUCTION_DIR / "logs" / "audit"
 LOGS_DIR = PRODUCTION_DIR / "logs"
 FEATURE_LOG_GLOB = "features_*.csv"
@@ -443,29 +449,6 @@ def build_apples_to_apples_rows(prediction_log: pd.DataFrame) -> pd.DataFrame:
     return settled
 
 
-def expected_calibration_error(y_true: pd.Series, y_prob: pd.Series, bins: int = 10) -> float | None:
-    if len(y_true) == 0:
-        return None
-    probs = np.asarray(y_prob, dtype=float)
-    truth = np.asarray(y_true, dtype=float)
-    bin_edges = np.linspace(0.0, 1.0, bins + 1)
-    ece = 0.0
-    total = len(probs)
-    for idx in range(bins):
-        left = bin_edges[idx]
-        right = bin_edges[idx + 1]
-        if idx == bins - 1:
-            mask = (probs >= left) & (probs <= right)
-        else:
-            mask = (probs >= left) & (probs < right)
-        if not np.any(mask):
-            continue
-        conf = probs[mask].mean()
-        acc = truth[mask].mean()
-        ece += np.abs(acc - conf) * (mask.sum() / total)
-    return float(ece)
-
-
 def build_metrics_summary(apples_df: pd.DataFrame) -> pd.DataFrame:
     if apples_df.empty:
         return pd.DataFrame()
@@ -482,7 +465,8 @@ def build_metrics_summary(apples_df: pd.DataFrame) -> pd.DataFrame:
         if prob_col not in apples_df.columns:
             continue
         probs = apples_df[prob_col].astype(float).clip(1e-6, 1 - 1e-6)
-        predicted = (probs >= 0.5).astype(int)
+        # Shared scoring implementation (see production/evaluation/metrics.py)
+        scores = eval_metrics.compute_all(y_true.to_numpy(), probs.to_numpy(), n_bins=10)
         versions = (
             ", ".join(sorted(apples_df[version_col].dropna().astype(str).unique()))
             if version_col and version_col in apples_df.columns
@@ -492,11 +476,11 @@ def build_metrics_summary(apples_df: pd.DataFrame) -> pd.DataFrame:
             {
                 "family": family,
                 "matches": int(len(apples_df)),
-                "accuracy": float((predicted == y_true).mean()),
-                "auc": float(roc_auc_score(y_true, probs)),
-                "brier": float(brier_score_loss(y_true, probs)),
-                "log_loss": float(log_loss(y_true, probs)),
-                "ece": expected_calibration_error(y_true, probs, bins=10),
+                "accuracy": scores["accuracy"],
+                "auc": scores["auc"],
+                "brier": scores["brier"],
+                "log_loss": scores["log_loss"],
+                "ece": scores["ece"],
                 "avg_confidence": float(np.maximum(probs, 1 - probs).mean()),
                 "versions": versions,
             }
