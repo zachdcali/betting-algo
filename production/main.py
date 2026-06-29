@@ -42,7 +42,7 @@ from shadow.performance_v1_shadow import (
 )
 from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
-from scraping.atp_rankings_scraper import fetch_atp_rankings, save_rankings
+from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 
 class LiveBettingOrchestrator:
     """Main orchestrator for live tennis betting system"""
@@ -941,20 +941,22 @@ class LiveBettingOrchestrator:
         return stats
 
     def _refresh_atp_rankings(self):
-        """Fetch and cache current ATP rankings (rank + points) from atptour.com."""
+        """Refresh ATP rankings (rank + points), falling back to cache — never silently to 500."""
         print("📊 Refreshing ATP rankings...")
-        try:
-            df = fetch_atp_rankings(headless=True)
-            if df.empty:
-                print("  ⚠️  ATP rankings scrape returned no data — Rank_Points will default to 500")
-                return
+        df, source = resolve_rankings(headless=True)
+        if source == "fresh":
             save_rankings(df)
-            # Reload into feature engine so it uses the freshly scraped data
             self.feature_engine._atp_rankings = df
-            print(f"  ✅ Loaded {len(df)} ranked players")
-        except Exception as e:
-            print(f"  ⚠️  ATP rankings refresh failed (non-fatal): {e}")
-            print("       Rank_Points will default to 500 for this run")
+            print(f"  ✅ Loaded {len(df)} ranked players (fresh scrape)")
+        elif source.startswith("cached"):
+            # Live scrape failed but cached rankings exist — use them rather than
+            # degrading every Rank_Points to 500. The cache date is surfaced so a
+            # stale cache is visible.
+            self.feature_engine._atp_rankings = df
+            print(f"  ↩️  Live scrape unavailable; using {source} ({len(df)} players). "
+                  f"Run scraping/atp_rankings_scraper.py to refresh the cache.")
+        else:
+            print("  ⚠️  No live or cached rankings available — Rank_Points will default to 500 this run")
 
     def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True, dry_run: bool = False) -> bool:
         """Run the complete betting pipeline with bet tracking"""

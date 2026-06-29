@@ -45,17 +45,28 @@ def fetch_atp_rankings(headless: bool = True, timeout_ms: int = 60000) -> pd.Dat
             )
         })
 
-        print(f"Loading ATP rankings page...")
-        page.goto(ATP_RANKINGS_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        time.sleep(8)  # ATP page is JS-rendered — wait for React to populate the table
-
-        # ATP rankings use class "lower-row" for each player row
-        table_rows = page.query_selector_all("tr.lower-row")
-        if not table_rows:
-            # Fallback: any tbody tr
-            table_rows = page.query_selector_all("table tbody tr")
+        print("Loading ATP rankings page...")
+        # The page is JS-rendered. A blind sleep intermittently parsed an empty
+        # table (the bug that silently aged out rankings). Instead, wait until the
+        # rows actually populate, and retry the load once if they don't.
+        table_rows = []
+        for attempt in range(2):
+            if attempt == 0:
+                page.goto(ATP_RANKINGS_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+            else:
+                print("  ATP table came back empty — retrying load once...")
+                page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.wait_for_function(
+                    "document.querySelectorAll('tr.lower-row, table tbody tr').length > 50",
+                    timeout=timeout_ms,
+                )
+            except Exception:
+                time.sleep(8)  # fall back to the old fixed wait if the predicate times out
+            table_rows = page.query_selector_all("tr.lower-row") or page.query_selector_all("table tbody tr")
+            if len(table_rows) > 50:
+                break
         print(f"Found {len(table_rows)} ranking rows")
-        print(f"Found {len(table_rows)} table rows")
 
         for tr in table_rows:
             cells = tr.query_selector_all("td")
@@ -192,6 +203,36 @@ def get_player_rank(player_name: str, df: Optional[pd.DataFrame] = None) -> Opti
     if df is None or df.empty:
         return None
     return _lookup(player_name, "rank", df)
+
+
+def resolve_rankings(headless: bool = True, _fetch=None, _load=None):
+    """Get current rankings with a robust fallback chain.
+
+    Tries a live scrape first; if that returns nothing or errors, falls back to
+    the cached ``data/atp_rankings.csv``. Returns ``(df, source)`` where source is:
+      - ``"fresh"``        live scrape succeeded
+      - ``"cached@<ts>"``  live failed/empty; using cached CSV (ts = its scraped_at)
+      - ``"none"``         no live data and no usable cache (callers default to 500)
+
+    ``_fetch``/``_load`` are injectable for testing.
+    """
+    fetch = _fetch or fetch_atp_rankings
+    load = _load or load_rankings
+    try:
+        df = fetch(headless=headless)
+        if df is not None and not df.empty:
+            return df, "fresh"
+        print("  ⚠️  ATP rankings live scrape returned no rows")
+    except Exception as e:  # network/playwright errors must not crash the pipeline
+        print(f"  ⚠️  ATP rankings live scrape error (non-fatal): {e}")
+
+    cached = load()
+    if cached is not None and not cached.empty:
+        asof = "unknown date"
+        if "scraped_at" in cached.columns and len(cached):
+            asof = str(cached["scraped_at"].iloc[0])
+        return cached, f"cached@{asof}"
+    return pd.DataFrame(), "none"
 
 
 if __name__ == "__main__":
