@@ -958,6 +958,22 @@ class LiveBettingOrchestrator:
         else:
             print("  ⚠️  No live or cached rankings available — Rank_Points will default to 500 this run")
 
+    def _refresh_database(self):
+        """Mirror the CSV logs into the SQLite DB after a run (additive, non-fatal).
+
+        The live pipeline still writes CSVs; this keeps logs/betting.db current so
+        the ledger/dashboard can query SQL. A failure here must never fail the run.
+        """
+        try:
+            import db as _db
+            prod_dir = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(prod_dir, "logs", "betting.db")
+            summary = _db.build_database(prod_dir, db_path)
+            print(f"  🗄️  SQLite refreshed: {summary.get('predictions', 0)} predictions, "
+                  f"{summary.get('shadow_predictions', 0)} shadow rows → logs/betting.db")
+        except Exception as e:
+            print(f"  ⚠️  SQLite refresh skipped (non-fatal): {e}")
+
     def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True, dry_run: bool = False) -> bool:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
@@ -1062,10 +1078,12 @@ class LiveBettingOrchestrator:
                     print(f"   Total pending bets: {len(pending_bets)}")
                     print(f"   Use 'python settle_bets.py {session_id}' to settle results later")
                 
+                self._refresh_database()
                 self._flush_run_history(status='success')
                 return True
             else:
                 print("📊 No profitable betting opportunities found")
+                self._refresh_database()
                 self._flush_run_history(status='success')
                 return False
                 
