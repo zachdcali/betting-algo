@@ -81,3 +81,26 @@ def test_edge_and_stake_path_runs(orchestrator):
     if not bet_slips.empty:
         assert "stake" in bet_slips.columns
         assert (bet_slips["stake"] > 0).all()
+
+
+def test_incomplete_feature_matches_are_never_bet(orchestrator):
+    """A match with defaulted/missing features must be logged but never staked,
+    even when it has a strong edge."""
+    common = dict(player1_win_prob=0.80, player2_win_prob=0.20, prediction_status="success",
+                  match_date="2026-06-30", surface="Grass", tournament="Test", round="R128",
+                  match_time="2026-06-30 10:00", event="Test Open")
+    preds = pd.DataFrame([
+        {**common, "player1_raw": "Complete A", "player2_raw": "Opp Alpha", "_has_defaulted_features": False},
+        {**common, "player1_raw": "Incomplete B", "player2_raw": "Opp Beta", "_has_defaulted_features": True},
+    ])
+    odds = pd.DataFrame([
+        dict(player1_raw="Complete A", player2_raw="Opp Alpha", player1_odds_decimal=2.0, player2_odds_decimal=2.0,
+             player1_implied_prob=0.5, player2_implied_prob=0.5, event="Test Open", match_time="2026-06-30 10:00"),
+        dict(player1_raw="Incomplete B", player2_raw="Opp Beta", player1_odds_decimal=2.0, player2_odds_decimal=2.0,
+             player1_implied_prob=0.5, player2_implied_prob=0.5, event="Test Open", match_time="2026-06-30 10:00"),
+    ])
+    slips = orchestrator.calculate_edges_and_stakes(preds, odds)
+    blob = slips.to_csv(index=False) if not slips.empty else ""
+    # complete match (strong edge) is bet; incomplete match is excluded entirely
+    assert "Complete A" in blob, "complete-feature match should be bettable"
+    assert "Incomplete B" not in blob and "Opp Beta" not in blob, "incomplete-feature match must not be staked"

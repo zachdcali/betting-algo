@@ -658,7 +658,24 @@ class LiveBettingOrchestrator:
             return pd.DataFrame()
         
         print(f"   📈 Using {len(successful_predictions)} successful predictions out of {len(predictions_df)} total")
-        
+
+        # Never stake on incomplete-feature matches. Rows whose features were
+        # defaulted/missing (e.g. matchup not yet in Tennis Abstract, unresolved
+        # round) are still logged for the record + settlement, but must not
+        # produce a bet — we only bet matches with complete, real features.
+        if '_has_defaulted_features' in successful_predictions.columns:
+            n_before = len(successful_predictions)
+            successful_predictions = successful_predictions[
+                ~successful_predictions['_has_defaulted_features'].astype(bool)
+            ].copy()
+            n_excluded = n_before - len(successful_predictions)
+            if n_excluded:
+                print(f"   🚫 Excluded {n_excluded} incomplete-feature match(es) from betting "
+                      f"(logged for the record, not staked)")
+            if successful_predictions.empty:
+                print("📊 No complete-feature matches available to bet")
+                return pd.DataFrame()
+
         # Calculate edges
         edges_df = calculate_betting_edges(successful_predictions, odds_df)
         
