@@ -35,14 +35,27 @@ def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
     s["y1"] = (s["actual_winner"].astype(float) == 1).astype(int)
     nunique = s.groupby("match_uid")["y1"].nunique()
     consistent = nunique[nunique == 1].index
-    s = s[s["match_uid"].isin(consistent)].drop_duplicates("match_uid")
+    # keep="last" = the most recently logged row, matching the operational
+    # "latest prediction wins" semantics and the DB's INSERT OR REPLACE.
+    s = s[s["match_uid"].isin(consistent)].drop_duplicates("match_uid", keep="last")
     return s.set_index("match_uid")["y1"]
+
+
+def _coerce_bool(series: pd.Series) -> pd.Series:
+    """Robustly coerce a truthy column to bool regardless of source representation.
+
+    CSVs give Python bools; a SQLite round-trip can yield "1"/"0" or "True"/"False"
+    strings or 1/0 ints. Normalize them all so cohort tiers behave identically
+    whether the data came from a CSV or the DB.
+    """
+    truthy = {"true", "1", "1.0", "t", "yes"}
+    return series.map(lambda v: str(v).strip().lower() in truthy).astype(bool)
 
 
 def _tier_flags(pred_log: pd.DataFrame) -> pd.DataFrame:
     f = pred_log.copy()
     if "features_complete" in f.columns:
-        f["is_complete"] = f["features_complete"].astype("boolean").fillna(False).astype(bool)
+        f["is_complete"] = _coerce_bool(f["features_complete"])
     else:
         f["is_complete"] = False
     lq = f["logging_quality"] if "logging_quality" in f.columns else pd.Series(index=f.index, dtype=object)
@@ -57,7 +70,7 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
     tiers = _tier_flags(pred_log).set_index("match_uid")
     settled = (
         pred_log[pred_log["match_uid"].isin(gt.index)]
-        .drop_duplicates("match_uid")
+        .drop_duplicates("match_uid", keep="last")
         .set_index("match_uid")
     )
     rows = []

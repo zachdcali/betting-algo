@@ -218,10 +218,17 @@ def main(argv=None):
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--report", required=True)
     ap.add_argument("--run-date", default=datetime.now().strftime("%Y-%m-%d"))
+    ap.add_argument("--db", default=None,
+                    help="Read logs from this SQLite DB (predictions/shadow_predictions tables) instead of CSVs")
     args = ap.parse_args(argv)
 
-    pred_log = cohorts.load_prediction_log(args.prod_dir)
-    shadow_log = cohorts.load_shadow_log(args.prod_dir)
+    if args.db:
+        import db as _db
+        pred_log = _db.read_table(args.db, "predictions")
+        shadow_log = _db.read_table(args.db, "shadow_predictions")
+    else:
+        pred_log = cohorts.load_prediction_log(args.prod_dir)
+        shadow_log = cohorts.load_shadow_log(args.prod_dir)
     scored = cohorts.build_scored_frame(pred_log, shadow_log)
     live = build_live_ledger(scored)
     offline_df = offline.discover_experiment_metrics(args.experiments_root)
