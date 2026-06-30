@@ -96,9 +96,14 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 continue
             uid = r["match_uid"]
             in_tiers = uid in tiers.index
+            # Key by model_version so multiple variants of the same family (e.g.
+            # several XGB recency/depth configs) stay distinct in the ledger.
+            # Fall back to family when version is absent (older rows / fixtures).
+            ver = r.get("model_version")
+            label = str(ver).strip() if pd.notna(ver) and str(ver).strip() else str(r["model_family"])
             rows.append({
                 "match_uid": uid,
-                "model": f"shadow_{r['model_family']}",
+                "model": f"shadow_{label}",
                 "family": r["model_family"],
                 "p1_prob": float(r["shadow_p1_prob"]),
                 "p1_odds_decimal": r.get("p1_odds_decimal"),

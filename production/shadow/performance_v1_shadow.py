@@ -47,6 +47,22 @@ class ShadowModelSpec:
         return self.model_dir / self.artifact_name
 
 
+def _perf_v1_spec(family: str, dirname: str, artifact: str) -> "ShadowModelSpec":
+    """Build a performance_v1 one_hot shadow spec from its experiment dir name.
+
+    All performance_v1 one_hot variants share the layout + the default medians,
+    so they only differ by family/dir/artifact.
+    """
+    slug = dirname.replace("performance_v1__", "")
+    return ShadowModelSpec(
+        family=family,
+        model_dir=REPO_ROOT / "results" / "professional_tennis" / "experiments"
+        / "2026-04-25" / family / dirname,
+        model_version=f"performance_v1_{slug}__2026-04-25",
+        artifact_name=artifact,
+    )
+
+
 DEFAULT_SHADOW_MODEL_SPECS = [
     ShadowModelSpec(
         family="xgboost",
@@ -90,6 +106,16 @@ DEFAULT_SHADOW_MODEL_SPECS = [
         model_version="performance_v1_nn_logits_128_64_32_lowdrop__2026-04-25",
         artifact_name="model.pth",
     ),
+    # Additional performance_v1 one_hot variants, tracked live so the ledger
+    # accumulates settled performance for every granular/recency tree + NN tweak
+    # we have artifacts for — not just one of each family. native_cat variants
+    # are intentionally excluded (native-cat live inference is not wired yet).
+    _perf_v1_spec("xgboost", "performance_v1__xgb_depth4_slow_regularized", "model.json"),
+    _perf_v1_spec("xgboost", "performance_v1__xgb_depth5_balanced_regularized", "model.json"),
+    _perf_v1_spec("xgboost", "performance_v1__xgb_depth5_recency_hl_8y", "model.json"),
+    _perf_v1_spec("xgboost", "performance_v1__xgb_depth6_medium", "model.json"),
+    _perf_v1_spec("nn", "performance_v1__nn_logits_128_64_robust", "model.pth"),
+    _perf_v1_spec("nn", "performance_v1__nn_logits_96_48_lowdrop", "model.pth"),
 ]
 
 SHADOW_COLUMNS = [

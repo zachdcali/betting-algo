@@ -163,10 +163,17 @@ Remaining risks:
 
 - Forward live-shadow logging is available through the production orchestrator.
   It writes `production/logs/performance_v1_shadow_predictions.csv` when local
-  side artifacts are present. The default forward set logs one-hot
-  `performance_v1` candidates for XGBoost, CatBoost, LightGBM, and the best NN
-  screen. These rows do not affect betting decisions, `prediction_log.csv`, or
-  the production model registry.
+  side artifacts are present. As of 2026-06-29 the default forward set
+  (`DEFAULT_SHADOW_MODEL_SPECS` in `production/shadow/performance_v1_shadow.py`)
+  logs **10** one-hot `performance_v1` variants every run, so each granular/recency
+  tree and NN tweak accumulates its own live settled record: 5 XGBoost configs
+  (depth4_slow, depth5_balanced, depth5_recency_hl_8y, depth5_recency_hl_12y,
+  depth6_medium), CatBoost depth6 one-hot, LightGBM leaves31 one-hot, and 3 NN
+  logits variants (128_64_32_lowdrop, 128_64_robust, 96_48_lowdrop). The ledger
+  keys these by `model_version`, so same-family variants stay distinct.
+  `native_cat` variants are excluded until native-categorical live inference is
+  wired. These rows do not affect betting decisions, `prediction_log.csv`, or the
+  production model registry.
 - When `auto_settle.py` settles the corresponding operational prediction, it
   also copies `actual_winner`, score, and correctness fields onto matching
   forward shadow rows. This is scoring already-logged probabilities, not

@@ -120,8 +120,12 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   (multiplier 0.18, edge threshold 0.02, cap 0.05) modes. ROI break-even = beating the vig.
 - Rank models by probabilistic quality first (log loss / Brier / ECE /
   calibration slope), accuracy last — consistent with the calibration + Kelly strategy.
-- `performance_v1` shadow families are scored on their own settled coverage; the
-  catboost/lightgbm/nn trio only accumulate live, settleable data as future slates settle.
+- `performance_v1` shadow variants (10 as of 2026-06-29, defined in
+  `DEFAULT_SHADOW_MODEL_SPECS`) are logged every run and scored in the ledger
+  keyed by `model_version` (so same-family variants stay distinct). Each is scored
+  on its own settled coverage; newly-added variants only accumulate live,
+  settleable data as future slates settle. `native_cat` variants are not yet
+  trackable (native-categorical live inference is unwired).
 
 ## Commit Hygiene
 
