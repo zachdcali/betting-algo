@@ -269,8 +269,11 @@ def parse_active_events(html: str, level: str = "") -> list[dict]:
                 break
             h = node.find(["h2", "h3"])
             if h and h.get_text(strip=True):
-                name = h.get_text(" ", strip=True)
-                break
+                cand = h.get_text(" ", strip=True)
+                # accessibility headings render as literal "Header 2" — not a name
+                if not re.fullmatch(r"header\s*\d*", cand, re.I):
+                    name = cand
+                    break
         seen[eid] = {
             "event": name or slug.replace("-", " ").title(),
             "slug": slug,
