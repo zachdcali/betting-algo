@@ -389,3 +389,34 @@ def test_betting_edges_preserve_event_for_bet_slips():
 
     assert edges.loc[0, "event"] == "ATP - Rome (2)"
     assert slips.loc[0, "event"] == "ATP - Rome (2)"
+
+
+def test_incomplete_prediction_upgrades_to_first_complete(tmp_path, monkeypatch):
+    """An incomplete-featured row must be REPLACED by the first complete
+    prediction (probs+odds together); complete rows stay frozen (opening line)."""
+    import prediction_logger as PL
+    monkeypatch.setattr(PL, "LOG_PATH", tmp_path / "prediction_log.csv")
+    monkeypatch.setattr(PL, "SNAPSHOT_PATH", tmp_path / "prediction_snapshots.csv", raising=False)
+    monkeypatch.setattr(PL, "ODDS_HISTORY_PATH", tmp_path / "odds_history.csv", raising=False)
+    common = dict(p1="Player A", p2="Player B", match_date="2026-07-08",
+                  tournament="Testville", surface="Hard", level="C", round_code="R32",
+                  market_p1_prob=0.5, market_p2_prob=0.5,
+                  p1_odds_american="-110", p2_odds_american="-110",
+                  p1_odds_decimal=1.91, p2_odds_decimal=1.91)
+    # first log: incomplete features
+    PL.log_prediction(model_p1_prob=0.40, model_p2_prob=0.60, model_version="v1",
+                      features_complete=False, defaulted_features="round_code=None", **common)
+    # second log: complete features, new probs -> must overwrite
+    r = PL.log_prediction(model_p1_prob=0.55, model_p2_prob=0.45, model_version="v1",
+                          features_complete=True, defaulted_features="", **common)
+    assert r == "updated"
+    import pandas as pd
+    df = pd.read_csv(tmp_path / "prediction_log.csv")
+    assert len(df) == 1
+    assert abs(df.iloc[0]["model_p1_prob"] - 0.55) < 1e-9
+    assert str(df.iloc[0]["features_complete"]) in ("True", "1", "1.0")
+    # third log: still complete, different probs -> must PRESERVE (opening line)
+    PL.log_prediction(model_p1_prob=0.70, model_p2_prob=0.30, model_version="v1",
+                      features_complete=True, defaulted_features="", **common)
+    df = pd.read_csv(tmp_path / "prediction_log.csv")
+    assert abs(df.iloc[0]["model_p1_prob"] - 0.55) < 1e-9  # frozen at first COMPLETE

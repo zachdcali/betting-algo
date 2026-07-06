@@ -524,7 +524,16 @@ def log_prediction(
                 idx = df[mask].index[0]
                 # Preserve original odds + model probs — opening lines are less efficient
                 # and more valuable for edge analysis than lines closer to match time.
-                PRESERVE_IF_SET = {'model_p1_prob', 'model_p2_prob',
+                # EXCEPTION: if the stored row was computed on INCOMPLETE features and
+                # this prediction is complete, upgrade everything (probs + odds + edge
+                # together, so edges stay coherent). Otherwise an early defaulted-feature
+                # prediction would be frozen while later metadata stamps it 'complete',
+                # poisoning the decision-grade cohort with stale probabilities.
+                existing_complete = str(df.at[idx, 'features_complete']) in ('True', '1', '1.0')
+                upgrading_to_complete = bool(features_complete) and not existing_complete
+                if upgrading_to_complete:
+                    print(f"  ⬆️  Upgrading incomplete prediction to first complete one: {p1} vs {p2}")
+                PRESERVE_IF_SET = set() if upgrading_to_complete else {'model_p1_prob', 'model_p2_prob',
                                    'xgb_p1_prob', 'xgb_p2_prob',
                                    'rf_p1_prob', 'rf_p2_prob',
                                    'market_p1_prob', 'market_p2_prob',
