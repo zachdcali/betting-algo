@@ -262,6 +262,75 @@ def backfill_sackmann(conn, csv_path: Path = MASTER_CSV) -> None:
     print(f"backfill complete in {time.time()-t0:.0f}s")
 
 
+def _resolve_player_id(cur, name: str) -> int | None:
+    """Unique name match against players; exact first, then normalized
+    (case/diacritics/hyphens/apostrophes stripped). None if ambiguous/missing —
+    never guessed."""
+    cur.execute("SELECT player_id FROM players WHERE lower(name) = lower(%s)", (name,))
+    rows = cur.fetchall()
+    if len(rows) == 1:
+        return rows[0][0]
+    cur.execute(
+        """SELECT player_id FROM players
+           WHERE regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g')
+               = regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g')""",
+        (name,),
+    )
+    rows = cur.fetchall()
+    return rows[0][0] if len(rows) == 1 else None
+
+
+def ingest_event_results(conn, results_df, event: str, start_date: str,
+                         surface: str, level: str, source: str = "atp_results") -> dict:
+    """Upsert one tournament's scraped results (atp_results_scraper frame) into the store.
+
+    Rows whose players can't be uniquely resolved are skipped and counted —
+    never guessed. Existing rows (e.g. Sackmann later covering the same match)
+    are left untouched by the dedupe key; reconciliation compares them separately.
+    """
+    inserted = skipped = 0
+    unresolved: list[str] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ingest_runs (source, started_at, notes) VALUES (%s, now(), %s) RETURNING run_id",
+            (source, f"{event} {start_date}"),
+        )
+        run_id = cur.fetchone()[0]
+        for _, card in results_df.iterrows():
+            if card.get("winner") not in (1, 2):
+                skipped += 1
+                continue
+            w_name = card["p1"] if card["winner"] == 1 else card["p2"]
+            l_name = card["p2"] if card["winner"] == 1 else card["p1"]
+            wid, lid = _resolve_player_id(cur, w_name), _resolve_player_id(cur, l_name)
+            if wid is None or lid is None:
+                skipped += 1
+                unresolved.append(w_name if wid is None else l_name)
+                continue
+            w_sets = card["p1_sets"] if card["winner"] == 1 else card["p2_sets"]
+            l_sets = card["p2_sets"] if card["winner"] == 1 else card["p1_sets"]
+            score = " ".join(f"{a}-{b}" for a, b in zip(str(w_sets).split(), str(l_sets).split()))
+            cur.execute(
+                """INSERT INTO matches (match_date, event, surface, level, round,
+                                        winner_id, loser_id, score, source)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT DO NOTHING""",
+                (start_date, event, surface, level, str(card.get("round") or "") or None,
+                 wid, lid, score or None, source),
+            )
+            inserted += cur.rowcount
+        cur.execute(
+            "UPDATE ingest_runs SET finished_at=now(), rows_inserted=%s, rows_skipped=%s WHERE run_id=%s",
+            (inserted, skipped, run_id),
+        )
+    conn.commit()
+    if unresolved:
+        uniq = sorted(set(unresolved))
+        print(f"  unresolved players ({len(uniq)}): {', '.join(uniq[:8])}{'...' if len(uniq) > 8 else ''}")
+    print(f"  event ingest [{event}]: inserted={inserted} skipped={skipped}")
+    return {"inserted": inserted, "skipped": skipped, "unresolved": len(set(unresolved))}
+
+
 def summary(conn) -> None:
     with conn.cursor() as cur:
         for tbl in ("players", "matches", "match_stats", "match_conflicts", "ingest_runs"):
