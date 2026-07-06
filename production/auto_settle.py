@@ -570,6 +570,129 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 
 
 # ---------------------------------------------------------------------------
+# ATP results fallback (secondary source when TA has not posted results yet)
+# ---------------------------------------------------------------------------
+
+# Tournament -> live results URL. TA can lag days-to-weeks behind an in-progress
+# event (e.g. it posted nothing between Halle and mid-Wimbledon 2026); the ATP
+# scores page is current same-day. Keyed by (label substring, surface, month
+# window) so Bovada's generic "Men's Singles" label maps to the right Slam.
+_ATP_FALLBACK_EVENTS = [
+    {
+        "labels": ("wimbledon", "men s singles"),  # normalized: apostrophes strip to spaces
+        "surface": "grass",
+        "months": (6, 7),
+        "event_name": "Wimbledon",
+        "url": "https://www.atptour.com/en/scores/current/wimbledon/540/results",
+    },
+]
+
+_ATP_FALLBACK_ELIGIBLE = {"opponent_not_found", "ta_match_unfinished", "ta_empty", "outside_window"}
+_ATP_SETTLEMENT_CONFIDENCE = 90  # both full names matched on the official ATP results page
+
+
+def _atp_results_source_for(tournament: str, surface: str, match_date_str: str) -> dict | None:
+    label = _normalize_text(tournament)
+    surf = _normalize_text(surface)
+    month = pd.to_datetime(match_date_str, errors="coerce")
+    month = int(month.month) if pd.notna(month) else None
+    for ev in _ATP_FALLBACK_EVENTS:
+        if not any(l in label for l in ev["labels"]):
+            continue
+        if ev["surface"] and surf and ev["surface"] not in surf:
+            continue
+        if month is not None and month not in ev["months"]:
+            continue
+        return ev
+    return None
+
+
+def _fetch_atp_results_cached(url: str, cache: dict) -> pd.DataFrame:
+    if url not in cache:
+        from scraping.atp_results_scraper import fetch_tournament_results
+        print(f"  Fetching ATP results page (fallback source): {url}")
+        try:
+            cache[url] = fetch_tournament_results(url)
+            print(f"    ATP results: {len(cache[url])} completed matches parsed")
+        except Exception as exc:  # network/parse failure must not break the TA path
+            print(f"    ⚠️ ATP results fetch failed (non-fatal): {exc}")
+            cache[url] = pd.DataFrame()
+    return cache[url]
+
+
+def _combined_score(p1_sets: str, p2_sets: str) -> str:
+    a, b = str(p1_sets).split(), str(p2_sets).split()
+    return " ".join(f"{x}-{y}" for x, y in zip(a, b))
+
+
+def try_settle_from_atp(p1: str, p2: str, round_code: str,
+                        results: pd.DataFrame, event_name: str) -> dict | None:
+    """Settle from an ATP tournament-results page. Same result shape as
+    try_settle_from_ta so the existing write path applies unchanged.
+
+    Conservative identity rule: BOTH names must match a single results card
+    (either orientation); a known round must corroborate. Ambiguity -> None.
+    """
+    if results is None or results.empty:
+        return None
+
+    candidates = []
+    for _, card in results.iterrows():
+        c1, c2 = str(card["p1"]), str(card["p2"])
+        if _names_match(c1, p1) and _names_match(c2, p2):
+            candidates.append((card, False))  # our p1 == card p1
+        elif _names_match(c1, p2) and _names_match(c2, p1):
+            candidates.append((card, True))   # orientations flipped
+
+    rc = _normalize_round(round_code)
+    if rc and len(candidates) > 1:
+        candidates = [(c, f) for c, f in candidates if _normalize_round(str(c["round"])) == rc]
+    if len(candidates) != 1:
+        return None  # not found, or ambiguous — leave pending
+    card, flipped = candidates[0]
+    if rc and _normalize_round(str(card["round"])) not in ("", rc):
+        return None  # round contradicts our row — do not settle
+
+    card_winner = card.get("winner")
+    if card_winner not in (1, 2):
+        return None
+    actual_winner = int(card_winner) if not flipped else (2 if card_winner == 1 else 1)
+    winner_name = p1 if actual_winner == 1 else p2
+
+    if flipped:
+        score = _combined_score(card.get("p2_sets", ""), card.get("p1_sets", ""))
+    else:
+        score = _combined_score(card.get("p1_sets", ""), card.get("p2_sets", ""))
+
+    evidence = {
+        "source": "atp_results",
+        "event": event_name,
+        "card_p1": str(card["p1"]),
+        "card_p2": str(card["p2"]),
+        "card_round": str(card["round"]),
+        "orientation_flipped": flipped,
+        "score": _ATP_SETTLEMENT_CONFIDENCE,
+    }
+    print(f"    Found on ATP results ({event_name}): {winner_name} won  |  score: {score}")
+    return {
+        "status": "matched_and_settled",
+        "actual_winner": actual_winner,
+        "score": score,
+        "settled_at": datetime.now().isoformat(),
+        "ta_player_slug": "",
+        "ta_match_date_found": "",
+        "ta_event_found": event_name,
+        "ta_round_found": str(card["round"]),
+        "ta_surface_found": "",
+        "settlement_score": _ATP_SETTLEMENT_CONFIDENCE,
+        "settlement_evidence": evidence,
+        "outcome_detail": (
+            f"{winner_name} won | source=atp_results | evidence={json.dumps(evidence, sort_keys=True)}"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -785,6 +908,7 @@ def run(
     calc.player_slug_map = TAFeatureCalculator._load_player_mapping(calc)
     tracker = BetTracker(str(Path(__file__).parent / "logs"))
     session_cache = {}
+    atp_results_cache = {}
 
     newly_settled = 0
     newly_settled_bets = 0
@@ -814,6 +938,20 @@ def run(
             session_cache=session_cache,
             dry_run=dry_run,
         )
+        # Secondary source: when TA has no result yet, try the official ATP
+        # results page for known in-progress events (source=atp_results).
+        if result.get('status') in _ATP_FALLBACK_ELIGIBLE:
+            ev = _atp_results_source_for(
+                str(row.get('tournament', '')), str(row.get('surface', '')), match_date,
+            )
+            if ev:
+                atp_df = _fetch_atp_results_cached(ev["url"], atp_results_cache)
+                atp_result = try_settle_from_atp(
+                    p1, p2, str(row.get('round', '')), atp_df, ev["event_name"],
+                )
+                if atp_result:
+                    result = atp_result
+
         outcome_code = result.get('status', 'unknown')
         reason_counts[outcome_code] += 1
         rate_hits_after = getattr(SCRAPER, 'rate_limit_hits', 0)
