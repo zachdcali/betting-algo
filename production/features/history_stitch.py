@@ -234,6 +234,30 @@ def active_event_for(ref_date) -> Optional[dict]:
     return None
 
 
+_NEXT_ROUND = {"R128": "R64", "R64": "R32", "R32": "R16", "R16": "QF", "QF": "SF", "SF": "F"}
+
+
+def infer_next_round(matches1: pd.DataFrame, matches2: pd.DataFrame, event_name: str) -> Optional[str]:
+    """Infer the upcoming round from both players' completed rows at this event.
+
+    Real data, not a generic fallback: if BOTH players' newest match is this
+    event's round R, the match being predicted is the next round. Any mismatch
+    (different rounds, different events, empty history) returns None so the row
+    stays honestly unresolved.
+    """
+    rounds = []
+    for m in (matches1, matches2):
+        if m is None or m.empty:
+            return None
+        top = m.iloc[0]
+        if str(top.get("event", "")).strip().lower() != event_name.strip().lower():
+            return None
+        rounds.append(str(top.get("round", "")).strip().upper())
+    if rounds[0] != rounds[1]:
+        return None
+    return _NEXT_ROUND.get(rounds[0])
+
+
 def lookup_player_url(name: str, rankings_df: Optional[pd.DataFrame]) -> Optional[str]:
     """Find a player's atptour.com profile URL in the rankings CSV.
 

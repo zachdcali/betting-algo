@@ -119,3 +119,19 @@ def test_needs_stitching_thresholds():
 def test_active_event_window():
     assert active_event_for("2026-07-05")["event"] == "Wimbledon"
     assert active_event_for("2026-08-20") is None
+
+
+def test_infer_next_round():
+    from features.history_stitch import infer_next_round
+    m1 = pd.DataFrame([{"event": "Wimbledon", "round": "R32", "date": pd.Timestamp("2026-06-29")}])
+    m2 = pd.DataFrame([{"event": "Wimbledon", "round": "R32", "date": pd.Timestamp("2026-06-29")}])
+    assert infer_next_round(m1, m2, "Wimbledon") == "R16"
+    # mismatched rounds -> None (conservative)
+    m3 = pd.DataFrame([{"event": "Wimbledon", "round": "R64", "date": pd.Timestamp("2026-06-29")}])
+    assert infer_next_round(m1, m3, "Wimbledon") is None
+    # different event on top -> None
+    m4 = pd.DataFrame([{"event": "Halle", "round": "F", "date": pd.Timestamp("2026-06-15")}])
+    assert infer_next_round(m1, m4, "Wimbledon") is None
+    # final has no next round
+    mf = pd.DataFrame([{"event": "Wimbledon", "round": "F", "date": pd.Timestamp("2026-06-29")}])
+    assert infer_next_round(mf, mf, "Wimbledon") is None
