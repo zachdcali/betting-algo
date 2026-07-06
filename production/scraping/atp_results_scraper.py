@@ -243,6 +243,80 @@ def fetch_tournament_results(url: str) -> pd.DataFrame:
     return parse_tournament_results(html)
 
 
+def parse_match_stats(html: str) -> Optional[dict]:
+    """Parse an atptour.com match-stats page into TA stat-column names.
+
+    Returns {'p1_name', 'p2_name', 'p1': {...}, 'p2': {...}} where each side's
+    dict uses the exact columns ta_scraper emits (aces, double_faults,
+    serve_points, first_serves_in, first_serve_won, second_serve_won, bp_saved,
+    bp_faced) plus the opp_* mirrors filled from the other side. None when the
+    page has no stats table.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    names = [el.get_text(" ", strip=True) for el in soup.select("div.player-info")][:2]
+    if len(names) < 2:
+        return None
+
+    def _vals(li):
+        own = li.select_one("div.player-stats-item div.value")
+        opp = li.select_one("div.opponent-stats-item div.value")
+        return (own.get_text(" ", strip=True) if own else "", opp.get_text(" ", strip=True) if opp else "")
+
+    def _fraction(text):
+        m = re.search(r"\((\d+)/(\d+)\)", text)
+        return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+    def _int(text):
+        m = re.search(r"\d+", text)
+        return int(m.group(0)) if m else None
+
+    p1: dict = {}
+    p2: dict = {}
+    for li in soup.select("div.stats-group-items li"):
+        legend = li.select_one("div.stats-item-legend")
+        if legend is None:
+            continue
+        label = legend.get_text(" ", strip=True).lower()
+        v1, v2 = _vals(li)
+        if label == "aces":
+            p1["aces"], p2["aces"] = _int(v1), _int(v2)
+        elif label == "double faults":
+            p1["double_faults"], p2["double_faults"] = _int(v1), _int(v2)
+        elif label == "1st serve":
+            n1, d1 = _fraction(v1)
+            n2, d2 = _fraction(v2)
+            p1["first_serves_in"], p1["serve_points"] = n1, d1
+            p2["first_serves_in"], p2["serve_points"] = n2, d2
+        elif label == "1st serve points won":
+            p1["first_serve_won"], _ = _fraction(v1)
+            p2["first_serve_won"], _ = _fraction(v2)
+        elif label == "2nd serve points won":
+            p1["second_serve_won"], _ = _fraction(v1)
+            p2["second_serve_won"], _ = _fraction(v2)
+        elif label == "break points saved":
+            s1, f1 = _fraction(v1)
+            s2, f2 = _fraction(v2)
+            p1["bp_saved"], p1["bp_faced"] = s1, f1
+            p2["bp_saved"], p2["bp_faced"] = s2, f2
+
+    if not p1 or not p2:
+        return None
+    # opponent mirrors: each side's opp_* = the other side's own serve stats
+    for own, other in ((p1, p2), (p2, p1)):
+        for col in ("aces", "double_faults", "serve_points", "first_serves_in",
+                    "first_serve_won", "second_serve_won", "bp_saved", "bp_faced"):
+            own[f"opp_{col}"] = other.get(col)
+    return {"p1_name": names[0], "p2_name": names[1], "p1": p1, "p2": p2}
+
+
+def fetch_match_stats(url: str) -> Optional[dict]:
+    """Fetch + parse one match-stats page (accepts relative ATP paths)."""
+    if url.startswith("/"):
+        url = "https://www.atptour.com" + url
+    html = _fetch_rendered(url, "div.stats-group-items li")
+    return parse_match_stats(html)
+
+
 def fetch_player_activity(player_url: str) -> pd.DataFrame:
     """Completed tournaments for one player.
 

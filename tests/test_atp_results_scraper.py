@@ -66,3 +66,18 @@ def test_activity_sinner_rg_rows(activity_df):
     assert len(r128) == 1
     assert "Tabur" in r128.iloc[0]["opponent"]
     assert r128.iloc[0]["result"] == "W"
+
+
+def test_parse_match_stats_sinner_fixture():
+    from scraping.atp_results_scraper import parse_match_stats
+    stats = parse_match_stats(_load("atp_match_stats_sinner.html.gz"))
+    assert stats is not None
+    assert "Sinner" in stats["p1_name"] and "Mochizuki" in stats["p2_name"]
+    p1, p2 = stats["p1"], stats["p2"]
+    assert p1["aces"] == 15 and p1["double_faults"] == 3
+    assert p1["serve_points"] == 85 and p1["first_serves_in"] == 63
+    assert p1["first_serve_won"] == 52 and p1["second_serve_won"] == 12
+    assert p1["bp_saved"] == 5 and p1["bp_faced"] == 5
+    # opponent mirrors: Sinner's opp_* = Mochizuki's own serve stats
+    assert p1["opp_serve_points"] == 116 and p1["opp_first_serves_in"] == 70
+    assert p2["opp_serve_points"] == 85

@@ -168,8 +168,74 @@ def event_results_to_ta_schema(results_df: pd.DataFrame, player_name: str, event
             "score": score,
             "result": result,
             "source": "atp_event_results",
+            "_stats_url": card.get("stats_url"),
         })
     return pd.DataFrame(rows)
+
+
+# Bound per-run stats-page fetches so a large slate can't stall the pipeline;
+# most-recent rows enrich first (they drive the Last10 stat windows).
+MAX_STATS_FETCHES_PER_PLAYER = 6
+
+_STAT_COLS = (
+    "aces", "double_faults", "serve_points", "first_serves_in",
+    "first_serve_won", "second_serve_won", "bp_saved", "bp_faced",
+    "opp_aces", "opp_double_faults", "opp_serve_points", "opp_first_serves_in",
+    "opp_first_serve_won", "opp_second_serve_won", "opp_bp_saved", "opp_bp_faced",
+)
+
+
+def enrich_event_rows_with_stats(df: pd.DataFrame, player_name: str,
+                                 session_cache: Optional[dict] = None,
+                                 _fetch=None) -> pd.DataFrame:
+    """Attach real serve/BP stats to stitched event rows via their stats pages.
+
+    Fills the exact TA stat columns so the granular (performance_v1) features
+    compute on stitched rows instead of leaning on older stat-bearing matches.
+    Non-fatal per row; rows without stats stay score-only (counted honestly by
+    Stat_Matches_Last10).
+    """
+    if df is None or df.empty or "_stats_url" not in df.columns:
+        return df
+    cache = (session_cache if session_cache is not None else {}).setdefault("atp_match_stats", {})
+    if _fetch is None:
+        try:
+            from atp_results_scraper import fetch_match_stats as _fetch
+        except ImportError:
+            from scraping.atp_results_scraper import fetch_match_stats as _fetch
+
+    out = df.copy()
+    for col in _STAT_COLS:
+        if col not in out.columns:
+            out[col] = float("nan")
+    fetched = 0
+    for idx in out.sort_values("date", ascending=False).index:
+        url = out.at[idx, "_stats_url"]
+        if not isinstance(url, str) or not url:
+            continue
+        if url not in cache:
+            if fetched >= MAX_STATS_FETCHES_PER_PLAYER:
+                continue
+            fetched += 1
+            try:
+                cache[url] = _fetch(url)
+            except Exception as exc:
+                print(f"      ⚠️ match-stats fetch failed (non-fatal): {exc}")
+                cache[url] = None
+        stats = cache[url]
+        if not stats:
+            continue
+        if _names_loosely_match(stats["p1_name"], player_name):
+            side = stats["p1"]
+        elif _names_loosely_match(stats["p2_name"], player_name):
+            side = stats["p2"]
+        else:
+            continue
+        for col in _STAT_COLS:
+            val = side.get(col)
+            if val is not None:
+                out.at[idx, col] = float(val)
+    return out
 
 
 def stitch_history(ta_df: pd.DataFrame, atp_df: pd.DataFrame) -> pd.DataFrame:
@@ -304,7 +370,11 @@ def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFr
             except Exception as exc:
                 print(f"      ⚠️ ATP event results fetch failed (non-fatal): {exc}")
                 results_cache[ev["url"]] = pd.DataFrame()
-        frames.append(event_results_to_ta_schema(results_cache[ev["url"]], display_name, ev))
+        ev_rows = event_results_to_ta_schema(results_cache[ev["url"]], display_name, ev)
+        ev_rows = enrich_event_rows_with_stats(ev_rows, display_name, cache)
+        if not ev_rows.empty and "_stats_url" in ev_rows.columns:
+            ev_rows = ev_rows.drop(columns=["_stats_url"])
+        frames.append(ev_rows)
 
     url = lookup_player_url(display_name, rankings_df)
     if url:

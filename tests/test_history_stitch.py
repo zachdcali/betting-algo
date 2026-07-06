@@ -135,3 +135,22 @@ def test_infer_next_round():
     # final has no next round
     mf = pd.DataFrame([{"event": "Wimbledon", "round": "F", "date": pd.Timestamp("2026-06-29")}])
     assert infer_next_round(mf, mf, "Wimbledon") is None
+
+
+def test_enrich_event_rows_with_stats_fake_fetch():
+    from features.history_stitch import enrich_event_rows_with_stats
+    rows = pd.DataFrame([{
+        "date": pd.Timestamp("2026-06-29"), "event": "Wimbledon", "round": "R128",
+        "opp_name": "Shintaro Mochizuki", "result": "W", "score": "6-2 6-2 6-2",
+        "source": "atp_event_results", "_stats_url": "/en/scores/match-stats/x",
+    }])
+    fake = lambda url: {"p1_name": "J. Sinner", "p2_name": "S. Mochizuki",
+                        "p1": {"aces": 15, "serve_points": 85, "opp_serve_points": 116},
+                        "p2": {"aces": 4, "serve_points": 116, "opp_serve_points": 85}}
+    out = enrich_event_rows_with_stats(rows, "Jannik Sinner", {}, _fetch=fake)
+    assert out.iloc[0]["aces"] == 15.0
+    assert out.iloc[0]["serve_points"] == 85.0
+    assert out.iloc[0]["opp_serve_points"] == 116.0
+    # unmatched player -> untouched
+    out2 = enrich_event_rows_with_stats(rows, "Someone Else", {}, _fetch=fake)
+    assert pd.isna(out2.iloc[0]["aces"])
