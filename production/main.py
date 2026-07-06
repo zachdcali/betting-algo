@@ -333,8 +333,11 @@ class LiveBettingOrchestrator:
 
         print("🔧 Extracting features from Tennis Abstract...")
 
-        # Shared session cache: avoids duplicate TA requests within a single run
+        # Shared session cache: avoids duplicate TA requests within a single run.
+        # Kept on self so post-run hooks can ingest fetched event results into
+        # the canonical store without refetching.
         session_cache = {}
+        self._session_cache = session_cache
 
         # Filter out futures/outrights before feature extraction
         odds_df = odds_df[~odds_df.apply(
@@ -991,6 +994,31 @@ class LiveBettingOrchestrator:
         except Exception as e:
             print(f"  ⚠️  SQLite refresh skipped (non-fatal): {e}")
 
+    def _ingest_store_events(self):
+        """Append this run's fetched event results into the canonical Supabase
+        store (additive, non-fatal — skipped offline or without .env.supabase)."""
+        cache = getattr(self, "_session_cache", None) or {}
+        frames = cache.get("atp_event_results") or {}
+        metas = cache.get("atp_event_meta") or {}
+        if not frames:
+            return
+        try:
+            import canonical_store as cs
+            with cs.connect() as conn:
+                total = 0
+                for url, df in frames.items():
+                    ev = metas.get(url)
+                    if ev is None or df is None or df.empty:
+                        continue
+                    r = cs.ingest_event_results(
+                        conn, df, event=ev["event"], start_date=ev["start_date"],
+                        surface=ev.get("surface") or None, level=ev.get("level") or None,
+                    )
+                    total += r["inserted"]
+                print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
+        except Exception as e:
+            print(f"  ⚠️  Canonical store ingest skipped (non-fatal): {e}")
+
     def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True, dry_run: bool = False) -> bool:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
@@ -1096,11 +1124,13 @@ class LiveBettingOrchestrator:
                     print(f"   Use 'python settle_bets.py {session_id}' to settle results later")
                 
                 self._refresh_database()
+                self._ingest_store_events()
                 self._flush_run_history(status='success')
                 return True
             else:
                 print("📊 No profitable betting opportunities found")
                 self._refresh_database()
+                self._ingest_store_events()
                 self._flush_run_history(status='success')
                 return False
                 

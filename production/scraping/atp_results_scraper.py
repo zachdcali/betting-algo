@@ -243,6 +243,62 @@ def fetch_tournament_results(url: str) -> pd.DataFrame:
     return parse_tournament_results(html)
 
 
+def parse_active_events(html: str, level: str = "") -> list[dict]:
+    """Active tournaments from an atptour live-scores page (tour or challenger).
+
+    Each event card links to /en/scores/current[-challenger]/{slug}/{id}; the
+    card header carries the display name + location. Surface/dates are not on
+    these pages — callers assign a Monday-snapped start date and leave surface
+    empty (honest) unless a registry override provides it.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    seen: dict[str, dict] = {}
+    for a in soup.select("a[href*='/en/scores/current']"):
+        href = a.get("href", "")
+        m = re.match(r"^(/en/scores/current(?:-challenger)?/([a-z0-9-]+)/(\d+))", href)
+        if not m:
+            continue
+        base, slug, eid = m.group(1), m.group(2), m.group(3)
+        if eid in seen:
+            continue
+        name = ""
+        node = a
+        for _ in range(6):
+            node = node.parent
+            if node is None:
+                break
+            h = node.find(["h2", "h3"])
+            if h and h.get_text(strip=True):
+                name = h.get_text(" ", strip=True)
+                break
+        seen[eid] = {
+            "event": name or slug.replace("-", " ").title(),
+            "slug": slug,
+            "id": eid,
+            "url": f"https://www.atptour.com{base}/results",
+            "level": level,
+            "surface": "",
+        }
+    return list(seen.values())
+
+
+def discover_active_events() -> list[dict]:
+    """Fetch active tour + challenger events from the live-scores hubs."""
+    events: list[dict] = []
+    for url, level in [("https://www.atptour.com/en/scores/current", ""),
+                       ("https://www.atptour.com/en/scores/current-challenger", "C")]:
+        try:
+            html = _fetch_rendered(url, "a[href*='/en/scores/current']")
+            events.extend(parse_active_events(html, level))
+        except Exception as exc:  # discovery is best-effort; stitching falls back to registry
+            print(f"      ⚠️ active-event discovery failed for {url}: {exc}")
+    # dedupe by id, tour page wins on collisions
+    out: dict[str, dict] = {}
+    for ev in events:
+        out.setdefault(ev["id"], ev)
+    return list(out.values())
+
+
 def parse_match_stats(html: str) -> Optional[dict]:
     """Parse an atptour.com match-stats page into TA stat-column names.
 

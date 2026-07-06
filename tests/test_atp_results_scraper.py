@@ -81,3 +81,15 @@ def test_parse_match_stats_sinner_fixture():
     # opponent mirrors: Sinner's opp_* = Mochizuki's own serve stats
     assert p1["opp_serve_points"] == 116 and p1["opp_first_serves_in"] == 70
     assert p2["opp_serve_points"] == 85
+
+
+def test_parse_active_events_challenger_hub():
+    from scraping.atp_results_scraper import parse_active_events
+    events = parse_active_events(_load("atp_scores_challenger.html.gz"), level="C")
+    assert len(events) >= 10  # 12 active challengers in the fixture week
+    slugs = {e["slug"] for e in events}
+    assert {"iasi", "bogota", "braunschweig", "trieste"} <= slugs
+    ev = next(e for e in events if e["slug"] == "iasi")
+    assert ev["url"].startswith("https://www.atptour.com/en/scores/current") and ev["url"].endswith("/results")
+    assert ev["level"] == "C"
+    assert ev["event"]  # display name extracted or slug-titled

@@ -291,13 +291,75 @@ def needs_stitching(ta_df: pd.DataFrame, ref_date) -> bool:
 
 
 def active_event_for(ref_date) -> Optional[dict]:
-    """Registry entry whose window covers ref_date, else None."""
+    """Static-registry entry whose window covers ref_date, else None."""
     ts = pd.Timestamp(ref_date)
     for ev in CURRENT_EVENT_REGISTRY:
         lo, hi = pd.Timestamp(ev["window"][0]), pd.Timestamp(ev["window"][1])
         if lo <= ts <= hi:
             return ev
     return None
+
+
+def _monday_of(ts: pd.Timestamp) -> pd.Timestamp:
+    return (ts - pd.Timedelta(days=int(ts.weekday()))).normalize()
+
+
+def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[dict]:
+    """All active tournaments: auto-discovered from the ATP live-scores hubs,
+    with static-registry entries overriding by slug (they carry exact
+    surface/level/start dates). Discovered events get a Monday-snapped start
+    date (tour events run Mon-Sun; Slams' true start comes from the registry).
+    Cached per run."""
+    cache = session_cache if session_cache is not None else {}
+    if "atp_active_events" in cache:
+        return cache["atp_active_events"]
+    try:
+        from atp_results_scraper import discover_active_events
+    except ImportError:
+        from scraping.atp_results_scraper import discover_active_events
+    monday = _monday_of(pd.Timestamp(ref_date))
+    events: list[dict] = []
+    try:
+        for ev in discover_active_events():
+            ev = dict(ev)
+            ev["start_date"] = str(monday.date())
+            events.append(ev)
+    except Exception as exc:
+        print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
+    static_slugs = set()
+    for sev in CURRENT_EVENT_REGISTRY:
+        lo, hi = pd.Timestamp(sev["window"][0]), pd.Timestamp(sev["window"][1])
+        if lo <= pd.Timestamp(ref_date) <= hi:
+            static_slugs.add(sev["event"].lower())
+            events = [e for e in events if sev["event"].lower() not in e["event"].lower()
+                      and e.get("slug", "") != sev["event"].lower()]
+            events.append(sev)
+    cache["atp_active_events"] = events
+    return events
+
+
+_NEXT_ROUND_ANY_WINDOW_DAYS = 16
+
+
+def infer_next_round_any(matches1: pd.DataFrame, matches2: pd.DataFrame, ref_date) -> Optional[str]:
+    """Registry-free round inference: if BOTH players' newest rows are the same
+    event's same round, played within the last ~two weeks of ref_date, the
+    upcoming match is the next round. Any mismatch -> None (stays unresolved)."""
+    tops = []
+    for m in (matches1, matches2):
+        if m is None or m.empty:
+            return None
+        top = m.iloc[0]
+        d = pd.to_datetime(top.get("date"), errors="coerce")
+        if pd.isna(d) or (pd.Timestamp(ref_date) - d).days > _NEXT_ROUND_ANY_WINDOW_DAYS:
+            return None
+        tops.append((str(top.get("event", "")).strip().lower(),
+                     str(top.get("round", "")).strip().upper()))
+    if tops[0][0] != tops[1][0] or not tops[0][0]:
+        return None
+    if tops[0][1] != tops[1][1]:
+        return None
+    return _NEXT_ROUND.get(tops[0][1])
 
 
 _NEXT_ROUND = {"R128": "R64", "R64": "R32", "R32": "R16", "R16": "QF", "QF": "SF", "SF": "F"}
@@ -356,23 +418,26 @@ def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFr
     cache = session_cache if session_cache is not None else {}
     frames = []
 
-    ev = active_event_for(ref_date)
-    if ev is not None:
-        results_cache = cache.setdefault("atp_event_results", {})
+    try:
+        from atp_results_scraper import fetch_tournament_results
+    except ImportError:
+        from scraping.atp_results_scraper import fetch_tournament_results
+    results_cache = cache.setdefault("atp_event_results", {})
+    meta_cache = cache.setdefault("atp_event_meta", {})
+    for ev in get_active_events(ref_date, cache):
         if ev["url"] not in results_cache:
-            try:
-                from atp_results_scraper import fetch_tournament_results
-            except ImportError:
-                from scraping.atp_results_scraper import fetch_tournament_results
             try:
                 print(f"      🧵 Fetching ATP results page for {ev['event']} (shared, cached)")
                 results_cache[ev["url"]] = fetch_tournament_results(ev["url"])
+                meta_cache[ev["url"]] = ev
             except Exception as exc:
                 print(f"      ⚠️ ATP event results fetch failed (non-fatal): {exc}")
                 results_cache[ev["url"]] = pd.DataFrame()
         ev_rows = event_results_to_ta_schema(results_cache[ev["url"]], display_name, ev)
+        if ev_rows.empty:
+            continue
         ev_rows = enrich_event_rows_with_stats(ev_rows, display_name, cache)
-        if not ev_rows.empty and "_stats_url" in ev_rows.columns:
+        if "_stats_url" in ev_rows.columns:
             ev_rows = ev_rows.drop(columns=["_stats_url"])
         frames.append(ev_rows)
 

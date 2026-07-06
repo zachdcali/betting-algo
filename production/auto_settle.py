@@ -607,6 +607,24 @@ def _atp_results_source_for(tournament: str, surface: str, match_date_str: str) 
     return None
 
 
+def _active_atp_events(cache: dict) -> list[dict]:
+    """Active events for the settlement fallback: auto-discovered from the ATP
+    live-scores hubs + the static registry. Cached per settlement run."""
+    if "_events" in cache:
+        return cache["_events"]
+    events = [{"event": ev["event_name"], "url": ev["url"]} for ev in _ATP_FALLBACK_EVENTS]
+    try:
+        from scraping.atp_results_scraper import discover_active_events
+        known = {e["url"] for e in events}
+        for ev in discover_active_events():
+            if ev["url"] not in known:
+                events.append({"event": ev["event"], "url": ev["url"]})
+    except Exception as exc:
+        print(f"  ⚠️ event discovery unavailable for settlement fallback: {exc}")
+    cache["_events"] = events
+    return events
+
+
 def _fetch_atp_results_cached(url: str, cache: dict) -> pd.DataFrame:
     if url not in cache:
         from scraping.atp_results_scraper import fetch_tournament_results
@@ -939,18 +957,19 @@ def run(
             dry_run=dry_run,
         )
         # Secondary source: when TA has no result yet, try the official ATP
-        # results page for known in-progress events (source=atp_results).
+        # results pages of every active event (source=atp_results). Both-name
+        # identity + round corroboration keep this conservative.
         if result.get('status') in _ATP_FALLBACK_ELIGIBLE:
-            ev = _atp_results_source_for(
-                str(row.get('tournament', '')), str(row.get('surface', '')), match_date,
-            )
-            if ev:
+            for ev in _active_atp_events(atp_results_cache):
                 atp_df = _fetch_atp_results_cached(ev["url"], atp_results_cache)
+                if atp_df is None or atp_df.empty:
+                    continue
                 atp_result = try_settle_from_atp(
-                    p1, p2, str(row.get('round', '')), atp_df, ev["event_name"],
+                    p1, p2, str(row.get('round', '')), atp_df, ev["event"],
                 )
                 if atp_result:
                     result = atp_result
+                    break
 
         outcome_code = result.get('status', 'unknown')
         reason_counts[outcome_code] += 1

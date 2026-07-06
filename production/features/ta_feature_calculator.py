@@ -23,9 +23,8 @@ from atp_height_scraper import batch_get_heights
 sys.path.insert(0, str(Path(__file__).parent))
 from round_offsets import get_round_day_offset, infer_draw_size
 from history_stitch import (
-    active_event_for,
     gather_atp_rows,
-    infer_next_round,
+    infer_next_round_any,
     needs_stitching,
     stitch_history,
 )
@@ -1006,15 +1005,13 @@ class TAFeatureCalculator:
                     print(f"      ⚠️  Surface mismatch: resolver={surface}, TA upcoming={_ta_surface} — using resolver")
 
         # If TA's upcoming listing couldn't provide the round, infer it from both
-        # players' ATP-stitched completed rows at the active event (real data:
-        # both just finished round R here -> this match is the next round).
+        # players' ATP-stitched completed rows (real data: both just finished
+        # round R at the same event -> this match is the next round).
         if not round_code:
-            _active_ev = active_event_for(when)
-            if _active_ev is not None:
-                _inferred_rc = infer_next_round(matches1, matches2, _active_ev["event"])
-                if _inferred_rc:
-                    round_code = _inferred_rc
-                    print(f"      📋 Round inferred from stitched {_active_ev['event']} history: {round_code}")
+            _inferred_rc = infer_next_round_any(matches1, matches2, when)
+            if _inferred_rc:
+                round_code = _inferred_rc
+                print(f"      📋 Round inferred from stitched event history: {round_code}")
 
         # Apply round-day offsets to historical match data to match training methodology.
         # Training (preprocess.py) used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]

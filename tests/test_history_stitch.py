@@ -154,3 +154,17 @@ def test_enrich_event_rows_with_stats_fake_fetch():
     # unmatched player -> untouched
     out2 = enrich_event_rows_with_stats(rows, "Someone Else", {}, _fetch=fake)
     assert pd.isna(out2.iloc[0]["aces"])
+
+
+def test_infer_next_round_any_registry_free():
+    from features.history_stitch import infer_next_round_any
+    ref = pd.Timestamp("2026-07-08")
+    m1 = pd.DataFrame([{"event": "Concord Iasi Open", "round": "R32", "date": pd.Timestamp("2026-07-06")}])
+    m2 = pd.DataFrame([{"event": "Concord Iasi Open", "round": "R32", "date": pd.Timestamp("2026-07-06")}])
+    assert infer_next_round_any(m1, m2, ref) == "R16"
+    # different events on top -> None
+    m3 = pd.DataFrame([{"event": "Trieste", "round": "R32", "date": pd.Timestamp("2026-07-06")}])
+    assert infer_next_round_any(m1, m3, ref) is None
+    # stale top rows (>16d old) -> None
+    old = pd.DataFrame([{"event": "Concord Iasi Open", "round": "R32", "date": pd.Timestamp("2026-06-01")}])
+    assert infer_next_round_any(old, old, ref) is None
