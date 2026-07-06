@@ -56,7 +56,10 @@ _ROUND_ORDER = {
 
 
 def _last_name(name: str) -> str:
-    parts = str(name).strip().split()
+    # hyphens split to spaces so "Auger-Aliassime" (ATP) matches
+    # "Auger Aliassime" (TA display form); apostrophes/dots stripped
+    cleaned = str(name).replace("-", " ").replace("'", "").replace(".", ". ").strip()
+    parts = cleaned.split()
     return parts[-1].lower() if parts else ""
 
 

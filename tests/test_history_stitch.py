@@ -168,3 +168,13 @@ def test_infer_next_round_any_registry_free():
     # stale top rows (>16d old) -> None
     old = pd.DataFrame([{"event": "Concord Iasi Open", "round": "R32", "date": pd.Timestamp("2026-06-01")}])
     assert infer_next_round_any(old, old, ref) is None
+
+
+def test_names_match_hyphen_variants():
+    from features.history_stitch import _names_loosely_match
+    # TA strips hyphens from display names; ATP keeps them
+    assert _names_loosely_match("F. Auger-Aliassime", "Felix Auger Aliassime")
+    assert _names_loosely_match("Felix Auger Aliassime", "F. Auger-Aliassime")
+    assert _names_loosely_match("J. Struff", "Jan Lennard Struff")
+    assert _names_loosely_match("Christopher O'Connell", "Christopher Oconnell")
+    assert not _names_loosely_match("Novak Djokovic", "Felix Auger-Aliassime")
