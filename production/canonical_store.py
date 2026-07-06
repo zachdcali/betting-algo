@@ -120,12 +120,29 @@ def create_schema(conn) -> None:
     print("schema created / verified")
 
 
-def _copy_csv(cur, table: str, csv_path: Path) -> None:
-    """Stream a local CSV into an existing all-TEXT staging table."""
-    with cur.copy(f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER true)") as copy:
-        with open(csv_path, "rb") as fh:
-            while chunk := fh.read(1 << 20):
-                copy.write(chunk)
+def _copy_csv(cur, table: str, csv_path: Path, lines_per_batch: int = 150_000) -> None:
+    """Stream a local CSV into an existing all-TEXT staging table.
+
+    Chunked into multiple COPY statements so no single statement outlives
+    Supabase's statement timeout (which killed a one-shot 916k-row COPY).
+    """
+    cur.execute("SET statement_timeout = 0")
+    with open(csv_path, "r") as fh:
+        fh.readline()  # skip header; batches use HEADER false
+        batch: list[str] = []
+        batch_no = 0
+        while True:
+            line = fh.readline()
+            if line:
+                batch.append(line)
+            if batch and (len(batch) >= lines_per_batch or not line):
+                batch_no += 1
+                with cur.copy(f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER false)") as copy:
+                    copy.write("".join(batch))
+                print(f"    copied batch {batch_no} ({len(batch)} rows)")
+                batch = []
+            if not line:
+                break
 
 
 def _staging_from_header(cur, table: str, csv_path: Path) -> list[str]:
