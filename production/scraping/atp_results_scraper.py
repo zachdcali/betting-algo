@@ -299,6 +299,44 @@ def discover_active_events() -> list[dict]:
     return list(out.values())
 
 
+_DRAW_NONNAMES = re.compile(r"^(\(\d+\)|\(WC\)|\(Q\)|\(LL\)|\(PR\)|\(SE\)|\(ALT\)|H2H|BYE|-)$", re.I)
+
+
+def parse_event_draw(html: str) -> pd.DataFrame:
+    """Full bracket from an atptour draws page: one row per pairing.
+
+    Columns: round (code), p1, p2. Placeholder slots ('Qualifier / Lucky
+    Loser', BYE) yield no usable names and are skipped — a first-round pairing
+    resolves only once both names are real.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    rows = []
+    for header in soup.select("[class*=draw-header]"):
+        rnd = _round_code_from_header(header.get_text(" ", strip=True))
+        if rnd is None:
+            continue
+        content = header.find_next_sibling(class_=re.compile("draw-content"))
+        if content is None:
+            continue
+        for item in content.select("[class*=draw-item]"):
+            toks = [t.strip() for t in item.get_text("|", strip=True).split("|") if t.strip()]
+            names = [t for t in toks
+                     if not _DRAW_NONNAMES.match(t)
+                     and "qualifier" not in t.lower() and "lucky loser" not in t.lower()
+                     and len(t) > 2]
+            if len(names) >= 2:
+                rows.append({"round": rnd, "p1": names[0], "p2": names[1]})
+    return pd.DataFrame(rows)
+
+
+def fetch_event_draw(url: str) -> pd.DataFrame:
+    """Fetch + parse a tournament draws page (results URL is rewritten)."""
+    if url.endswith("/results"):
+        url = url[: -len("/results")] + "/draws"
+    html = _fetch_rendered(url, "[class*=draw-item]")
+    return parse_event_draw(html)
+
+
 def parse_match_stats(html: str) -> Optional[dict]:
     """Parse an atptour.com match-stats page into TA stat-column names.
 

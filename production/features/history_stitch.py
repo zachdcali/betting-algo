@@ -338,6 +338,39 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
     return events
 
 
+def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] = None) -> Optional[str]:
+    """Resolve an upcoming match's round from active events' DRAW pages.
+
+    Covers what result-based inference can't: first-round matches at a
+    just-started event. Both names must match one bracket pairing (either
+    orientation); draws are fetched lazily and cached per run.
+    """
+    cache = session_cache if session_cache is not None else {}
+    draws_cache = cache.setdefault("atp_event_draws", {})
+    try:
+        from atp_results_scraper import fetch_event_draw
+    except ImportError:
+        from scraping.atp_results_scraper import fetch_event_draw
+    for ev in get_active_events(ref_date, cache):
+        url = ev["url"]
+        if url not in draws_cache:
+            try:
+                print(f"      🧵 Fetching draw for {ev['event']} (shared, cached)")
+                draws_cache[url] = fetch_event_draw(url)
+            except Exception as exc:
+                print(f"      ⚠️ draw fetch failed (non-fatal): {exc}")
+                draws_cache[url] = pd.DataFrame()
+        draw = draws_cache[url]
+        if draw is None or draw.empty:
+            continue
+        for _, row in draw.iterrows():
+            a, b = str(row["p1"]), str(row["p2"])
+            if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
+               (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
+                return str(row["round"])
+    return None
+
+
 _NEXT_ROUND_ANY_WINDOW_DAYS = 16
 
 

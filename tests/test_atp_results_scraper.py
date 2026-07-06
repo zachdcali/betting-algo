@@ -93,3 +93,13 @@ def test_parse_active_events_challenger_hub():
     assert ev["url"].startswith("https://www.atptour.com/en/scores/current") and ev["url"].endswith("/results")
     assert ev["level"] == "C"
     assert ev["event"]  # display name extracted or slug-titled
+
+
+def test_parse_event_draw_iasi():
+    from scraping.atp_results_scraper import parse_event_draw
+    draw = parse_event_draw(_load("atp_draw_iasi.html.gz"))
+    assert len(draw) >= 20  # 31 slots minus qualifier/bye placeholders
+    assert set(draw["round"]) <= {"R32", "R16", "QF", "SF", "F"}
+    r32 = draw[draw["round"] == "R32"]
+    blob = " ".join(r32["p1"]) + " " + " ".join(r32["p2"])
+    assert "Royer" in blob and "Jianu" in blob  # top seed pairing present

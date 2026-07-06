@@ -26,6 +26,7 @@ from history_stitch import (
     gather_atp_rows,
     infer_next_round_any,
     needs_stitching,
+    round_from_draws,
     stitch_history,
 )
 
@@ -1012,6 +1013,12 @@ class TAFeatureCalculator:
             if _inferred_rc:
                 round_code = _inferred_rc
                 print(f"      📋 Round inferred from stitched event history: {round_code}")
+        if not round_code:
+            # first-round matches can't infer from results — read the bracket
+            _draw_rc = round_from_draws(p1_display, p2_display, when, session_cache)
+            if _draw_rc:
+                round_code = _draw_rc
+                print(f"      📋 Round from event draw page: {round_code}")
 
         # Apply round-day offsets to historical match data to match training methodology.
         # Training (preprocess.py) used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
