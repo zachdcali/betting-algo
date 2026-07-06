@@ -22,6 +22,7 @@ from atp_height_scraper import batch_get_heights
 # Import shared round offset function (same directory)
 sys.path.insert(0, str(Path(__file__).parent))
 from round_offsets import get_round_day_offset, infer_draw_size
+from history_stitch import gather_atp_rows, needs_stitching, stitch_history
 
 # Import schema contract
 import json
@@ -464,7 +465,9 @@ class TAFeatureCalculator:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         df['rank'] = pd.to_numeric(df['rank'], errors='coerce')
 
-        past = df[df['date'] < ref_date].sort_values('date')
+        # rank change = between the last two KNOWN ranks; rows without a rank
+        # (e.g. ATP-stitched rows, which never carry it) must not blank this out
+        past = df[(df['date'] < ref_date) & df['rank'].notna()].sort_values('date')
         if past.empty:
             return 0.0
 
@@ -875,6 +878,28 @@ class TAFeatureCalculator:
 
         p1_display = profile1.get('name', slug1)
         p2_display = profile2.get('name', slug2)
+
+        # Stitch missing recent matches from ATP when TA is stale (real results
+        # with source provenance — never silent defaults; see history_stitch.py).
+        # Rank/hand-dependent features still compute only on TA rows (NaN-safe).
+        for _label, _display, _matches in (("P1", p1_display, matches1), ("P2", p2_display, matches2)):
+            if not needs_stitching(_matches, when):
+                continue
+            try:
+                _atp_rows = gather_atp_rows(_display, when, self._atp_rankings, session_cache)
+                if _atp_rows.empty:
+                    continue
+                _stitched = stitch_history(_matches, _atp_rows)
+                _added = len(_stitched) - len(_matches)
+                if _added > 0:
+                    _ta_last = pd.to_datetime(_matches['date'], errors='coerce').max() if not _matches.empty else None
+                    print(f"      🧵 {_display}: stitched {_added} ATP row(s) onto TA history (TA last: {_ta_last})")
+                    if _label == "P1":
+                        matches1 = _stitched
+                    else:
+                        matches2 = _stitched
+            except Exception as _exc:
+                print(f"      ⚠️ ATP history stitch failed for {_display} (non-fatal): {_exc}")
 
         # ATP height fallback: if TA is missing height for either player, try ATP bio page
         h1 = profile1.get('height_cm')
