@@ -66,8 +66,10 @@ class TAFeatureCalculator:
             print("WARNING: data/atp_rankings.csv not found — Rank_Points will default to 500. "
                   "Run: python scraping/atp_rankings_scraper.py")
         # Store-backed histories/profiles (no TA at predict time -> cloud-deployable).
-        # Opt-in via USE_STORE_HISTORY=1; falls back to TA loudly on store failure.
-        self.use_store = os.environ.get("USE_STORE_HISTORY") == "1"
+        # DEFAULT since 2026-07-08 (parity 138/145, residuals = training-lineage-faithful
+        # rank differences). Opt out with USE_STORE_HISTORY=0. Store failures fall
+        # back to TA for the run — loudly, never silently.
+        self.use_store = os.environ.get("USE_STORE_HISTORY", "1") == "1"
         self._store_conn = None
 
     def _store(self):
@@ -861,12 +863,17 @@ class TAFeatureCalculator:
         when = match_date or datetime.utcnow()
         surface = (surface or "Hard").strip().title()
 
-        # Get profiles: store-backed when USE_STORE_HISTORY=1 (no TA at predict
-        # time), else Tennis Abstract as before.
+        # Get profiles: store-backed by default (no TA at predict time), else
+        # Tennis Abstract. Store outage -> loud TA fallback for the whole run.
         if self.use_store:
-            profile1 = self._store_profile(slug1)
-            profile2 = self._store_profile(slug2)
-        else:
+            try:
+                profile1 = self._store_profile(slug1)
+                profile2 = self._store_profile(slug2)
+            except Exception as _store_exc:
+                print(f"      🚨 Canonical store unavailable ({_store_exc}) — falling back to "
+                      f"Tennis Abstract for this run (provenance: ta)")
+                self.use_store = False
+        if not self.use_store:
             profile1 = self.scraper.get_player_profile(
                 slug1,
                 force_refresh=force_refresh,

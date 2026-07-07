@@ -42,16 +42,55 @@ def test_bovada() -> bool:
         return False
 
 
+def test_atptour() -> bool:
+    """atptour.com via headless Chromium (rankings page = heaviest dependency).
+
+    Since features-from-store (2026-07-08) the live pipeline needs atptour +
+    Bovada + Supabase at predict time — TA is optional. This probe decides cloud
+    viability."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True)
+            pg = b.new_page()
+            pg.set_extra_http_headers({"User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")})
+            pg.goto("https://www.atptour.com/en/rankings/singles?rankRange=0-5000",
+                    wait_until="domcontentloaded", timeout=60000)
+            try:
+                pg.wait_for_function(
+                    "document.querySelectorAll('tr.lower-row, table tbody tr').length > 50",
+                    timeout=30000)
+            except Exception:
+                pass
+            rows = pg.locator("tr.lower-row, table tbody tr").count()
+            # second dependency shape: live-scores hub (event discovery)
+            pg.goto("https://www.atptour.com/en/scores/current", wait_until="domcontentloaded", timeout=60000)
+            html = pg.content()
+            b.close()
+        hub_ok = "/en/scores/current" in html and len(html) > 30000
+        ok = rows > 50 and hub_ok
+        print(f"[atptour.com] ranking rows={rows} scores-hub={'OK' if hub_ok else 'EMPTY/BLOCKED'} -> {'OK' if ok else 'BLOCKED'}")
+        return ok
+    except Exception as e:  # noqa: BLE001
+        print(f"[atptour.com] EXCEPTION {type(e).__name__}: {e} -> BLOCKED")
+        return False
+
+
 def main() -> int:
     print("=== Cloud scrape feasibility (datacenter IP) ===")
-    ta_ok = test_tennis_abstract()
+    atp_ok = test_atptour()
     bovada_ok = test_bovada()
+    ta_ok = test_tennis_abstract()
     print()
-    print(f"VERDICT: Tennis Abstract = {'OK' if ta_ok else 'BLOCKED'} | Bovada = {'OK' if bovada_ok else 'BLOCKED'}")
-    if ta_ok and bovada_ok:
-        print("Both sources served the cloud IP -> cloud scraping is viable (~free on Actions + Supabase).")
+    print(f"VERDICT: atptour = {'OK' if atp_ok else 'BLOCKED'} | Bovada = {'OK' if bovada_ok else 'BLOCKED'} | "
+          f"Tennis Abstract (optional since features-from-store) = {'OK' if ta_ok else 'BLOCKED'}")
+    if atp_ok and bovada_ok:
+        print("Required sources (atptour + Bovada) serve this cloud IP -> hourly cloud runs are viable "
+              "(store mode needs no TA at predict time).")
         return 0
-    print("At least one source blocked the cloud IP -> would need a residential proxy or an alternative.")
+    print("A REQUIRED source blocked the cloud IP -> home box or proxy needed.")
     return 1
 
 
