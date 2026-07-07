@@ -329,6 +329,30 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             events.append(ev)
     except Exception as exc:
         print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
+    # calendar: catches events Bovada prices before the live hub lists them
+    try:
+        try:
+            from atp_results_scraper import parse_challenger_calendar, _fetch_rendered
+        except ImportError:
+            from scraping.atp_results_scraper import parse_challenger_calendar, _fetch_rendered
+        cal_cache = cache.setdefault("atp_calendar", {})
+        if "df" not in cal_cache:
+            html = _fetch_rendered("https://www.atptour.com/en/atp-challenger-tour/calendar",
+                                   "a[href*='/en/scores/']")
+            cal_cache["df"] = parse_challenger_calendar(html)
+        cal = cal_cache["df"]
+        ref = pd.Timestamp(ref_date)
+        seen_ids = {e.get("id") for e in events}
+        window = cal[(pd.to_datetime(cal["start_date"]) <= ref)
+                     & (pd.to_datetime(cal["start_date"]) >= ref - pd.Timedelta(days=8))]
+        for _, r in window.iterrows():
+            if r["id"] in seen_ids:
+                continue
+            events.append({"event": r["event"], "slug": r["slug"], "id": r["id"],
+                           "url": r["url"], "level": "C", "surface": "",
+                           "start_date": r["start_date"]})
+    except Exception as exc:
+        print(f"      ⚠️ calendar discovery unavailable ({exc})")
     static_slugs = set()
     for sev in CURRENT_EVENT_REGISTRY:
         lo, hi = pd.Timestamp(sev["window"][0]), pd.Timestamp(sev["window"][1])

@@ -45,6 +45,14 @@ ROUND_NAME_TO_CODE = {
     "semifinal": "SF",
     "final": "F",
     "finals": "F",
+    # qualifying rounds appear on results-page match headers, not draws pages
+    "1st round qualifying": "Q1",
+    "first round qualifying": "Q1",
+    "2nd round qualifying": "Q2",
+    "second round qualifying": "Q2",
+    "3rd round qualifying": "Q3",
+    "final round qualifying": "Q2",  # challengers: 2-round quali; header 'Final Round' = last
+    "qualifying round": "Q1",
 }
 
 
@@ -389,6 +397,39 @@ def parse_results_archive(html: str, year: int) -> pd.DataFrame:
             "event": name, "slug": m.group(1), "id": m.group(2),
             "url": f"https://www.atptour.com/en/scores/archive/{m.group(1)}/{m.group(2)}/{year}/results",
             "location": loc, "start_date": start,
+        })
+    return pd.DataFrame(rows)
+
+
+def parse_challenger_calendar(html: str) -> pd.DataFrame:
+    """Events from the atptour challenger calendar: event, slug, id, url,
+    start_date. Card-scoped: each scores-link's nearest ancestor that contains
+    exactly one date-range (never page-level containers — see the archive
+    parser's 'Facebook' contamination lesson)."""
+    soup = BeautifulSoup(html, "lxml")
+    rows, seen = [], set()
+    for a in soup.select("a[href*='/en/scores/']"):
+        m = re.search(r"/en/scores/(?:current(?:-challenger)?|archive)/([a-z0-9-]+)/(\d+)", a.get("href", ""))
+        if not m or m.group(2) in seen:
+            continue
+        node, start = a, None
+        for _ in range(5):
+            node = node.parent
+            if node is None:
+                break
+            text = re.sub(r"\s+", " ", node.get_text(" ", strip=True))
+            found = _parse_start_date(text)
+            if found:
+                start, card_text = found, text
+                break
+        if not start:
+            continue
+        seen.add(m.group(2))
+        name = card_text.split("|")[0].strip() if "|" in card_text else card_text[:60].strip()
+        rows.append({
+            "event": name, "slug": m.group(1), "id": m.group(2),
+            "url": f"https://www.atptour.com/en/scores/current-challenger/{m.group(1)}/{m.group(2)}/results",
+            "start_date": start,
         })
     return pd.DataFrame(rows)
 

@@ -116,3 +116,20 @@ def test_parse_results_archive_card_scoped():
     ao = df[df["slug"] == "australian-open"].iloc[0]
     assert ao["start_date"].startswith("2026-01")  # January, not June!
     assert df["start_date"].nunique() > 5  # dates vary per card, not one shared date
+
+
+def test_quali_round_headers_map():
+    from scraping.atp_results_scraper import _round_code_from_header
+    assert _round_code_from_header("1st Round Qualifying - Court 2") == "Q1"
+    assert _round_code_from_header("2nd Round Qualifying") == "Q2"
+    assert _round_code_from_header("Final Round Qualifying - Clamex Court") == "Q2"
+    assert _round_code_from_header("Round of 32 - Center") == "R32"
+
+
+def test_parse_challenger_calendar_fixture():
+    from scraping.atp_results_scraper import parse_challenger_calendar
+    df = parse_challenger_calendar(_load("atp_chall_calendar.html.gz"))
+    assert len(df) >= 100
+    assert df["start_date"].nunique() > 10  # per-card dates, not one shared (Facebook-bug guard)
+    week = df[(df.start_date >= "2026-07-06") & (df.start_date <= "2026-07-13")]
+    assert {"iasi", "bogota", "braunschweig"} <= set(week["slug"])
