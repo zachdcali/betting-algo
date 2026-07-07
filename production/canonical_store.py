@@ -304,6 +304,18 @@ def _resolve_player_id(cur, name: str) -> int | None:
     rows = cur.fetchall()
     if len(rows) == 1:
         return rows[0][0]
+    try:  # explicit alias map (cross-source spellings)
+        cur.execute(
+            """SELECT player_id FROM player_aliases
+               WHERE alias_norm = regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g')""",
+            (name,),
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+    except Exception:
+        conn_ = cur.connection
+        conn_.rollback()  # alias table absent — continue with name matching
     cur.execute(
         """SELECT player_id FROM players
            WHERE regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g')
@@ -337,6 +349,74 @@ def _resolve_player_id(cur, name: str) -> int | None:
         if len(rows) == 1:
             return rows[0][0]
     return None
+
+
+ALIAS_SQL = """
+CREATE TABLE IF NOT EXISTS player_aliases (
+    alias_norm TEXT PRIMARY KEY,
+    player_id  BIGINT NOT NULL REFERENCES players(player_id)
+);
+"""
+
+# Known cross-source spellings (ATP site vs Sackmann). Extend as found.
+KNOWN_ALIASES = {
+    "Aleksandr Shevchenko": "Alexander Shevchenko",
+    "Abdullah Shelbayh": "Abedallah Shelbayh",
+}
+
+
+def seed_aliases(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(ALIAS_SQL)
+        for alias, canonical in KNOWN_ALIASES.items():
+            cur.execute(
+                """INSERT INTO player_aliases (alias_norm, player_id)
+                   SELECT regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g'), player_id
+                   FROM players WHERE lower(name) = lower(%s)
+                   ON CONFLICT (alias_norm) DO NOTHING""",
+                (alias, canonical),
+            )
+    conn.commit()
+    print("aliases seeded")
+
+
+def merge_duplicate_players(conn) -> int:
+    """Merge Sackmann's duplicate player entries (same normalized name AND same
+    birthdate → same human). Matches repoint to the id with the larger match
+    count; duplicate match rows (same match under both ids) are deleted; the
+    minor player row is removed. Conservative: birthdate must be non-null."""
+    merged = 0
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT array_agg(player_id ORDER BY player_id), count(*)
+            FROM players
+            WHERE birthdate IS NOT NULL
+            GROUP BY regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g'), birthdate
+            HAVING count(*) > 1
+        """)
+        groups = [r[0] for r in cur.fetchall()]
+        for ids in groups:
+            counts = []
+            for pid in ids:
+                cur.execute("SELECT count(*) FROM matches WHERE winner_id=%s OR loser_id=%s", (pid, pid))
+                counts.append((cur.fetchone()[0], pid))
+            counts.sort(reverse=True)
+            major = counts[0][1]
+            for _, minor in counts[1:]:
+                for col in ("winner_id", "loser_id"):
+                    cur.execute(f"SELECT match_id FROM matches WHERE {col}=%s", (minor,))
+                    for (mid,) in cur.fetchall():
+                        try:
+                            with conn.transaction():
+                                cur.execute(f"UPDATE matches SET {col}=%s WHERE match_id=%s", (major, mid))
+                        except Exception:  # unique dedupe key hit -> same match already under major
+                            cur.execute("DELETE FROM matches WHERE match_id=%s", (mid,))
+                cur.execute("DELETE FROM player_aliases WHERE player_id=%s", (minor,))
+                cur.execute("DELETE FROM players WHERE player_id=%s", (minor,))
+                merged += 1
+    conn.commit()
+    print(f"duplicate players merged: {merged}")
+    return merged
 
 
 def _current_rank_lookup():
