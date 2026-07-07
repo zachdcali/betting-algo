@@ -262,6 +262,40 @@ def backfill_sackmann(conn, csv_path: Path = MASTER_CSV) -> None:
     print(f"backfill complete in {time.time()-t0:.0f}s")
 
 
+def backfill_ranks(conn, csv_path: Path) -> None:
+    """One-time migration: add rank-at-match-time columns (needed by the
+    rank-momentum features) and fill them from a Sackmann CSV via update-join."""
+    t0 = time.time()
+    with conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE matches
+                ADD COLUMN IF NOT EXISTS winner_rank REAL,
+                ADD COLUMN IF NOT EXISTS winner_rank_points REAL,
+                ADD COLUMN IF NOT EXISTS loser_rank REAL,
+                ADD COLUMN IF NOT EXISTS loser_rank_points REAL
+        """)
+        _staging_from_header(cur, "stage_ranks", csv_path)
+        _copy_csv(cur, "stage_ranks", csv_path)
+        cur.execute("""
+            UPDATE matches m SET
+                winner_rank        = NULLIF(s.winner_rank,'')::real,
+                winner_rank_points = NULLIF(s.winner_rank_points,'')::real,
+                loser_rank         = NULLIF(s.loser_rank,'')::real,
+                loser_rank_points  = NULLIF(s.loser_rank_points,'')::real
+            FROM stage_ranks s
+            WHERE s.tourney_date ~ '^\\d{8}$' AND s.winner_id ~ '^\\d+$' AND s.loser_id ~ '^\\d+$'
+              AND m.match_date = to_date(s.tourney_date,'YYYYMMDD')
+              AND m.event = s.tourney_name
+              AND m.round IS NOT DISTINCT FROM NULLIF(s.round,'')
+              AND m.winner_id = s.winner_id::bigint AND m.loser_id = s.loser_id::bigint
+              AND m.source = 'sackmann'
+        """)
+        print(f"  ranks filled on {cur.rowcount} matches from {csv_path.name}")
+        cur.execute("DROP TABLE stage_ranks")
+    conn.commit()
+    print(f"  done in {time.time()-t0:.0f}s")
+
+
 def _resolve_player_id(cur, name: str) -> int | None:
     """Unique name match against players; exact first, then normalized
     (case/diacritics/hyphens/apostrophes stripped). None if ambiguous/missing —
