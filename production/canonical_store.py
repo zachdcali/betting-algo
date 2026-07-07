@@ -311,7 +311,77 @@ def _resolve_player_id(cur, name: str) -> int | None:
         (name,),
     )
     rows = cur.fetchall()
-    return rows[0][0] if len(rows) == 1 else None
+    if len(rows) == 1:
+        return rows[0][0]
+    # prefix: ATP shortens some names ("Daniel Merida" -> "Daniel Merida Aguilar")
+    cur.execute(
+        """SELECT player_id FROM players
+           WHERE regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g')
+             LIKE regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g') || '%%'""",
+        (name,),
+    )
+    rows = cur.fetchall()
+    if len(rows) == 1:
+        return rows[0][0]
+    # reversed order: "Yunchaokete Bu" (ATP) vs "Bu Yunchaokete" (Sackmann)
+    parts = str(name).strip().split()
+    if len(parts) >= 2:
+        reversed_name = " ".join(parts[::-1])
+        cur.execute(
+            """SELECT player_id FROM players
+               WHERE regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g')
+                   = regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g')""",
+            (reversed_name,),
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+    return None
+
+
+def _current_rank_lookup():
+    """(rank, points) by player name from the weekly rankings CSV.
+
+    Used for scraped event rows, which carry no rank: for matches within the
+    last few weeks the current official ranking IS the near-match-time rank
+    (rankings are weekly). Provenance: data/atp_rankings.csv scraped_at.
+    """
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent / "scraping"))
+        from atp_rankings_scraper import load_rankings, get_player_rank, get_player_points
+        df = load_rankings()
+        if df is None or df.empty:
+            return lambda nm: (None, None)
+        return lambda nm: (get_player_rank(nm, df), get_player_points(nm, df))
+    except Exception:
+        return lambda nm: (None, None)
+
+
+def fill_missing_ranks(conn, source: str = "atp_results") -> int:
+    """Backfill NULL ranks on scraped rows from the current rankings CSV."""
+    look = _current_rank_lookup()
+    updated = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT m.match_id, w.name, l.name FROM matches m
+               JOIN players w ON w.player_id = m.winner_id
+               JOIN players l ON l.player_id = m.loser_id
+               WHERE m.source = %s AND m.winner_rank IS NULL""", (source,))
+        rows = cur.fetchall()
+        for mid, wname, lname in rows:
+            wr, wp = look(wname)
+            lr, lp = look(lname)
+            if wr is None and lr is None:
+                continue
+            cur.execute(
+                """UPDATE matches SET winner_rank=%s, winner_rank_points=%s,
+                                       loser_rank=%s, loser_rank_points=%s
+                   WHERE match_id=%s""", (wr, wp, lr, lp, mid))
+            updated += 1
+    conn.commit()
+    print(f"  ranks backfilled on {updated}/{len(rows)} scraped rows")
+    return updated
 
 
 def ingest_event_results(conn, results_df, event: str, start_date: str,
@@ -324,6 +394,7 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
     """
     inserted = skipped = 0
     unresolved: list[str] = []
+    rank_of = _current_rank_lookup()
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO ingest_runs (source, started_at, notes) VALUES (%s, now(), %s) RETURNING run_id",
@@ -344,13 +415,17 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
             w_sets = card["p1_sets"] if card["winner"] == 1 else card["p2_sets"]
             l_sets = card["p2_sets"] if card["winner"] == 1 else card["p1_sets"]
             score = " ".join(f"{a}-{b}" for a, b in zip(str(w_sets).split(), str(l_sets).split()))
+            wr, wp = rank_of(w_name)
+            lr, lp = rank_of(l_name)
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
-                                        winner_id, loser_id, score, source)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                        winner_id, loser_id, score, source,
+                                        winner_rank, winner_rank_points,
+                                        loser_rank, loser_rank_points)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT DO NOTHING""",
                 (start_date, event, surface, level, str(card.get("round") or "") or None,
-                 wid, lid, score or None, source),
+                 wid, lid, score or None, source, wr, wp, lr, lp),
             )
             inserted += cur.rowcount
         cur.execute(
