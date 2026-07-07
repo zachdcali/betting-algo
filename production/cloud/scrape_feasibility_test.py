@@ -65,13 +65,14 @@ def test_atptour() -> bool:
             except Exception:
                 pass
             rows = pg.locator("tr.lower-row, table tbody tr").count()
-            # second dependency shape: live-scores hub (event discovery)
-            pg.goto("https://www.atptour.com/en/scores/current", wait_until="domcontentloaded", timeout=60000)
-            html = pg.content()
             b.close()
-        hub_ok = "/en/scores/current" in html and len(html) > 30000
+        # second dependency: event discovery via the REAL production code path
+        # (proper render waits + retry — a raw content() read false-negatives)
+        from scraping.atp_results_scraper import discover_active_events
+        events = discover_active_events()
+        hub_ok = len(events) > 0
         ok = rows > 50 and hub_ok
-        print(f"[atptour.com] ranking rows={rows} scores-hub={'OK' if hub_ok else 'EMPTY/BLOCKED'} -> {'OK' if ok else 'BLOCKED'}")
+        print(f"[atptour.com] ranking rows={rows} active events discovered={len(events)} -> {'OK' if ok else 'BLOCKED'}")
         return ok
     except Exception as e:  # noqa: BLE001
         print(f"[atptour.com] EXCEPTION {type(e).__name__}: {e} -> BLOCKED")
