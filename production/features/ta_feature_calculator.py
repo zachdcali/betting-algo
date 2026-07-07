@@ -10,6 +10,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import os
 import re
 import sys
 
@@ -64,6 +65,42 @@ class TAFeatureCalculator:
         if self._atp_rankings is None:
             print("WARNING: data/atp_rankings.csv not found — Rank_Points will default to 500. "
                   "Run: python scraping/atp_rankings_scraper.py")
+        # Store-backed histories/profiles (no TA at predict time -> cloud-deployable).
+        # Opt-in via USE_STORE_HISTORY=1; falls back to TA loudly on store failure.
+        self.use_store = os.environ.get("USE_STORE_HISTORY") == "1"
+        self._store_conn = None
+
+    def _store(self):
+        if self._store_conn is None:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            import canonical_store
+            self._store_conn = canonical_store.connect()
+        return self._store_conn
+
+    @staticmethod
+    def _slug_to_name(slug: str) -> str:
+        """TA slug -> display name ('JanLennardStruff' -> 'Jan Lennard Struff')."""
+        return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(slug)).strip()
+
+    def _store_profile(self, slug: str) -> Optional[dict]:
+        """Profile from the players table + current rank from the rankings CSV."""
+        import store_history
+        name = self._slug_to_name(slug)
+        prof = store_history.get_profile(self._store(), name)
+        if prof is None:
+            return None
+        prof["slug"] = slug
+        prof["current_rank"] = get_player_rank(prof["name"])
+        return prof
+
+    def _store_history_frame(self, profile: dict, session_cache: Optional[Dict]) -> pd.DataFrame:
+        import store_history
+        cache = session_cache if session_cache is not None else {}
+        frames = cache.setdefault("store_history", {})
+        pid = profile["player_id"]
+        if pid not in frames:
+            frames[pid] = store_history.get_history_frame(self._store(), pid)
+        return frames[pid].copy()
 
     def _load_player_mapping(self) -> Dict[str, str]:
         """Load player name -> TA slug mapping from CSV"""
@@ -520,11 +557,19 @@ class TAFeatureCalculator:
 
     # ========== H2H from Tennis Abstract H2H Page ==========
 
-    def _get_h2h_stats(self, slug1: str, slug2: str, session_cache: Optional[Dict] = None) -> Dict[str, float]:
+    def _get_h2h_stats(self, slug1: str, slug2: str, session_cache: Optional[Dict] = None,
+                       _frame: Optional[pd.DataFrame] = None, _name2: Optional[str] = None) -> Dict[str, float]:
         """
         Get H2H stats from Tennis Abstract H2H page.
         For now, calculate from match histories until H2H page parser is added.
+        ``_frame``/``_name2`` (store mode): use a pre-fetched P1 history frame and
+        P2 display name — identical filter semantics, zero TA calls.
         """
+        if _frame is not None and _name2:
+            h2h = pd.DataFrame()
+            if not _frame.empty and 'opp_name' in _frame.columns:
+                h2h = _frame[_frame['opp_name'].str.contains(re.escape(_name2), case=False, na=False)].copy()
+            return self._h2h_from_matches(h2h)
         # Load both players' FULL CAREER matches for H2H (years=[] means all years)
         matches1 = self.scraper.get_player_matches(slug1, years=[], force_refresh=False, persist=False, session_cache=session_cache)
         matches2 = self.scraper.get_player_matches(slug2, years=[], force_refresh=False, persist=False, session_cache=session_cache)
@@ -562,7 +607,11 @@ class TAFeatureCalculator:
         else:
             h2h = pd.DataFrame()
 
-        if h2h.empty:
+        return self._h2h_from_matches(h2h)
+
+    def _h2h_from_matches(self, h2h: pd.DataFrame) -> Dict[str, float]:
+        """H2H stat dict from P1-perspective meeting rows (source-agnostic)."""
+        if h2h is None or h2h.empty:
             return {
                 'H2H_Total_Matches': 0,
                 'H2H_P1_Wins': 0,
@@ -812,39 +861,50 @@ class TAFeatureCalculator:
         when = match_date or datetime.utcnow()
         surface = (surface or "Hard").strip().title()
 
-        # Get profiles with cache params
-        profile1 = self.scraper.get_player_profile(
-            slug1,
-            force_refresh=force_refresh,
-            persist=persist,
-            session_cache=session_cache
-        )
-        profile2 = self.scraper.get_player_profile(
-            slug2,
-            force_refresh=force_refresh,
-            persist=persist,
-            session_cache=session_cache
-        )
+        # Get profiles: store-backed when USE_STORE_HISTORY=1 (no TA at predict
+        # time), else Tennis Abstract as before.
+        if self.use_store:
+            profile1 = self._store_profile(slug1)
+            profile2 = self._store_profile(slug2)
+        else:
+            profile1 = self.scraper.get_player_profile(
+                slug1,
+                force_refresh=force_refresh,
+                persist=persist,
+                session_cache=session_cache
+            )
+            profile2 = self.scraper.get_player_profile(
+                slug2,
+                force_refresh=force_refresh,
+                persist=persist,
+                session_cache=session_cache
+            )
 
         if not profile1 or not profile2:
             missing_slug = slug1 if not profile1 else slug2
             raise RuntimeError(f"TA profile load failed for slug: {missing_slug}")
 
         # Get match histories (years=[] means ALL years for career stats)
-        matches1 = self.scraper.get_player_matches(
-            slug1,
-            years=[],  # All years for career stats
-            force_refresh=force_refresh,
-            persist=persist,
-            session_cache=session_cache
-        )
-        matches2 = self.scraper.get_player_matches(
-            slug2,
-            years=[],  # All years for career stats
-            force_refresh=force_refresh,
-            persist=persist,
-            session_cache=session_cache
-        )
+        if self.use_store:
+            matches1 = self._store_history_frame(profile1, session_cache)
+            matches2 = self._store_history_frame(profile2, session_cache)
+        else:
+            matches1 = self.scraper.get_player_matches(
+                slug1,
+                years=[],  # All years for career stats
+                force_refresh=force_refresh,
+                persist=persist,
+                session_cache=session_cache
+            )
+            matches2 = self.scraper.get_player_matches(
+                slug2,
+                years=[],  # All years for career stats
+                force_refresh=force_refresh,
+                persist=persist,
+                session_cache=session_cache
+            )
+        # keep pre-stitch frames for H2H (same semantics both modes)
+        _m1_prestitch = matches1
 
         # For profile-only testing, allow empty match histories
         # (temporal features will use defaults)
@@ -953,7 +1013,10 @@ class TAFeatureCalculator:
 
         # Get TA tournament start date + round BEFORE temporal features.
         # TA (like Sackmann CSV) stores tournament START DATE for all rounds.
-        _upcoming = self.scraper.get_upcoming_match(slug1, p2_display, session_cache=session_cache)
+        # Store mode: no TA upcoming lookup — rounds come from inference/draws,
+        # dates from Bovada; the completed-match guard runs on the store frame.
+        _upcoming = None if self.use_store else self.scraper.get_upcoming_match(
+            slug1, p2_display, session_cache=session_cache)
         completed_candidate = self._find_completed_match_candidate(
             matches1,
             p2_display,
@@ -1103,7 +1166,11 @@ class TAFeatureCalculator:
         p2_vs_lefty = self._winrate_vs_hand(matches2, 'L')
 
         # H2H stats (pass session_cache to avoid duplicate requests)
-        h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache)
+        if self.use_store:
+            h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache,
+                                      _frame=_m1_prestitch, _name2=p2_display)
+        else:
+            h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache)
 
         # One-hot encodings
         seasons = self._season_flags(surface, when)

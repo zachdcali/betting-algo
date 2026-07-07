@@ -340,6 +340,59 @@ def fetch_event_draw(url: str) -> pd.DataFrame:
     return parse_event_draw(html)
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], start=1)}
+
+# "15 - 21 June, 2026" or "28 December, 2025 - 3 January, 2026"
+_DATE_RANGE = re.compile(
+    r"(\d{1,2})\s*(?:(\w+),?\s*(\d{4})?)?\s*[-–]\s*\d{1,2}\s+(\w+),?\s*(\d{4})")
+
+
+def _parse_start_date(text: str) -> Optional[str]:
+    m = _DATE_RANGE.search(text)
+    if not m:
+        return None
+    day = int(m.group(1))
+    month_name = m.group(2) or m.group(4)   # "15 - 21 June, 2026" -> start month = end month
+    year = m.group(3) or m.group(5)
+    month = _MONTHS.get(str(month_name).capitalize())
+    if not month or not year:
+        return None
+    return f"{int(year):04d}-{month:02d}-{day:02d}"
+
+
+def parse_results_archive(html: str, year: int) -> pd.DataFrame:
+    """Completed tournaments from an atptour results-archive listing.
+
+    One row per event card (``ul.events > li`` — card-scoped, never page-level
+    containers): event, slug, id, url (archive results URL), location,
+    start_date (ISO). Cards without a parseable name+date are skipped.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    rows = []
+    for li in soup.select("ul.events > li"):
+        a = li.find("a", href=re.compile(rf"/en/scores/archive/([a-z0-9-]+)/(\d+)/{year}/results"))
+        if a is None:
+            continue
+        m = re.search(rf"/en/scores/archive/([a-z0-9-]+)/(\d+)/{year}/results", a.get("href", ""))
+        text = re.sub(r"\s+", " ", li.get_text(" | ", strip=True))
+        name = text.split(" | ")[0].strip()
+        start = _parse_start_date(text)
+        if not name or not start or name.lower() in ("results", "facebook"):
+            continue
+        loc = ""
+        parts = [p.strip() for p in text.split(" | ") if p.strip()]
+        if len(parts) > 1 and "," in parts[1]:
+            loc = parts[1]
+        rows.append({
+            "event": name, "slug": m.group(1), "id": m.group(2),
+            "url": f"https://www.atptour.com/en/scores/archive/{m.group(1)}/{m.group(2)}/{year}/results",
+            "location": loc, "start_date": start,
+        })
+    return pd.DataFrame(rows)
+
+
 def parse_match_stats(html: str) -> Optional[dict]:
     """Parse an atptour.com match-stats page into TA stat-column names.
 

@@ -103,3 +103,16 @@ def test_parse_event_draw_iasi():
     r32 = draw[draw["round"] == "R32"]
     blob = " ".join(r32["p1"]) + " " + " ".join(r32["p2"])
     assert "Royer" in blob and "Jianu" in blob  # top seed pairing present
+
+
+def test_parse_results_archive_card_scoped():
+    from scraping.atp_results_scraper import parse_results_archive
+    df = parse_results_archive(_load("atp_archive_tour_2026.html.gz"), 2026)
+    assert len(df) >= 30  # 34 completed tour events in fixture
+    assert not (df["event"].str.lower() == "facebook").any()  # the depth-6 bug
+    halle = df[df["slug"] == "halle"].iloc[0]
+    assert halle["event"] == "Terra Wortmann Open"
+    assert halle["start_date"] == "2026-06-15"
+    ao = df[df["slug"] == "australian-open"].iloc[0]
+    assert ao["start_date"].startswith("2026-01")  # January, not June!
+    assert df["start_date"].nunique() > 5  # dates vary per card, not one shared date
