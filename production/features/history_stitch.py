@@ -443,8 +443,12 @@ def lookup_player_url(name: str, rankings_df: Optional[pd.DataFrame]) -> Optiona
     return url or None
 
 
+ITF_LEVELS = {"15", "25", "S", "F"}
+
+
 def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFrame],
-                    session_cache: Optional[dict] = None) -> pd.DataFrame:
+                    session_cache: Optional[dict] = None,
+                    level_hint: str = "") -> pd.DataFrame:
     """Fetch + normalize all available ATP rows for a player (cached per run).
 
     Sources: the active in-progress event's results page (one fetch shared by
@@ -477,7 +481,9 @@ def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFr
             ev_rows = ev_rows.drop(columns=["_stats_url"])
         frames.append(ev_rows)
 
-    url = lookup_player_url(display_name, rankings_df)
+    # atptour activity pages only list tour/Challenger events — for ITF-level
+    # matches the fetch cannot return gap rows, so skip the ~25s browser trip.
+    url = None if str(level_hint) in ITF_LEVELS else lookup_player_url(display_name, rankings_df)
     if url:
         act_cache = cache.setdefault("atp_activity", {})
         if url not in act_cache:

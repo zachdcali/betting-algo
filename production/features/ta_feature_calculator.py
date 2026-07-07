@@ -952,7 +952,8 @@ class TAFeatureCalculator:
             if not needs_stitching(_matches, when):
                 continue
             try:
-                _atp_rows = gather_atp_rows(_display, when, self._atp_rankings, session_cache)
+                _atp_rows = gather_atp_rows(_display, when, self._atp_rankings, session_cache,
+                                            level_hint=str(tournament_level or ""))
                 if _atp_rows.empty:
                     continue
                 _stitched = stitch_history(_matches, _atp_rows)
