@@ -387,6 +387,7 @@ def merge_duplicate_players(conn) -> int:
     minor player row is removed. Conservative: birthdate must be non-null."""
     merged = 0
     with conn.cursor() as cur:
+        cur.execute(ALIAS_SQL)  # idempotent; merge cleans alias rows of merged ids
         cur.execute("""
             SELECT array_agg(player_id ORDER BY player_id), count(*)
             FROM players
@@ -439,28 +440,39 @@ def _current_rank_lookup():
 
 
 def fill_missing_ranks(conn, source: str = "atp_results") -> int:
-    """Backfill NULL ranks on scraped rows from the current rankings CSV."""
-    look = _current_rank_lookup()
+    """Backfill NULL ranks on scraped rows by BACKWARD carry-forward: each row
+    gets that player's most recent real rank observation strictly BEFORE the
+    row's date. Never uses later observations — a future rank stamped onto a
+    dated row is temporal leakage (it fabricated volatility in testing)."""
     updated = 0
     with conn.cursor() as cur:
-        cur.execute(
-            """SELECT m.match_id, w.name, l.name FROM matches m
-               JOIN players w ON w.player_id = m.winner_id
-               JOIN players l ON l.player_id = m.loser_id
-               WHERE m.source = %s AND m.winner_rank IS NULL""", (source,))
-        rows = cur.fetchall()
-        for mid, wname, lname in rows:
-            wr, wp = look(wname)
-            lr, lp = look(lname)
-            if wr is None and lr is None:
-                continue
-            cur.execute(
-                """UPDATE matches SET winner_rank=%s, winner_rank_points=%s,
-                                       loser_rank=%s, loser_rank_points=%s
-                   WHERE match_id=%s""", (wr, wp, lr, lp, mid))
-            updated += 1
+        cur.execute("SET statement_timeout = 0")
+        for side, rank_col, pts_col in (("winner", "winner_rank", "winner_rank_points"),
+                                        ("loser", "loser_rank", "loser_rank_points")):
+            cur.execute(f"""
+                UPDATE matches m SET {rank_col} = sub.rank, {pts_col} = sub.pts
+                FROM (
+                    SELECT t.match_id,
+                        (SELECT CASE WHEN p.winner_id = t.pid THEN p.winner_rank ELSE p.loser_rank END
+                         FROM matches p
+                         WHERE (p.winner_id = t.pid OR p.loser_id = t.pid)
+                           AND p.match_date < t.match_date
+                           AND (CASE WHEN p.winner_id = t.pid THEN p.winner_rank ELSE p.loser_rank END) IS NOT NULL
+                         ORDER BY p.match_date DESC LIMIT 1) AS rank,
+                        (SELECT CASE WHEN p.winner_id = t.pid THEN p.winner_rank_points ELSE p.loser_rank_points END
+                         FROM matches p
+                         WHERE (p.winner_id = t.pid OR p.loser_id = t.pid)
+                           AND p.match_date < t.match_date
+                           AND (CASE WHEN p.winner_id = t.pid THEN p.winner_rank_points ELSE p.loser_rank_points END) IS NOT NULL
+                         ORDER BY p.match_date DESC LIMIT 1) AS pts
+                    FROM (SELECT match_id, {side}_id AS pid, match_date
+                          FROM matches WHERE source = %s AND {rank_col} IS NULL) t
+                ) sub
+                WHERE m.match_id = sub.match_id AND sub.rank IS NOT NULL
+            """, (source,))
+            updated += cur.rowcount
     conn.commit()
-    print(f"  ranks backfilled on {updated}/{len(rows)} scraped rows")
+    print(f"  ranks carry-forward-filled ({updated} column-updates)")
     return updated
 
 
@@ -474,7 +486,6 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
     """
     inserted = skipped = 0
     unresolved: list[str] = []
-    rank_of = _current_rank_lookup()
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO ingest_runs (source, started_at, notes) VALUES (%s, now(), %s) RETURNING run_id",
@@ -495,17 +506,15 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
             w_sets = card["p1_sets"] if card["winner"] == 1 else card["p2_sets"]
             l_sets = card["p2_sets"] if card["winner"] == 1 else card["p1_sets"]
             score = " ".join(f"{a}-{b}" for a, b in zip(str(w_sets).split(), str(l_sets).split()))
-            wr, wp = rank_of(w_name)
-            lr, lp = rank_of(l_name)
+            # ranks left NULL here; fill_missing_ranks() carry-forward-fills them
+            # from each player's own prior observations (leak-free by construction)
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
-                                        winner_id, loser_id, score, source,
-                                        winner_rank, winner_rank_points,
-                                        loser_rank, loser_rank_points)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                        winner_id, loser_id, score, source)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT DO NOTHING""",
                 (start_date, event, surface, level, str(card.get("round") or "") or None,
-                 wid, lid, score or None, source, wr, wp, lr, lp),
+                 wid, lid, score or None, source),
             )
             inserted += cur.rowcount
         cur.execute(
