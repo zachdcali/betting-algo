@@ -1,0 +1,70 @@
+name: Hourly betting pipeline
+
+# Paper-trading autonomy: every run logs predictions for the current Bovada
+# slate (features from the canonical Supabase store — no Tennis Abstract),
+# settles pending matches, and commits the updated logs back to the repo so
+# nothing is lost on the ephemeral runner. Odds age is bounded by the cadence.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+concurrency:
+  group: hourly-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Restore model artifacts
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: results/professional_tennis
+          key: models-v1
+
+      - name: Download model artifacts (cache miss)
+        if: steps.models.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download models-v1 --pattern "models-v1.tar.gz" --output /tmp/models.tar.gz
+          tar -xzf /tmp/models.tar.gz
+          rm /tmp/models.tar.gz
+
+      - name: Configure store credentials
+        run: echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env.supabase
+
+      - name: Run pipeline (paper mode, store-backed features)
+        working-directory: production
+        run: python -u main.py --dry-run
+
+      - name: Commit updated logs
+        run: |
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add -A production/prediction_log.csv production/prediction_snapshots.csv \
+                     production/odds_history.csv production/logs data/atp_rankings.csv \
+                     data/atp_heights.json || true
+          git diff --cached --quiet && echo "no log changes" && exit 0
+          git commit -m "Hourly run: logs $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin main
+          git push
