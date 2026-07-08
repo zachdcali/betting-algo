@@ -37,11 +37,16 @@ from prediction_logger import upgrade_prediction_log
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
 DEFAULT_RATE_LIMIT_DELAY = 8.0
-DEFAULT_MIN_SETTLEMENT_AGE_HOURS = 18.0
+# Tuned for the hourly cloud cadence: settlement sources are one cached fetch
+# per EVENT per run (ATP results / ITF order-of-play), so re-checking a
+# candidate is nearly free. The old 18h values date from daily manual runs
+# where every candidate cost a Tennis Abstract fetch — they made same-day
+# results wait until the next morning.
+DEFAULT_MIN_SETTLEMENT_AGE_HOURS = 6.0
 DEFAULT_MAX_CANDIDATES = 75
 DEFAULT_MAX_RATE_LIMITS = 5
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
-DEFAULT_RETRY_BACKOFF_HOURS = 18.0
+DEFAULT_RETRY_BACKOFF_HOURS = 2.0
 MIN_SETTLEMENT_SCORE = 65
 AMBIGUITY_MARGIN = 6
 
