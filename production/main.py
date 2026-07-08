@@ -1147,7 +1147,9 @@ class LiveBettingOrchestrator:
                 self._refresh_database()
                 self._ingest_store_events()
                 self._flush_run_history(status='success')
-                return False
+                # a no-bets hour is a HEALTHY run — exit 0 or the cloud job
+                # reports failure and skips committing this run's logs
+                return True
                 
         except Exception as e:
             print(f"💥 Pipeline error: {e}")
