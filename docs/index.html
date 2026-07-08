@@ -308,7 +308,7 @@ function vResults(filter){
   v.appendChild(bar);
   const q=(filter||"").toLowerCase();
   const rows = q? settled.filter(r=>(r.p1||"").toLowerCase().includes(q)||(r.p2||"").toLowerCase().includes(q)) : settled;
-  v.appendChild(el("p","note",`Every settled prediction ever logged — ${settled.length} matches. Percentages are each model's probability on the eventual <b>winner</b>: green ≥ 50% (called it), purple &lt; 50% (missed). Click a match for full detail.`));
+  v.appendChild(el("p","note",`Every settled prediction ever logged — ${settled.length} matches, in the home-board format: per-player odds, de-vigged market %, and every model probability for that player (green/purple = 8pt+ hotter/colder than market). The winner wears the WON badge with the score. Shadow-model history before Jul 8 was lost in a data incident, so those cells show a dash; everything since accumulates in full. Click any match for detail.`));
   const byTour={};
   rows.forEach(r=>{ const t=((r.tournament==="Men\'s Singles")?"Wimbledon":(r.tournament||"Unknown"));
     (byTour[t]=byTour[t]||[]).push(r); });
@@ -334,28 +334,35 @@ function vResults(filter){
     Object.entries(byRound).sort((a,b)=>(ROUND_ORDER[a[0]]??99)-(ROUND_ORDER[b[0]]??99)).forEach(([rd,rms])=>{
       inner.appendChild(el("h2",null,`${rd==="?"?"Round unknown":rd} <span class="n">${rms.length}</span>`));
       const wrapEl=el("div","tablewrap"), tb=el("table");
-      tb.innerHTML=`<thead><tr><th class="pl">Result</th><th>Date</th><th>Mkt</th>${
+      tb.innerHTML=`<thead><tr><th class="pl">Player</th><th>Line</th><th>Market</th>${
         LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
         Object.values(SHADOW_LABELS).map(n=>`<th>${n}</th>`).join("")}</tr></thead>`;
       const body=el("tbody");
+      const NCOLS=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
       rms.sort((a,b)=>(b.match_date||"").localeCompare(a.match_date||"")).forEach(r=>{
-        const w=r.actual_winner==1?1:2;
-        const winner=w===1?r.p1:r.p2, loser=w===1?r.p2:r.p1;
-        const pw=p=> p==null?null:(w===1?p:1-p);
-        const cell=p=>{ const q2=pw(p); if(q2==null) return '<td class="na">–</td>';
-          return `<td class="${q2>=.5?"hot":"cold"}">${Math.round(q2*100)}%</td>`; };
         const k=matchKey(r), sh=shadowByKey[k]||{};
-        const tr=el("tr","expandable");
-        tr.innerHTML=`<td class="pl"><b>${winner}</b> d. ${loser}${r.score?`<span class="rnd">${r.score}</span>`:""}</td>
-          <td>${(r.match_date||"").slice(5,10)}</td>${cell(num(r.market_p1_prob))}${
-          LIVE_MODELS.map(m=>cell(num(r[m.col]))).join("")}${
-          Object.keys(SHADOW_LABELS).map(mv=>{const e=sh[mv];return cell(e?e.p:null);}).join("")}`;
+        const w=r.actual_winner==1?1:2;
+        const mkt1=num(r.market_p1_prob), mkt2=mkt1!=null?1-mkt1:null;
+        const cells=(side)=>{
+          let out="";
+          LIVE_MODELS.forEach(m=>{ const p=num(r[m.col]); const q2=p==null?null:(side===1?p:1-p);
+            out+=probCell(q2, side===1?mkt1:mkt2); });
+          Object.keys(SHADOW_LABELS).forEach(mv=>{ const e=sh[mv]; const q2=e&&e.p!=null?(side===1?e.p:1-e.p):null;
+            out+=probCell(q2, side===1?mkt1:mkt2); });
+          return out;
+        };
+        const wonBadge='<span class="badge" style="background:var(--grass-bg);color:var(--grass);border-color:var(--grass)">WON</span>';
+        const tr1=el("tr","expandable");
+        tr1.innerHTML=`<td class="pl">${w===1?"<b>"+r.p1+"</b>":r.p1}${w===1?wonBadge:""}${w===1&&r.score?`<span class="rnd">${r.score}</span>`:""}<span class="rnd">${(r.match_date||"").slice(5,10)}</span></td>
+          <td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
+        const tr2=el("tr","p2row expandable");
+        tr2.innerHTML=`<td class="pl">${w===2?"<b>"+r.p2+"</b>":r.p2}${w===2?wonBadge:""}${w===2&&r.score?`<span class="rnd">${r.score}</span>`:""}</td>
+          <td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
         const dRow=el("tr","detail"); dRow.style.display="none";
-        const dCell=el("td"); dCell.colSpan=5+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
-        dRow.appendChild(dCell);
-        tr.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
-          if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); };
-        body.append(tr,dRow);
+        const dCell=el("td"); dCell.colSpan=NCOLS; dRow.appendChild(dCell);
+        [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
+          if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
+        body.append(tr1,tr2,dRow);
       });
       tb.appendChild(body); wrapEl.appendChild(tb); inner.appendChild(wrapEl);
     });
