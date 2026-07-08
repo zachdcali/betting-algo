@@ -101,6 +101,7 @@ footer{margin-top:34px;font-size:12px;color:var(--muted);max-width:80ch}
 
   <nav class="tabs" id="tabs">
     <button data-v="slate" class="on">Current Slate</button>
+    <button data-v="results">Results</button>
     <button data-v="drift">Odds Drift</button>
     <button data-v="models">Model Report</button>
     <button data-v="bets">Bet Log &amp; P&amp;L</button>
@@ -297,6 +298,74 @@ function matchDetail(r, sh){
   </div>`;
 }
 
+const ROUND_ORDER={F:0,BR:1,SF:2,QF:3,R16:4,R32:5,R64:6,R128:7,RR:8,Q3:9,Q2:10,Q1:11};
+function vResults(filter){
+  const v=$("#view"); v.innerHTML="";
+  const settled=D.preds.filter(r=>r.actual_winner==1||r.actual_winner==2);
+  const bar=el("div",null,`<input id="rsearch" placeholder="Search player…" value="${filter||""}"
+    style="width:260px;max-width:100%;padding:8px 12px;font:13px var(--sans);color:var(--ink);
+    background:var(--surface);border:1px solid var(--grid);border-radius:8px;margin:2px 0 6px">`);
+  v.appendChild(bar);
+  const q=(filter||"").toLowerCase();
+  const rows = q? settled.filter(r=>(r.p1||"").toLowerCase().includes(q)||(r.p2||"").toLowerCase().includes(q)) : settled;
+  v.appendChild(el("p","note",`Every settled prediction ever logged — ${settled.length} matches. Percentages are each model's probability on the eventual <b>winner</b>: green ≥ 50% (called it), purple &lt; 50% (missed). Click a match for full detail.`));
+  const byTour={};
+  rows.forEach(r=>{ const t=((r.tournament==="Men\'s Singles")?"Wimbledon":(r.tournament||"Unknown"));
+    (byTour[t]=byTour[t]||[]).push(r); });
+  const tours=Object.entries(byTour).map(([t,ms])=>({t,ms,
+      last:ms.reduce((a,r)=>((r.match_date||"")>a?(r.match_date||""):a),""),
+      first:ms.reduce((a,r)=>((r.match_date||"")<a&&r.match_date?r.match_date:a),"9999")}))
+    .sort((a,b)=>b.last.localeCompare(a.last));
+  const shadowByKey={};
+  D.shadow.forEach(x=>{ const k=matchKey(x);
+    (shadowByKey[k]=shadowByKey[k]||{})[x.model_version]={p:num(x.shadow_p1_prob)}; });
+  tours.slice(0,40).forEach(({t,ms,last,first})=>{
+    const det=el("details"); det.style.marginBottom="10px";
+    if(q||tours.length===1) det.open=true;
+    const acc=(fn)=>{ let ok=0,n=0; ms.forEach(r=>{const p=fn(r); if(p==null)return; n++;
+      if((r.actual_winner==1&&p>=.5)||(r.actual_winner==2&&p<.5)) ok++;}); return n?`${ok}/${n}`:"–"; };
+    det.innerHTML=`<summary style="cursor:pointer;list-style:none;background:var(--surface);border:1px solid var(--grid);border-radius:10px;padding:10px 14px">
+      <span style="font:600 15px var(--serif)">${t}</span>
+      <span style="font:11px var(--mono);color:var(--muted);margin-left:10px">${first.slice(5,10)} → ${last.slice(5,10)} · ${ms.length} matches</span>
+      <span style="font:11px var(--mono);color:var(--ink2);float:right">NN ${acc(r=>num(r.model_p1_prob))} · XGB ${acc(r=>num(r.xgb_p1_prob))} · Market ${acc(r=>num(r.market_p1_prob))}</span></summary>`;
+    const inner=el("div"); inner.style.padding="6px 0 0";
+    const byRound={};
+    ms.forEach(r=>{ const rd=r.round||"?"; (byRound[rd]=byRound[rd]||[]).push(r); });
+    Object.entries(byRound).sort((a,b)=>(ROUND_ORDER[a[0]]??99)-(ROUND_ORDER[b[0]]??99)).forEach(([rd,rms])=>{
+      inner.appendChild(el("h2",null,`${rd==="?"?"Round unknown":rd} <span class="n">${rms.length}</span>`));
+      const wrapEl=el("div","tablewrap"), tb=el("table");
+      tb.innerHTML=`<thead><tr><th class="pl">Result</th><th>Date</th><th>Mkt</th>${
+        LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
+        Object.values(SHADOW_LABELS).map(n=>`<th>${n}</th>`).join("")}</tr></thead>`;
+      const body=el("tbody");
+      rms.sort((a,b)=>(b.match_date||"").localeCompare(a.match_date||"")).forEach(r=>{
+        const w=r.actual_winner==1?1:2;
+        const winner=w===1?r.p1:r.p2, loser=w===1?r.p2:r.p1;
+        const pw=p=> p==null?null:(w===1?p:1-p);
+        const cell=p=>{ const q2=pw(p); if(q2==null) return '<td class="na">–</td>';
+          return `<td class="${q2>=.5?"hot":"cold"}">${Math.round(q2*100)}%</td>`; };
+        const k=matchKey(r), sh=shadowByKey[k]||{};
+        const tr=el("tr","expandable");
+        tr.innerHTML=`<td class="pl"><b>${winner}</b> d. ${loser}${r.score?`<span class="rnd">${r.score}</span>`:""}</td>
+          <td>${(r.match_date||"").slice(5,10)}</td>${cell(num(r.market_p1_prob))}${
+          LIVE_MODELS.map(m=>cell(num(r[m.col]))).join("")}${
+          Object.keys(SHADOW_LABELS).map(mv=>{const e=sh[mv];return cell(e?e.p:null);}).join("")}`;
+        const dRow=el("tr","detail"); dRow.style.display="none";
+        const dCell=el("td"); dCell.colSpan=5+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
+        dRow.appendChild(dCell);
+        tr.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
+          if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); };
+        body.append(tr,dRow);
+      });
+      tb.appendChild(body); wrapEl.appendChild(tb); inner.appendChild(wrapEl);
+    });
+    det.appendChild(inner); v.appendChild(det);
+  });
+  const inp=$("#rsearch");
+  inp.addEventListener("input",()=>{ clearTimeout(inp._t); inp._t=setTimeout(()=>{
+    const val=inp.value; vResults(val); const ni=$("#rsearch"); ni.focus(); ni.setSelectionRange(val.length,val.length); },350); });
+}
+
 function vDrift(){
   const v=$("#view"); v.innerHTML="";
   const byMatch={};
@@ -430,7 +499,7 @@ function vSystem(){
 }
 
 /* ---------- boot ---------- */
-const VIEWS={slate:vSlate, drift:vDrift, models:vModels, bets:vBets, system:vSystem};
+const VIEWS={slate:vSlate, results:vResults, drift:vDrift, models:vModels, bets:vBets, system:vSystem};
 $("#tabs").addEventListener("click",e=>{
   const b=e.target.closest("button"); if(!b) return;
   document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
@@ -438,7 +507,7 @@ $("#tabs").addEventListener("click",e=>{
 });
 (async()=>{
   try{
-    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner";
+    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at";
     [D.preds, D.odds, D.shadow, D.runs, D.bets] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
       fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
