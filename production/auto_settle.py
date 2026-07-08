@@ -898,7 +898,11 @@ def run(
 
     if not pending.empty:
         sort_cols = [col for col in ["match_date", "match_start_time", "p1", "p2"] if col in pending.columns]
-        pending = pending.sort_values(sort_cols) if sort_cols else pending
+        # newest matches first: recently played rows are the settleable ones —
+        # oldest-first let permanently-unsettleable zombies hog the candidate cap
+        if sort_cols:
+            ascending = [c != "match_date" for c in sort_cols]
+            pending = pending.sort_values(sort_cols, ascending=ascending)
         if max_candidates and max_candidates > 0:
             pending = pending.head(max_candidates)
 
