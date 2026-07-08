@@ -16,4 +16,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-08 13:29:22,session_20260708_165413,956.0095777707344,-60.0,Settled bet: Aleksandar Vukic vs Liam Broady (LOSS),120.0,1,1
 2026-07-08 13:37:31,session_20260708_094211,942.0882057961826,-13.92137197455178,Settled bet: Yi Zhou vs Daniel de Jonge (LOSS),180.00000000000006,11,2
 2026-07-08 13:37:55,session_20260708_094211,928.1668338216308,-13.92137197455178,Settled bet: Ilia Simakin vs Lautaro Midon (LOSS),180.00000000000006,10,3
-2026-07-08 13:38:04,session_20260708_094211,938.8755814943629,10.708747672732137,Settled bet: Michele Ribecai vs Matej Dodig (WIN),180.00000000000006,9,4
+2026-07-08 13:38:04,session_20260708_094211,938.8755814943628,10.708747672732136,Settled bet: Michele Ribecai vs Matej Dodig (WIN),180.00000000000006,9,4
+2026-07-08 22:20:12,session_20260708_222012,1000.0,0.0,Session started,0.0,0,0
