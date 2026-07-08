@@ -41,12 +41,11 @@ SHRINK_GUARD_RATIO = 0.9
 
 
 def _pg_type(dtype) -> str:
-    if pd.api.types.is_integer_dtype(dtype):
-        return "bigint"
-    if pd.api.types.is_float_dtype(dtype):
-        return "double precision"
-    if pd.api.types.is_bool_dtype(dtype):
-        return "boolean"
+    # display mirror: everything is text. Inferring numeric types from a CSV
+    # snapshot breaks the day a column's first real value is a string (the
+    # score column was created double-precision while scores were all empty,
+    # then "4-6 4-6 2-6" arrived and the whole sync failed). The dashboard
+    # parses numbers client-side.
     return "text"
 
 
