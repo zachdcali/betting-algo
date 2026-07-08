@@ -55,6 +55,8 @@ jobs:
 
       - name: Run pipeline (paper mode, store-backed features)
         working-directory: production
+        env:
+          SKIP_ITF_MATCHES: "1"
         run: python -u main.py --dry-run
 
       - name: Commit updated logs

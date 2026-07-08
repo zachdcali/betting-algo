@@ -347,6 +347,16 @@ class LiveBettingOrchestrator:
                    or 'outright' in str(r.get('event', '')).lower(),
             axis=1
         )].copy()
+
+        # Cloud runs skip ITF futures (SKIP_ITF_MATCHES=1): no round source exists
+        # for ITF yet (itftennis.com scraper unbuilt) so they are never bettable,
+        # and their per-player fetches were blowing the hourly runner's budget.
+        if os.environ.get("SKIP_ITF_MATCHES") == "1":
+            n_before = len(odds_df)
+            odds_df = odds_df[~odds_df['event'].astype(str).str.contains("ITF", case=False, na=False)].copy()
+            if n_before - len(odds_df):
+                print(f"   ⏭️  Skipping {n_before - len(odds_df)} ITF match(es) (SKIP_ITF_MATCHES=1)")
+
         self.run_metrics['odds_rows_candidate'] = len(odds_df)
 
         feature_rows = []
