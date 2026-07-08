@@ -139,7 +139,7 @@ const SHADOW_LABELS = {
   "performance_v1_nn_logits_128_64_robust__2026-04-25":"NN b",
   "performance_v1_nn_logits_96_48_lowdrop__2026-04-25":"NN c",
 };
-const D = {preds:[], odds:[], shadow:[], runs:[]};   // data store
+const D = {preds:[], odds:[], shadow:[], runs:[], bets:[]};   // data store
 const $ = s => document.querySelector(s);
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
 const fmt = (v,d=1)=> v==null||isNaN(v) ? "–" : Number(v).toFixed(d);
@@ -379,47 +379,34 @@ function vModels(){
 
 function vBets(){
   const v=$("#view"); v.innerHTML="";
-  const bets = D.preds.filter(r=> num(r.bet_amount)>0)
-    .sort((a,b)=>(a.logged_at||"").localeCompare(b.logged_at||""));
-  const settledBets = bets.filter(r=>r.actual_winner==1||r.actual_winner==2);
+  const bets=[...D.bets].sort((a,b)=>(a.timestamp||"").localeCompare(b.timestamp||""));
+  const settled=bets.filter(b=> b.outcome==="won"||b.outcome==="lost");
   let bank=0; const path=[[0,0]];
-  settledBets.forEach((r,i)=>{
-    const betOn = r.bet_on_player==2?2:1;
-    const dec = num(betOn===1?r.p1_odds_decimal:r.p2_odds_decimal)||0;
-    const won = r.actual_winner==betOn;
-    const stake = num(r.bet_amount)||0;
-    bank += won ? stake*(dec-1) : -stake;
-    path.push([i+1, bank]);
-  });
-  v.appendChild(el("h2",null,`Paper P&amp;L <span class="n">${settledBets.length} settled bets · ${bets.length-settledBets.length} pending</span>`));
+  settled.forEach((b,i)=>{ bank+=num(b.actual_profit)||0; path.push([i+1,bank]); });
+  v.appendChild(el("h2",null,`Paper P&amp;L <span class="n">${settled.length} settled · ${bets.length-settled.length} pending</span>`));
+  v.appendChild(el("p","note","Real staked paper bets from the pipeline's bet ledger (flat/Kelly stake, edge at placement, actual profit at settlement). Settlement writes began 2026-07-08 — this fills in hourly from here."));
   const card=el("div","chartcard");
   if(path.length>1){
     const c=lineChart({w:820,h:200,xs:path.map(p=>p[0]),yFmt:v=>"$"+Math.round(v),xFmt:v=>Math.round(v),
       series:[{color:bank>=0?"var(--s2)":"var(--s6)",pts:path}]});
-    card.innerHTML=`<h3>Cumulative paper profit — actual staked bets</h3>
-      <p class="sub">running total after each settled bet · final: <b style="color:${bank>=0?'var(--good-text)':'var(--crit)'}">${usd(bank)}</b></p>${c.svg}`;
-  } else card.innerHTML='<div class="loading">No settled bets yet — settlement writes began 2026-07-08.</div>';
-  v.appendChild(card);
+    card.innerHTML=`<h3>Cumulative paper profit</h3>
+      <p class="sub">after each settled bet · total: <b style="color:${bank>=0?'var(--good-text)':'var(--crit)'}">${usd(bank)}</b></p>${c.svg}`;
+    v.appendChild(card);
+  }
   const wrapEl=el("div","tablewrap"), tb=el("table");
-  tb.innerHTML=`<thead><tr><th class="pl">Bet</th><th>Round</th><th>Odds</th><th>Stake</th><th>Model p</th><th>Market p</th><th>Edge</th><th>Result</th><th>P&amp;L</th><th>Placed</th></tr></thead>`;
+  tb.innerHTML=`<thead><tr><th class="pl">Bet</th><th>Odds</th><th>Stake</th><th>Kelly f</th><th>Model p</th><th>Market p</th><th>Edge</th><th>Outcome</th><th>P&amp;L</th><th>Placed</th></tr></thead>`;
   const body=el("tbody");
-  [...bets].reverse().slice(0,300).forEach(r=>{
-    const betOn=r.bet_on_player==2?2:1;
-    const pick=betOn===1?r.p1:r.p2, opp=betOn===1?r.p2:r.p1;
-    const dec=num(betOn===1?r.p1_odds_decimal:r.p2_odds_decimal);
-    const mp=num(r.model_p1_prob), mkt=num(r.market_p1_prob);
-    const pModel=mp==null?null:(betOn===1?mp:1-mp), pMkt=mkt==null?null:(betOn===1?mkt:1-mkt);
-    const settled=r.actual_winner==1||r.actual_winner==2;
-    const won=settled&&r.actual_winner==betOn;
-    const stake=num(r.bet_amount)||0;
-    const pnl=settled?(won?stake*(dec-1):-stake):null;
+  [...bets].reverse().slice(0,400).forEach(b=>{
+    const done=b.outcome==="won"||b.outcome==="lost";
+    const pnl=done?num(b.actual_profit):null;
     const tr=el("tr");
-    tr.innerHTML=`<td class="pl">${pick}<span class="rnd">vs ${opp}</span></td>
-      <td>${r.round||"–"}</td><td>${american(dec)}</td><td>$${fmt(stake,0)}</td>
-      <td>${pct(pModel)}</td><td>${pct(pMkt)}</td><td>${pModel&&pMkt?fmt((pModel-pMkt)*100,1)+"pt":"–"}</td>
-      <td class="${settled?(won?"win":"loss"):""}">${settled?(won?"WON":"LOST"):"pending"}</td>
+    tr.innerHTML=`<td class="pl">${b.bet_on||""}<span class="rnd">${b.match||""}</span></td>
+      <td>${american(b.odds_decimal)}</td><td>$${fmt(num(b.stake),0)}</td><td>${fmt(num(b.kelly_fraction),3)}</td>
+      <td>${pct(num(b.model_prob))}</td><td>${pct(num(b.market_prob))}</td>
+      <td>${b.edge!=null?fmt(num(b.edge)*100,1)+"pt":"–"}</td>
+      <td class="${done?(b.outcome==="won"?"win":"loss"):""}">${done?b.outcome.toUpperCase():"pending"}</td>
       <td class="${pnl>0?"win":pnl<0?"loss":""}">${pnl==null?"–":usd(pnl)}</td>
-      <td>${(r.logged_at||"").slice(5,16)}</td>`;
+      <td>${(b.timestamp||"").slice(5,16)}</td>`;
     body.appendChild(tr);
   });
   tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
@@ -429,13 +416,13 @@ function vSystem(){
   const v=$("#view"); v.innerHTML="";
   v.appendChild(el("h2",null,"System health"));
   const wrapEl=el("div","tablewrap"), tb=el("table");
-  tb.innerHTML=`<thead><tr><th class="pl">Run</th><th>Started</th><th>Odds rows</th><th>Features ok</th><th>Predictions</th><th>Bets</th></tr></thead>`;
+  tb.innerHTML=`<thead><tr><th class="pl">Run</th><th>Started</th><th>Odds rows</th><th>Features ok</th><th>Predictions</th><th>Bets</th><th>Settled</th></tr></thead>`;
   const body=el("tbody");
   [...D.runs].sort((a,b)=>(b.run_id||"").localeCompare(a.run_id||"")).forEach(r=>{
     const tr=el("tr");
     tr.innerHTML=`<td class="pl" style="font-family:var(--mono);font-weight:400">${r.run_id}</td>
       <td>${(r.started_at||"").slice(0,16)}</td><td>${r.odds_rows_candidate??"–"}</td>
-      <td>${r.feature_rows_ok??"–"}</td><td>${r.prediction_rows_success??"–"}</td><td>${r.bets_placed_count??"–"}</td>`;
+      <td>${r.feature_rows_ok??"–"}</td><td>${r.prediction_rows_success??"–"}</td><td>${r.bets_logged??"–"}</td><td>${r.settlement_newly_settled??"–"}</td>`;
     body.appendChild(tr);
   });
   tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
@@ -451,12 +438,13 @@ $("#tabs").addEventListener("click",e=>{
 });
 (async()=>{
   try{
-    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,bet_amount,bet_on_player";
-    [D.preds, D.odds, D.shadow, D.runs] = await Promise.all([
+    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner";
+    [D.preds, D.odds, D.shadow, D.runs, D.bets] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
       fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
       fetchAll("dash_shadow","p1,p2,match_date,model_version,shadow_p1_prob,logged_at,run_id").catch(()=>[]),
-      fetchAll("dash_runs","run_id,started_at,status,odds_rows_candidate,feature_rows_ok,prediction_rows_success,bets_placed_count").catch(()=>[]),
+      fetchAll("dash_runs","run_id,started_at,status,odds_rows_candidate,feature_rows_ok,prediction_rows_success,bets_logged,settlement_newly_settled").catch(()=>[]),
+      fetchAll("dash_bets","bet_id,timestamp,match,bet_on,odds_decimal,stake,model_prob,market_prob,edge,kelly_fraction,status,outcome,actual_profit").catch(()=>[]),
     ]);
     D.lastRun = D.preds.map(r=>r.latest_run_id).filter(Boolean).sort().pop();
     const upcoming=D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);

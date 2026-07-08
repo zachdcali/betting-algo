@@ -29,6 +29,7 @@ SYNC_SPECS = [
     ("dash_odds_history", os.path.join(BASE, "odds_history.csv"), None),
     ("dash_shadow", os.path.join(BASE, "logs", "performance_v1_shadow_predictions.csv"), None),
     ("dash_runs", os.path.join(BASE, "logs", "audit", "run_history.csv"), None),
+    ("dash_bets", os.path.join(BASE, "logs", "all_bets.csv"), None),
 ]
 
 
