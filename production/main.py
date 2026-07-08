@@ -1001,6 +1001,11 @@ class LiveBettingOrchestrator:
             summary = _db.build_database(prod_dir, db_path)
             print(f"  🗄️  SQLite refreshed: {summary.get('predictions', 0)} predictions, "
                   f"{summary.get('shadow_predictions', 0)} shadow rows → logs/betting.db")
+            try:
+                from dashboard_sync import sync_dashboard_tables
+                sync_dashboard_tables()
+            except Exception as dash_exc:
+                print(f"  ⚠️ Dashboard sync failed (non-fatal): {dash_exc}")
         except Exception as e:
             print(f"  ⚠️  SQLite refresh skipped (non-fatal): {e}")
 
