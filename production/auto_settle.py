@@ -43,7 +43,7 @@ DEFAULT_RATE_LIMIT_DELAY = 8.0
 # where every candidate cost a Tennis Abstract fetch — they made same-day
 # results wait until the next morning.
 DEFAULT_MIN_SETTLEMENT_AGE_HOURS = 6.0
-DEFAULT_MAX_CANDIDATES = 75
+DEFAULT_MAX_CANDIDATES = 150
 DEFAULT_MAX_RATE_LIMITS = 5
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
 DEFAULT_RETRY_BACKOFF_HOURS = 2.0
@@ -350,7 +350,11 @@ def _parse_match_start_time(match_start_time: str, match_date: str = "", now: da
 
 
 def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime | None = None) -> tuple[bool, str]:
-    now = now or datetime.now()
+    # Bovada start times are US/Eastern display strings; comparing them naive
+    # against the runner's local clock made eligibility depend on which
+    # machine ran settlement (UTC cloud vs local laptop disagreed).
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
     start_dt = _parse_match_start_time(
         str(row.get("match_start_time", "")),
         str(row.get("match_date", "")),
@@ -898,11 +902,18 @@ def run(
 
     if not pending.empty:
         sort_cols = [col for col in ["match_date", "match_start_time", "p1", "p2"] if col in pending.columns]
-        # newest matches first: recently played rows are the settleable ones —
-        # oldest-first let permanently-unsettleable zombies hog the candidate cap
+        # newest match DAYS first (zombies to the back), earliest STARTS first
+        # within a day (most likely finished). Start times must be parsed —
+        # string order puts "11:00 AM" before "2:00 PM" and let same-day ITF
+        # floods crowd out finished tour matches.
+        if "match_start_time" in pending.columns:
+            pending["_start_sort"] = pd.to_datetime(
+                pending["match_start_time"], errors="coerce")
+        sort_cols = [c for c in ["match_date", "_start_sort", "p1", "p2"] if c in pending.columns]
         if sort_cols:
             ascending = [c != "match_date" for c in sort_cols]
             pending = pending.sort_values(sort_cols, ascending=ascending)
+            pending = pending.drop(columns=["_start_sort"], errors="ignore")
         if max_candidates and max_candidates > 0:
             pending = pending.head(max_candidates)
 
