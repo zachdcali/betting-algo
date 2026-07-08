@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from round_offsets import get_round_day_offset, infer_draw_size
 from history_stitch import (
     gather_atp_rows,
+    gather_itf_rows,
+    itf_round_for,
     infer_next_round_any,
     needs_stitching,
     round_from_draws,
@@ -959,8 +961,13 @@ class TAFeatureCalculator:
             if not needs_stitching(_matches, when):
                 continue
             try:
-                _atp_rows = gather_atp_rows(_display, when, self._atp_rankings, session_cache,
-                                            level_hint=str(tournament_level or ""))
+                if str(tournament_level or "") in ("15", "25", "S"):
+                    # ITF tier: atptour has nothing; itftennis.com order-of-play
+                    # provides the current event's completed rows (score-only)
+                    _atp_rows = gather_itf_rows(_display, expected_event_title, when, session_cache)
+                else:
+                    _atp_rows = gather_atp_rows(_display, when, self._atp_rankings, session_cache,
+                                                level_hint=str(tournament_level or ""))
                 if _atp_rows.empty:
                     continue
                 _stitched = stitch_history(_matches, _atp_rows)
@@ -1084,6 +1091,11 @@ class TAFeatureCalculator:
             if _inferred_rc:
                 round_code = _inferred_rc
                 print(f"      📋 Round inferred from stitched event history: {round_code}")
+        if not round_code and str(tournament_level or "") in ("15", "25", "S"):
+            _itf_rc = itf_round_for(p1_display, p2_display, expected_event_title, when, session_cache)
+            if _itf_rc:
+                round_code = _itf_rc
+                print(f"      📋 Round from ITF order of play: {round_code}")
         if not round_code:
             # first-round matches can't infer from results — read the bracket
             _draw_rc = round_from_draws(p1_display, p2_display, when, session_cache)

@@ -43,3 +43,25 @@ def test_round_mapping_quali_vs_main():
     assert _round_code({"eventClassificationDesc": "Qualifying Draw", "roundGroupDesc": "1st Round", "roundCode": "32"}) == "Q1"
     assert _round_code({"eventClassificationDesc": "Main Draw", "roundGroupDesc": "1st Round", "roundCode": "32"}) == "R32"
     assert _round_code({"eventClassificationDesc": "Main Draw", "roundGroupDesc": "Semifinals", "roundCode": ""}) == "SF"
+
+
+def test_gather_itf_rows_and_round_with_fixtures(monkeypatch):
+    """Integration shape: Bovada label -> event -> player rows + upcoming round."""
+    import pandas as pd
+    from features import history_stitch as hs
+    cal = parse_calendar(_load("itf_calendar.json.gz"))
+    ev = cal.iloc[0].to_dict()
+    em = __import__("scraping.itf_results_scraper", fromlist=["parse_oop_matches"]).parse_oop_matches(
+        _load("itf_oop_day.json.gz"), "2026-07-05")
+    cache = {"itf_calendar": cal, "itf_event_matches": {ev["key"]: em}}
+    monkeypatch.setattr(hs, "_itf_event_for", lambda label, ref, c: ev)
+    done = em[em.completed]
+    player = done.iloc[0]["p1"] if done.iloc[0]["winner"] == 1 else done.iloc[0]["p2"]
+    rows = hs.gather_itf_rows(player, "ITF Men Test", "2026-07-08", cache)
+    assert len(rows) >= 1
+    r = rows.iloc[0]
+    assert r["source"] == "itf_results" and r["result"] in ("W", "L") and r["level"] in ("15", "25")
+    assert r["round"].startswith(("Q", "R", "S", "F"))
+    # upcoming round resolution for the same completed pair pins the round
+    rc = hs.itf_round_for(done.iloc[0]["p1"], done.iloc[0]["p2"], "ITF Men Test", "2026-07-08", cache)
+    assert rc == done.iloc[0]["round"]

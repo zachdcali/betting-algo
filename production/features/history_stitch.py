@@ -470,6 +470,131 @@ def lookup_player_url(name: str, rankings_df: Optional[pd.DataFrame]) -> Optiona
 ITF_LEVELS = {"15", "25", "S", "F"}
 
 
+def _itf_client(cache: dict):
+    """Shared ItfClient for the run (Incapsula session is expensive)."""
+    if "itf_client" not in cache:
+        try:
+            from itf_results_scraper import ItfClient
+        except ImportError:
+            from scraping.itf_results_scraper import ItfClient
+        import atexit
+        cache["itf_client"] = ItfClient()
+        atexit.register(cache["itf_client"].close)
+    return cache["itf_client"]
+
+
+def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dict]:
+    """Map a Bovada 'ITF Men <City>' label to an ITF calendar event by location."""
+    try:
+        from itf_results_scraper import get_calendar
+    except ImportError:
+        from scraping.itf_results_scraper import get_calendar
+    if "itf_calendar" not in cache:
+        ref = pd.Timestamp(ref_date)
+        try:
+            cache["itf_calendar"] = get_calendar(
+                _itf_client(cache),
+                str((ref - pd.Timedelta(days=10)).date()),
+                str((ref + pd.Timedelta(days=3)).date()),
+            )
+        except Exception as exc:
+            print(f"      ⚠️ ITF calendar unavailable ({exc})")
+            cache["itf_calendar"] = pd.DataFrame()
+    cal = cache["itf_calendar"]
+    if cal.empty:
+        return None
+    city = str(tournament_label).replace("ITF Men", "").replace("ITF Women", "").strip().lower()
+    if not city:
+        return None
+    hit = cal[cal["location"].astype(str).str.lower().str.contains(city, regex=False)
+              | cal["event"].astype(str).str.lower().str.contains(city, regex=False)]
+    return hit.iloc[0].to_dict() if len(hit) >= 1 else None
+
+
+def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
+    matches_cache = cache.setdefault("itf_event_matches", {})
+    if key not in matches_cache:
+        try:
+            from itf_results_scraper import get_event_matches
+        except ImportError:
+            from scraping.itf_results_scraper import get_event_matches
+        try:
+            print(f"      🧵 Fetching ITF order-of-play for {key} (shared, cached)")
+            matches_cache[key] = get_event_matches(_itf_client(cache), key)
+        except Exception as exc:
+            print(f"      ⚠️ ITF event fetch failed (non-fatal): {exc}")
+            matches_cache[key] = pd.DataFrame()
+    return matches_cache[key]
+
+
+def gather_itf_rows(display_name: str, tournament_label: str, ref_date,
+                    session_cache: Optional[dict] = None) -> pd.DataFrame:
+    """Completed ITF rows for a player at the current event, TA schema.
+
+    Dates use the event's start date (tournament-start convention = training
+    parity); rows carry source='itf_results'. Score-only (no serve stats —
+    ITF's API publishes scores; coverage features count this honestly).
+    """
+    cache = session_cache if session_cache is not None else {}
+    ev = _itf_event_for(tournament_label, ref_date, cache)
+    if not ev:
+        return pd.DataFrame()
+    em = _itf_event_matches(ev["key"], cache)
+    if em.empty:
+        return pd.DataFrame()
+    done = em[em["completed"] & em["winner"].notna()]
+    rows = []
+    for _, m in done.iterrows():
+        if _names_loosely_match(m["p1"], display_name):
+            side = 1
+        elif _names_loosely_match(m["p2"], display_name):
+            side = 2
+        else:
+            continue
+        won = int(m["winner"]) == side
+        opp = m["p2"] if side == 1 else m["p1"]
+        rows.append({
+            "date": pd.Timestamp(ev["start_date"]),
+            "event": ev["event"],
+            "surface": ev.get("surface", ""),
+            "round": m["round"] or "",
+            "level": "25" if "25" in str(ev.get("category", "")) else "15",
+            "rank": float("nan"),
+            "opp_name": opp,
+            "opp_rank": float("nan"),
+            "opp_hand": "",
+            "opp_country": "",
+            "score": m["score"],  # winner-first already
+            "result": "W" if won else "L",
+            "source": "itf_results",
+        })
+    return pd.DataFrame(rows)
+
+
+def itf_round_for(p1_name: str, p2_name: str, tournament_label: str, ref_date,
+                  session_cache: Optional[dict] = None) -> Optional[str]:
+    """Round of an upcoming ITF match from the event's order of play."""
+    cache = session_cache if session_cache is not None else {}
+    ev = _itf_event_for(tournament_label, ref_date, cache)
+    if not ev:
+        return None
+    em = _itf_event_matches(ev["key"], cache)
+    if em.empty:
+        return None
+    for _, m in em.iterrows():
+        pair = ((_names_loosely_match(m["p1"], p1_name) and _names_loosely_match(m["p2"], p2_name))
+                or (_names_loosely_match(m["p1"], p2_name) and _names_loosely_match(m["p2"], p1_name)))
+        if pair and not m["completed"]:
+            return m["round"]
+    # completed same-pair match also pins the round (late odds on a finished match)
+    for _, m in em.iterrows():
+        pair = ((_names_loosely_match(m["p1"], p1_name) and _names_loosely_match(m["p2"], p2_name))
+                or (_names_loosely_match(m["p1"], p2_name) and _names_loosely_match(m["p2"], p1_name)))
+        if pair:
+            return m["round"]
+    return None
+
+
 def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFrame],
                     session_cache: Optional[dict] = None,
                     level_hint: str = "") -> pd.DataFrame:
