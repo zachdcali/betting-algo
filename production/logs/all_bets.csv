@@ -1,0 +1,1 @@
+bet_id,session_id,timestamp,event,match,match_uid,feature_snapshot_id,run_id,bet_on,bet_on_player1,odds_decimal,stake,stake_fraction,model_prob,market_prob,edge,kelly_fraction,potential_profit,potential_loss,bankroll_before,model_version,status,outcome,actual_profit,bankroll_after,settled_timestamp,match_date,match_start_time,notes
