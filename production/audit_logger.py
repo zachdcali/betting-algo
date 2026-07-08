@@ -272,6 +272,10 @@ def upsert_run_history(row: dict) -> None:
     normalized = {col: _serialize(row.get(col, "")) for col in RUN_HISTORY_COLUMNS}
     mask = df["run_id"].astype(str) == run_id
     if mask.any():
+        # values are serialized strings; the CSV round-trip infers numeric dtypes
+        # and newer pandas raises LossySetitemError on lossy in-place sets —
+        # write into object columns so string-serialized values always fit
+        df = df.astype(object)
         idx = df[mask].index[0]
         for col, value in normalized.items():
             df.at[idx, col] = value

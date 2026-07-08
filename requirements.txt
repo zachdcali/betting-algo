@@ -1,19 +1,17 @@
-# Professional Tennis ML Prediction Dependencies
+# Pinned to the local tennis_env versions — cloud must match local exactly:
+# model unpickling (RF/scalers) is sklearn-version-sensitive, and pandas
+# major-version drift already broke a cloud run (LossySetitemError).
 requests>=2.31.0
-pandas>=2.0.0
-numpy>=1.24.0
+pandas==2.3.1
+numpy==2.3.2
 python-dotenv>=1.0.0
 playwright>=1.40.0
-torch>=2.0.0
-matplotlib>=3.7.0
-scikit-learn>=1.3.0
-seaborn>=0.12.0
-xgboost>=2.0.0
-catboost>=1.2.8
-lightgbm>=4.5.0
+torch==2.7.1
+scikit-learn==1.7.1
+xgboost==3.0.3
+catboost==1.2.10
+lightgbm==4.6.0
 tqdm>=4.67.0
-streamlit>=1.37.0
-plotly>=6.0.0
 psycopg[binary]>=3.1.0
 beautifulsoup4>=4.12.0
-lxml>=5.0.0
+lxml==6.0.2
