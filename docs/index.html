@@ -86,6 +86,21 @@ svg .ax{stroke:var(--axis);stroke-width:1}
 .legend .k{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .loading{font-family:var(--mono);color:var(--muted);padding:40px;text-align:center}
 footer{margin-top:34px;font-size:12px;color:var(--muted);max-width:80ch}
+
+/* scoreboard vernacular */
+.roundlbl{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:20px 0 6px}
+.roundlbl b{color:var(--ink2);font-weight:600}
+th.pl,td.pl{position:sticky;left:0;background:var(--surface);z-index:1;border-right:1px solid var(--grid)}
+thead th.pl{z-index:3}
+tr.metarow td{border-bottom:none;padding:8px 9px 0;font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;background:var(--surface)}
+td.sets{font-family:var(--mono);letter-spacing:.35em;text-align:left;min-width:86px}
+td.sets sup{font-size:8.5px;letter-spacing:0;color:var(--muted)}
+.tick{color:var(--grass);font-weight:700;margin-left:6px}
+.rk{font:10px var(--mono);color:var(--muted);margin-left:5px}
+th.sh{color:color-mix(in srgb, var(--muted) 75%, transparent)}
+td.shadowtier{background:color-mix(in srgb, var(--aub) 3%, transparent)}
+th.shfirst,td.shfirst{border-left:2px solid var(--line-strong)}
+td.hot.shadowtier{background:var(--grass-bg)} td.cold.shadowtier{background:var(--aub-bg)}
 @media (max-width:700px){ .tile .val{font-size:21px} }
 </style>
 </head>
@@ -219,6 +234,65 @@ function calBins(rows, probFn){ // rows settled; returns bins + ece + n
 }
 
 /* ---------- views ---------- */
+
+/* one renderer for every match block — layout can never depend on the winner */
+function parseSets(score, side){
+  // stored p1-first per set: "4-6 6(4)-7 0-6" -> p1:["4","6(4)","0"], p2:["6","7","6"]
+  if(!score) return null;
+  const own=[];
+  for(const set of String(score).trim().split(/\s+/)){
+    const m=set.match(/^(\d+(?:\((\d+)\))?)-(\d+(?:\((\d+)\))?)$/);
+    if(!m){ own.push("·"); continue; }
+    const a=m[1], b=m[3];
+    own.push(side===1?a:b);
+  }
+  return own.map(x=>x.replace(/\((\d+)\)/,"<sup>$1</sup>")).join(" ");
+}
+function renderMatchBlock(body, r, sh, opts){
+  const settled = !!opts.settled;
+  const w = settled ? (r.actual_winner==1?1:2) : 0;
+  const mkt1=num(r.market_p1_prob), mkt2=mkt1!=null?1-mkt1:null;
+  const bett = !settled && isTrue(r.features_complete) && num(r.model_p1_prob)!=null;
+  const cells=(side)=>{
+    let out=""; let i=0;
+    LIVE_MODELS.forEach(m=>{ const p=num(r[m.col]); const q=p==null?null:(side===1?p:1-p);
+      out+=probCell(q, side===1?mkt1:mkt2); });
+    Object.keys(SHADOW_LABELS).forEach((mv,j)=>{ const e=sh[mv]; const q=e&&e.p!=null?(side===1?e.p:1-e.p):null;
+      out+=probCell(q, side===1?mkt1:mkt2, "shadowtier"+(j===0?" shfirst":"")); });
+    return out;
+  };
+  const meta=el("tr","metarow");
+  const metaBits=[(r.match_date||"").slice(5,10)];
+  if(r.round && !opts.hideRound) metaBits.push(r.round);
+  if(!settled && r.match_start_time) metaBits.push(String(r.match_start_time).replace(/^\S+\s/,""));
+  if(!settled && !r.round) metaBits.push("round pending");
+  meta.innerHTML=`<td colspan="${opts.ncols}">${metaBits.join(" · ")}</td>`;
+  const nameCell=(side)=>{
+    const name=side===1?r.p1:r.p2;
+    const won=w===side;
+    return `<td class="pl">${won?"<b>"+name+"</b>":name}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}</td>`;
+  };
+  const setsCell=(side)=>{
+    if(!settled) return "";
+    const digits=parseSets(r.score, side)||"";
+    return `<td class="sets">${digits}${w===side?'<span class="tick">✓</span>':""}</td>`;
+  };
+  const tr1=el("tr","expandable"+(bett?" betrow":""));
+  tr1.innerHTML=`${nameCell(1)}${setsCell(1)}<td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
+  const tr2=el("tr","p2row expandable");
+  tr2.innerHTML=`${nameCell(2)}${setsCell(2)}<td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
+  const dRow=el("tr","detail"); dRow.style.display="none";
+  const dCell=el("td"); dCell.colSpan=opts.ncols; dRow.appendChild(dCell);
+  [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
+    if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
+  body.append(meta,tr1,tr2,dRow);
+}
+function matchTableHead(settled){
+  return `<thead><tr><th class="pl">Player</th>${settled?"<th style=\"text-align:left\">Sets</th>":""}<th>Line</th><th>Market</th>${
+    LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
+    Object.values(SHADOW_LABELS).map((n,j)=>`<th class="sh${j===0?" shfirst":""}">${n}</th>`).join("")}</tr></thead>`;
+}
+
 function vSlate(){
   const v=$("#view"); v.innerHTML="";
   const latest = D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);
@@ -226,51 +300,28 @@ function vSlate(){
   latest.forEach(r=>{ const t=(r.tournament==="Men's Singles")?"Wimbledon":(r.tournament||"Unknown");
     (byTour[t]=byTour[t]||[]).push(r); });
   const shadowByKey={};
-  D.shadow.forEach(s=>{ const k=matchKey(s);
-    (shadowByKey[k]=shadowByKey[k]||{})[s.model_version]={p:num(s.shadow_p1_prob), at:s.logged_at}; });
+  D.shadow.forEach(x=>{ const k=matchKey(x);
+    (shadowByKey[k]=shadowByKey[k]||{})[x.model_version]={p:num(x.shadow_p1_prob)}; });
+  const NCOLS=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
   const names=["Wimbledon",...Object.keys(byTour).filter(t=>t!=="Wimbledon").sort()];
   names.forEach(t=>{
     const ms=byTour[t]; if(!ms) return;
     ms.sort((a,b)=> (isTrue(b.features_complete)-isTrue(a.features_complete)) || a.p1.localeCompare(b.p1));
     v.appendChild(el("h2",null,`${t} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
     const wrapEl=el("div","tablewrap"), tb=el("table");
-    tb.innerHTML=`<thead><tr><th class="pl">Player</th><th>Line</th><th>Market</th>${
-      LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
-      Object.values(SHADOW_LABELS).map(n=>`<th>${n}</th>`).join("")}</tr></thead>`;
+    tb.innerHTML=matchTableHead(false);
     const body=el("tbody");
-    ms.forEach(r=>{
-      const k=matchKey(r), sh=shadowByKey[k]||{};
-      const bett=isTrue(r.features_complete)&&num(r.model_p1_prob)!=null;
-      const mkt1=num(r.market_p1_prob), mkt2=mkt1!=null?1-mkt1:null;
-      const cells=(side)=>{
-        let out="";
-        LIVE_MODELS.forEach(m=>{ const p=num(r[m.col]); const q=p==null?null:(side===1?p:1-p);
-          out+=probCell(q, side===1?mkt1:mkt2); });
-        Object.keys(SHADOW_LABELS).forEach(mv=>{ const e=sh[mv]; const q=e&&e.p!=null?(side===1?e.p:1-e.p):null;
-          out+=probCell(q, side===1?mkt1:mkt2); });
-        return out;
-      };
-      const tr1=el("tr","expandable"+(bett?" betrow":""));
-      tr1.innerHTML=`<td class="pl">${r.p1}${r.round?`<span class="rnd">${r.round}</span>`:`<span class="rnd">rnd ?</span>`}${bett?'<span class="badge">BETTABLE</span>':""}</td>
-        <td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
-      const tr2=el("tr","p2row expandable");
-      tr2.innerHTML=`<td class="pl">${r.p2}</td><td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
-      const dRow=el("tr","detail"); dRow.style.display="none";
-      const dCell=el("td"); dCell.colSpan=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
-      dRow.appendChild(dCell);
-      [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
-        if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
-      body.append(tr1,tr2,dRow);
-    });
+    ms.forEach(r=>renderMatchBlock(body, r, shadowByKey[matchKey(r)]||{}, {settled:false, ncols:NCOLS}));
     tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
   });
   if(!names.some(t=>byTour[t])) v.innerHTML='<div class="loading">No upcoming matches in the latest run.</div>';
 }
-function probCell(q, mktSide){
-  if(q==null) return '<td class="na">–</td>';
+function probCell(q, mktSide, extra){
+  const x = extra||"";
+  if(q==null) return `<td class="na ${x}">–</td>`;
   const d = mktSide!=null ? (q-mktSide) : 0;
   const cls = d>=.08?"hot":(d<=-.08?"cold":"");
-  return `<td class="${cls}">${Math.round(q*100)}%</td>`;
+  return `<td class="${cls} ${x}">${Math.round(q*100)}%</td>`;
 }
 function matchDetail(r, sh){
   const obs = D.odds.filter(o=>o.match_uid===r.match_uid)
@@ -308,7 +359,7 @@ function vResults(filter){
   v.appendChild(bar);
   const q=(filter||"").toLowerCase();
   const rows = q? settled.filter(r=>(r.p1||"").toLowerCase().includes(q)||(r.p2||"").toLowerCase().includes(q)) : settled;
-  v.appendChild(el("p","note",`Every settled prediction ever logged — ${settled.length} matches, in the home-board format: per-player odds, de-vigged market %, and every model probability for that player (green/purple = 8pt+ hotter/colder than market). The winner wears the WON badge with the score. Shadow-model history before Jul 8 was lost in a data incident, so those cells show a dash; everything since accumulates in full. Click any match for detail.`));
+  v.appendChild(el("p","note",`${settled.length} settled predictions, every one ever logged. Each match is a scoreboard: set digits per player, the green tick marks the winner. Model cells show that player\u2019s win probability — green when 8+ points above the de-vigged market, purple when below. Shadow history before Jul 8 was lost to a data incident and shows dashes. Click a match for detail.`));
   const byTour={};
   rows.forEach(r=>{ const t=((r.tournament==="Men\'s Singles")?"Wimbledon":(r.tournament||"Unknown"));
     (byTour[t]=byTour[t]||[]).push(r); });
@@ -331,39 +382,15 @@ function vResults(filter){
     const inner=el("div"); inner.style.padding="6px 0 0";
     const byRound={};
     ms.forEach(r=>{ const rd=r.round||"?"; (byRound[rd]=byRound[rd]||[]).push(r); });
+    const NCOLS=4+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
     Object.entries(byRound).sort((a,b)=>(ROUND_ORDER[a[0]]??99)-(ROUND_ORDER[b[0]]??99)).forEach(([rd,rms])=>{
-      inner.appendChild(el("h2",null,`${rd==="?"?"Round unknown":rd} <span class="n">${rms.length}</span>`));
+      const RN={F:"Final",SF:"Semifinals",QF:"Quarterfinals",R16:"Round of 16",R32:"Round of 32",R64:"Round of 64",R128:"Round of 128",Q1:"Qualifying R1",Q2:"Qualifying R2",Q3:"Qualifying R3"};
+      inner.appendChild(el("p","roundlbl",`<b>${RN[rd]||(rd==="?"?"Round unknown":rd)}</b> · ${rms.length}`));
       const wrapEl=el("div","tablewrap"), tb=el("table");
-      tb.innerHTML=`<thead><tr><th class="pl">Player</th><th>Line</th><th>Market</th>${
-        LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
-        Object.values(SHADOW_LABELS).map(n=>`<th>${n}</th>`).join("")}</tr></thead>`;
+      tb.innerHTML=matchTableHead(true);
       const body=el("tbody");
-      const NCOLS=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
-      rms.sort((a,b)=>(b.match_date||"").localeCompare(a.match_date||"")).forEach(r=>{
-        const k=matchKey(r), sh=shadowByKey[k]||{};
-        const w=r.actual_winner==1?1:2;
-        const mkt1=num(r.market_p1_prob), mkt2=mkt1!=null?1-mkt1:null;
-        const cells=(side)=>{
-          let out="";
-          LIVE_MODELS.forEach(m=>{ const p=num(r[m.col]); const q2=p==null?null:(side===1?p:1-p);
-            out+=probCell(q2, side===1?mkt1:mkt2); });
-          Object.keys(SHADOW_LABELS).forEach(mv=>{ const e=sh[mv]; const q2=e&&e.p!=null?(side===1?e.p:1-e.p):null;
-            out+=probCell(q2, side===1?mkt1:mkt2); });
-          return out;
-        };
-        const wonBadge='<span class="badge" style="background:var(--grass-bg);color:var(--grass);border-color:var(--grass)">WON</span>';
-        const tr1=el("tr","expandable");
-        tr1.innerHTML=`<td class="pl">${w===1?"<b>"+r.p1+"</b>":r.p1}${w===1?wonBadge:""}${w===1&&r.score?`<span class="rnd">${r.score}</span>`:""}<span class="rnd">${(r.match_date||"").slice(5,10)}</span></td>
-          <td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
-        const tr2=el("tr","p2row expandable");
-        tr2.innerHTML=`<td class="pl">${w===2?"<b>"+r.p2+"</b>":r.p2}${w===2?wonBadge:""}${w===2&&r.score?`<span class="rnd">${r.score}</span>`:""}</td>
-          <td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
-        const dRow=el("tr","detail"); dRow.style.display="none";
-        const dCell=el("td"); dCell.colSpan=NCOLS; dRow.appendChild(dCell);
-        [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
-          if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
-        body.append(tr1,tr2,dRow);
-      });
+      rms.sort((a,b)=>(b.match_date||"").localeCompare(a.match_date||"")).forEach(r=>
+        renderMatchBlock(body, r, shadowByKey[matchKey(r)]||{}, {settled:true, ncols:NCOLS, hideRound:true}));
       tb.appendChild(body); wrapEl.appendChild(tb); inner.appendChild(wrapEl);
     });
     det.appendChild(inner); v.appendChild(det);
