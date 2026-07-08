@@ -11,3 +11,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-08 19:32:33,session_20260708_193233,1000.0,0.0,Session started,0.0,0,0
 2026-07-08 19:40:08,session_20260708_194008,1000.0,0.0,Session started,0.0,0,0
 2026-07-08 19:48:29,session_20260708_194829,1000.0,0.0,Session started,0.0,0,0
+2026-07-08 19:58:27,session_20260708_195827,1000.0,0.0,Session started,0.0,0,0
+2026-07-08 19:59:37,session_20260708_094211,1016.0095777707345,16.009577770734545,Settled bet: Taylor Fritz vs Alexander Zverev (WIN),180.00000000000006,12,1
