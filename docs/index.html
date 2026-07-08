@@ -92,7 +92,6 @@ footer{margin-top:34px;font-size:12px;color:var(--muted);max-width:80ch}
 .roundlbl b{color:var(--ink2);font-weight:600}
 th.pl,td.pl{position:sticky;left:0;background:var(--surface);z-index:1;border-right:1px solid var(--grid)}
 thead th.pl{z-index:3}
-tr.metarow td{border-bottom:none;padding:8px 9px 0;font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;background:var(--surface)}
 td.sets{font-family:var(--mono);letter-spacing:.35em;text-align:left;min-width:86px}
 td.sets sup{font-size:8.5px;letter-spacing:0;color:var(--muted)}
 .tick{color:var(--grass);font-weight:700;margin-left:6px}
@@ -261,16 +260,14 @@ function renderMatchBlock(body, r, sh, opts){
       out+=probCell(q, side===1?mkt1:mkt2, "shadowtier"+(j===0?" shfirst":"")); });
     return out;
   };
-  const meta=el("tr","metarow");
   const metaBits=[(r.match_date||"").slice(5,10)];
   if(r.round && !opts.hideRound) metaBits.push(r.round);
   if(!settled && r.match_start_time) metaBits.push(String(r.match_start_time).replace(/^\S+\s/,""));
   if(!settled && !r.round) metaBits.push("round pending");
-  meta.innerHTML=`<td colspan="${opts.ncols}">${metaBits.join(" · ")}</td>`;
   const nameCell=(side)=>{
     const name=side===1?r.p1:r.p2;
     const won=w===side;
-    return `<td class="pl">${won?"<b>"+name+"</b>":name}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}</td>`;
+    return `<td class="pl">${won?"<b>"+name+"</b>":name}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}${side===1?`<span class="rnd">${metaBits.join(" · ")}</span>`:""}</td>`;
   };
   const setsCell=(side)=>{
     if(!settled) return "";
@@ -285,7 +282,7 @@ function renderMatchBlock(body, r, sh, opts){
   const dCell=el("td"); dCell.colSpan=opts.ncols; dRow.appendChild(dCell);
   [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
     if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
-  body.append(meta,tr1,tr2,dRow);
+  body.append(tr1,tr2,dRow);
 }
 function matchTableHead(settled){
   return `<thead><tr><th class="pl">Player</th>${settled?"<th style=\"text-align:left\">Sets</th>":""}<th>Line</th><th>Market</th>${
