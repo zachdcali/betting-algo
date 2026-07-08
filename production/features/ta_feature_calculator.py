@@ -932,10 +932,16 @@ class TAFeatureCalculator:
                     pass
             return float(profile.get('age') or 25.0)
 
-        # Validate required fields — raise explicitly so caller knows what's missing
+        # Unranked players: training's exact convention is rank=999 (preprocess.py:151)
+        # with 0 rank points — 'unranked' is REAL information the models learned on
+        # (futures training data is full of it), not a placeholder. Only tour-level
+        # unranked (rank lookup failure on a player who must be ranked) stays odd,
+        # and the loud print keeps it visible.
         for label, profile in [('P1', profile1), ('P2', profile2)]:
             if profile.get('current_rank') is None:
-                raise RuntimeError(f"{label} rank is None (not ranked / not found on TA) for slug: {profile.get('slug','unknown')}")
+                profile['current_rank'] = 999
+                profile['_unranked'] = True
+                print(f"      {label} unranked -> rank 999 / 0 pts (training convention): {profile.get('name', profile.get('slug','?'))}")
 
         _semantic_defaults: list = []  # Track meaningful defaults that bypass _default_for()
 
@@ -947,6 +953,8 @@ class TAFeatureCalculator:
                 if atp_rank is not None and abs(atp_rank - ta_rank) > 20:
                     print(f"  RANK MISMATCH for {display_name}: TA={int(ta_rank)}, ATP={atp_rank} (using TA rank, ATP points={pts})")
                 return float(pts)
+            if ta_rank >= 999:  # unranked: 0 points is the factual value, not a default
+                return 0.0
             print(f"  ATP points not found for '{display_name}' — defaulting to 500")
             _semantic_defaults.append(f'{player_label}_Rank_Points=500(not_found)')
             return 500.0
