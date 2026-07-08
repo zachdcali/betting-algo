@@ -127,3 +127,4 @@ production/*_export.csv
 # Keep apples-to-apples results chart
 !analysis_scripts/backtests/apples_to_apples.png
 .env.supabase
+.claude/
