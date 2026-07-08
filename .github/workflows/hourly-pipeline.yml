@@ -73,5 +73,22 @@ jobs:
                         data/atp_heights.json || true
           git diff --cached --quiet && echo "no log changes" && exit 0
           git commit -m "Hourly run: logs $(date -u +%Y-%m-%dT%H:%MZ)"
-          git pull --rebase origin main
-          git push
+          # Race-resilient push: a concurrent push (dev session) can conflict the
+          # rebase. Resolve log-file conflicts with THIS run's copies (freshest
+          # run data; anything dropped re-derives next run — settlement re-reads
+          # official pages). Last resort: park logs on a branch, never lose them.
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push origin main; then
+              exit 0
+            fi
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            if [ -n "$CONFLICTS" ]; then
+              git checkout --theirs -- $CONFLICTS || true
+              git add -A $CONFLICTS
+              GIT_EDITOR=true git rebase --continue || git rebase --abort
+            fi
+            sleep 5
+          done
+          BRANCH="runner-logs-$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "::warning::push race unresolved after 3 attempts — parking logs on $BRANCH"
+          git push origin "HEAD:$BRANCH"
