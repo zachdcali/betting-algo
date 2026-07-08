@@ -7,3 +7,4 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-08 14:48:52,session_20260708_144433,1000.0,-37.82664659833242,Placed 1 bets,37.82664659833242,1,0
 2026-07-08 16:54:13,session_20260708_165413,1000.0,0.0,Session started,0.0,0,0
 2026-07-08 16:58:47,session_20260708_165413,1000.0,-120.0,Placed 2 bets,120.0,2,0
+2026-07-08 19:21:58,session_20260708_192158,1000.0,0.0,Session started,0.0,0,0
