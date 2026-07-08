@@ -118,6 +118,7 @@ production/search_error_*.png
 
 # HTML debug files
 *.html
+!docs/*.html
 
 # Model backups (large, kept local)
 results/*/backups/

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Ledger — Tennis Model Laboratory</title>
+<style>
+:root{
+  --court:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+  --grass:#2e7d46; --grass-bg:#e3efe6; --aub:#5b2a6b; --aub-bg:#ede4f1;
+  --gold:#b08900; --gold-bg:#fbf3dd;
+  --s1:#2a78d6; --s2:#1baf7a; --s3:#4a3aa7; --s6:#e34948;
+  --good:#0ca30c; --good-text:#006300; --crit:#d03b3b;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --court:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --grass:#4da16b; --grass-bg:#1c2b20; --aub:#a678bd; --aub-bg:#271d2c;
+    --gold:#d4a915; --gold-bg:#2a2413;
+    --s1:#3987e5; --s2:#199e70; --s3:#9085e9; --s6:#e66767;
+    --good:#0ca30c; --good-text:#0ca30c; --crit:#d03b3b;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--court);color:var(--ink);font-family:var(--sans);line-height:1.45}
+.wrap{max-width:1280px;margin:0 auto;padding:28px 20px 90px}
+header.page{border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:16px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--aub);margin:0 0 6px}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(24px,4vw,36px);margin:0;letter-spacing:-.01em}
+h1 em{font-style:italic;color:var(--grass)}
+.meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.meta b{color:var(--ink)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--surface);border:1px solid var(--grid);border-radius:10px;padding:12px 14px}
+.tile .lbl{font-size:12px;color:var(--ink2)}
+.tile .val{font-weight:600;font-size:26px;margin-top:2px}
+.tile .sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px}
+.val.pos{color:var(--good-text)} .val.neg{color:var(--crit)}
+nav.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--grid);margin:10px 0 18px}
+nav.tabs button{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font:600 13.5px var(--sans);color:var(--ink2);cursor:pointer}
+nav.tabs button.on{color:var(--ink);border-bottom-color:var(--grass)}
+nav.tabs button:hover{color:var(--ink)}
+h2{font-family:var(--serif);font-weight:600;font-size:21px;margin:26px 0 10px}
+h2 .n{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}
+.note{font-size:12.5px;color:var(--ink2);max-width:80ch;margin:6px 0 14px}
+.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--grid);border-radius:12px}
+table{border-collapse:collapse;width:100%}
+th,td{padding:7px 9px;font-size:13px;white-space:nowrap;text-align:right}
+thead th{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--axis);background:var(--surface);position:sticky;top:0;z-index:2}
+td{border-bottom:1px solid var(--grid);font-family:var(--mono);font-variant-numeric:tabular-nums}
+th.pl,td.pl{text-align:left}
+td.pl{font-family:var(--sans);font-weight:600;min-width:170px}
+td.pl .rnd{font-family:var(--mono);font-weight:400;font-size:10.5px;color:var(--muted);margin-left:7px}
+tr.p2row td{border-bottom:2px solid var(--axis);color:var(--ink2)}
+tr.p2row td.pl{font-weight:400}
+tr.expandable{cursor:pointer}
+tr.expandable:hover td{background:color-mix(in srgb, var(--grass) 4%, var(--surface))}
+tr.betrow td.pl{box-shadow:inset 4px 0 0 var(--gold)}
+.badge{display:inline-block;margin-left:8px;padding:0 7px;border-radius:12px;background:var(--gold-bg);color:var(--gold);border:1px solid var(--gold);font:10px var(--mono);vertical-align:middle}
+td.hot{background:var(--grass-bg);color:var(--grass);font-weight:700}
+td.cold{background:var(--aub-bg);color:var(--aub);font-weight:700}
+td.mkt{font-weight:700;border-right:2px solid var(--axis)}
+td.na{color:var(--axis)}
+td.win{color:var(--good-text);font-weight:700} td.loss{color:var(--crit);font-weight:700}
+.detail{background:color-mix(in srgb, var(--gold) 4%, var(--surface))}
+.detail td{white-space:normal;font-family:var(--sans)}
+.detail .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;padding:8px 4px;text-align:left}
+.detail h4{margin:0 0 6px;font:600 12px var(--sans);color:var(--ink2);text-transform:uppercase;letter-spacing:.05em}
+.detail dl{margin:0;font-size:12.5px}
+.detail dt{color:var(--muted);float:left;clear:left;margin-right:6px}
+.detail dd{margin:0 0 3px 0;text-align:right;font-family:var(--mono)}
+.chartcard{background:var(--surface);border:1px solid var(--grid);border-radius:12px;padding:14px;margin-bottom:14px}
+.chartcard h3{margin:0 0 2px;font:600 14px var(--sans)}
+.chartcard .sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin:0 0 8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
+svg text{font-family:var(--mono);font-size:10px;fill:var(--muted)}
+svg .gl{stroke:var(--grid);stroke-width:1}
+svg .ax{stroke:var(--axis);stroke-width:1}
+#tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--court);padding:6px 9px;border-radius:7px;font:11.5px var(--mono);z-index:50;display:none;max-width:280px;white-space:pre}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:4px 0 8px}
+.legend .k{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.loading{font-family:var(--mono);color:var(--muted);padding:40px;text-align:center}
+footer{margin-top:34px;font-size:12px;color:var(--muted);max-width:80ch}
+@media (max-width:700px){ .tile .val{font-size:21px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <p class="eyebrow">Live pipeline · paper research only · auto-updates hourly</p>
+    <h1>The Ledger — <em>a tennis model laboratory</em></h1>
+    <div class="meta" id="meta">loading…</div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <nav class="tabs" id="tabs">
+    <button data-v="slate" class="on">Current Slate</button>
+    <button data-v="drift">Odds Drift</button>
+    <button data-v="models">Model Report</button>
+    <button data-v="bets">Bet Log &amp; P&amp;L</button>
+    <button data-v="system">System</button>
+  </nav>
+
+  <main id="view"><div class="loading">Fetching live data from Supabase…</div></main>
+
+  <footer>
+    Reads the pipeline's Supabase mirror (public read-only). The betting line for each match is the
+    <b>first complete observation</b> (frozen at first-bettable sighting); the drift view shows every
+    hourly observation since. Market % shown de-vigged. Model metrics use settled, complete-feature
+    predictions only. Paper research — not betting advice.
+  </footer>
+</div>
+<div id="tip"></div>
+
+<script>
+const SB = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
+const KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
+
+const LIVE_MODELS = [
+  {id:"nn",  name:"NN v1.2.1", col:"model_p1_prob", color:"var(--s1)"},
+  {id:"xgb", name:"XGB v1.2.0", col:"xgb_p1_prob",  color:"var(--s2)"},
+  {id:"rf",  name:"RF v1.2.0",  col:"rf_p1_prob",   color:"var(--s3)"},
+];
+const SHADOW_LABELS = {
+  "performance_v1_xgb_depth5_recency_hl_12y__2026-04-25":"XGB rec12",
+  "performance_v1_xgb_depth5_recency_hl_8y__2026-04-25":"XGB rec8",
+  "performance_v1_xgb_depth5_balanced_regularized__2026-04-25":"XGB bal",
+  "performance_v1_xgb_depth4_slow_regularized__2026-04-25":"XGB d4",
+  "performance_v1_xgb_depth6_medium__2026-04-25":"XGB d6",
+  "performance_v1_cat_depth6_screening_one_hot__2026-04-25":"CatBoost",
+  "performance_v1_lgbm_leaves31_regularized_one_hot__2026-04-25":"LightGBM",
+  "performance_v1_nn_logits_128_64_32_lowdrop__2026-04-25":"NN a",
+  "performance_v1_nn_logits_128_64_robust__2026-04-25":"NN b",
+  "performance_v1_nn_logits_96_48_lowdrop__2026-04-25":"NN c",
+};
+const D = {preds:[], odds:[], shadow:[], runs:[]};   // data store
+const $ = s => document.querySelector(s);
+const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
+const fmt = (v,d=1)=> v==null||isNaN(v) ? "–" : Number(v).toFixed(d);
+const pct = v => v==null||isNaN(v) ? "–" : Math.round(v*100)+"%";
+const usd = v => (v<0?"−$":"$")+Math.abs(v).toFixed(2);
+const num = v => { const f=parseFloat(v); return isNaN(f)?null:f; };
+const isTrue = v => v===true || v==="True" || v==="1" || v==="1.0" || v===1;
+
+async function fetchAll(table, cols){
+  const rows=[]; let from=0;
+  for(;;){
+    const r = await fetch(`${SB}/${table}?select=${cols}`, {headers:{apikey:KEY, Range:`${from}-${from+999}`}});
+    if(!r.ok) throw new Error(`${table} ${r.status}`);
+    const page = await r.json();
+    rows.push(...page);
+    if(page.length<1000) break;
+    from+=1000;
+  }
+  return rows;
+}
+
+function american(dec){
+  const d=num(dec); if(!d||d<=1.01) return "–";
+  return d>=2 ? "+"+Math.round((d-1)*100) : "−"+Math.round(100/(d-1));
+}
+function matchKey(r){ return `${(r.p1||"").trim()}|${(r.p2||"").trim()}|${(r.match_date||"").slice(0,10)}`; }
+
+/* ---------- tooltip ---------- */
+const tip = $("#tip");
+function showTip(ev,text){ tip.textContent=text; tip.style.display="block";
+  tip.style.left=Math.min(ev.clientX+14, innerWidth-300)+"px"; tip.style.top=(ev.clientY+12)+"px"; }
+function hideTip(){ tip.style.display="none"; }
+
+/* ---------- SVG helpers (2px lines, hairline grid, per dataviz spec) ---------- */
+function lineChart({w=560,h=170,pad=34,series,xs,yFmt=v=>v,xFmt=v=>v,yDomain}){
+  const all = series.flatMap(s=>s.pts.map(p=>p[1])).filter(v=>v!=null);
+  let [y0,y1] = yDomain || [Math.min(...all), Math.max(...all)];
+  if(y0===y1){y0-=1;y1+=1}
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  const X=v=> pad + (x1===x0?0.5:(v-x0)/(x1-x0)) * (w-pad-8);
+  const Y=v=> (h-pad*0.55) - (v-y0)/(y1-y0) * (h-pad);
+  let g="";
+  for(let i=0;i<=3;i++){ const yy=y0+(y1-y0)*i/3;
+    g+=`<line class="gl" x1="${pad}" x2="${w-8}" y1="${Y(yy)}" y2="${Y(yy)}"/>`+
+       `<text x="${pad-5}" y="${Y(yy)+3}" text-anchor="end">${yFmt(yy)}</text>`; }
+  g+=`<line class="ax" x1="${pad}" x2="${w-8}" y1="${Y(y0)}" y2="${Y(y0)}"/>`;
+  [x0,(x0+x1)/2,x1].forEach(v=>{ g+=`<text x="${X(v)}" y="${h-3}" text-anchor="middle">${xFmt(v)}</text>`; });
+  series.forEach(s=>{
+    const pts=s.pts.filter(p=>p[1]!=null);
+    if(!pts.length) return;
+    const dd = pts.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join("");
+    g+=`<path d="${dd}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" ${s.dash?`stroke-dasharray="${s.dash}"`:""}/>`;
+    const lp=pts[pts.length-1];
+    g+=`<circle cx="${X(lp[0])}" cy="${Y(lp[1])}" r="4" fill="${s.color}" stroke="var(--surface)" stroke-width="2"/>`;
+  });
+  return {svg:`<svg viewBox="0 0 ${w} ${h}" width="100%" style="max-width:${w}px">${g}</svg>`, X,Y};
+}
+
+/* ---------- metrics ---------- */
+function logloss(pairs){ // [prob_of_winner]
+  const eps=1e-12; return -pairs.reduce((a,p)=>a+Math.log(Math.max(eps,Math.min(1-eps,p))),0)/pairs.length;
+}
+function calBins(rows, probFn){ // rows settled; returns bins + ece + n
+  const bins=Array.from({length:10},()=>({n:0,p:0,w:0}));
+  let used=0;
+  rows.forEach(r=>{
+    const p=probFn(r); if(p==null) return;
+    const win = r.actual_winner==1 ? 1:0;   // p is p1 prob; winner 1 => p1 won
+    const b=Math.min(9,Math.floor(p*10));
+    bins[b].n++; bins[b].p+=p; bins[b].w+=win; used++;
+  });
+  let ece=0;
+  const pts=bins.filter(b=>b.n>0).map(b=>{ const conf=b.p/b.n, acc=b.w/b.n;
+    ece += (b.n/used)*Math.abs(conf-acc); return [conf,acc,b.n]; });
+  return {pts, ece, n:used};
+}
+
+/* ---------- views ---------- */
+function vSlate(){
+  const v=$("#view"); v.innerHTML="";
+  const latest = D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);
+  const byTour = {};
+  latest.forEach(r=>{ const t=(r.tournament==="Men's Singles")?"Wimbledon":(r.tournament||"Unknown");
+    (byTour[t]=byTour[t]||[]).push(r); });
+  const shadowByKey={};
+  D.shadow.forEach(s=>{ const k=matchKey(s);
+    (shadowByKey[k]=shadowByKey[k]||{})[s.model_version]={p:num(s.shadow_p1_prob), at:s.logged_at}; });
+  const names=["Wimbledon",...Object.keys(byTour).filter(t=>t!=="Wimbledon").sort()];
+  names.forEach(t=>{
+    const ms=byTour[t]; if(!ms) return;
+    ms.sort((a,b)=> (isTrue(b.features_complete)-isTrue(a.features_complete)) || a.p1.localeCompare(b.p1));
+    v.appendChild(el("h2",null,`${t} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
+    const wrapEl=el("div","tablewrap"), tb=el("table");
+    tb.innerHTML=`<thead><tr><th class="pl">Player</th><th>Line</th><th>Market</th>${
+      LIVE_MODELS.map(m=>`<th>${m.name.split(" ")[0]}</th>`).join("")}${
+      Object.values(SHADOW_LABELS).map(n=>`<th>${n}</th>`).join("")}</tr></thead>`;
+    const body=el("tbody");
+    ms.forEach(r=>{
+      const k=matchKey(r), sh=shadowByKey[k]||{};
+      const bett=isTrue(r.features_complete)&&num(r.model_p1_prob)!=null;
+      const mkt1=num(r.market_p1_prob), mkt2=mkt1!=null?1-mkt1:null;
+      const cells=(side)=>{
+        let out="";
+        LIVE_MODELS.forEach(m=>{ const p=num(r[m.col]); const q=p==null?null:(side===1?p:1-p);
+          out+=probCell(q, side===1?mkt1:mkt2); });
+        Object.keys(SHADOW_LABELS).forEach(mv=>{ const e=sh[mv]; const q=e&&e.p!=null?(side===1?e.p:1-e.p):null;
+          out+=probCell(q, side===1?mkt1:mkt2); });
+        return out;
+      };
+      const tr1=el("tr","expandable"+(bett?" betrow":""));
+      tr1.innerHTML=`<td class="pl">${r.p1}${r.round?`<span class="rnd">${r.round}</span>`:`<span class="rnd">rnd ?</span>`}${bett?'<span class="badge">BETTABLE</span>':""}</td>
+        <td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
+      const tr2=el("tr","p2row expandable");
+      tr2.innerHTML=`<td class="pl">${r.p2}</td><td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
+      const dRow=el("tr","detail"); dRow.style.display="none";
+      const dCell=el("td"); dCell.colSpan=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
+      dRow.appendChild(dCell);
+      [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
+        if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
+      body.append(tr1,tr2,dRow);
+    });
+    tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
+  });
+  if(!names.some(t=>byTour[t])) v.innerHTML='<div class="loading">No upcoming matches in the latest run.</div>';
+}
+function probCell(q, mktSide){
+  if(q==null) return '<td class="na">–</td>';
+  const d = mktSide!=null ? (q-mktSide) : 0;
+  const cls = d>=.08?"hot":(d<=-.08?"cold":"");
+  return `<td class="${cls}">${Math.round(q*100)}%</td>`;
+}
+function matchDetail(r, sh){
+  const obs = D.odds.filter(o=>o.match_uid===r.match_uid)
+      .sort((a,b)=>(a.odds_scraped_at||"").localeCompare(b.odds_scraped_at||""));
+  let driftHtml="<em style='color:var(--muted)'>one observation so far — drift accumulates hourly</em>";
+  if(obs.length>1){
+    const xs=obs.map((o,i)=>i);
+    const c=lineChart({w:420,h:120,xs,yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
+      {color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
+    driftHtml=c.svg+`<div class="sub">${obs.length} observations · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</div>`;
+  }
+  const shadowList = Object.entries(SHADOW_LABELS).map(([mv,label])=>{
+    const e=sh[mv]; return `<dt>${label}</dt><dd>${e&&e.p!=null?pct(e.p)+" P1":"–"}</dd>`; }).join("");
+  return `<div class="grid">
+    <div><h4>Provenance</h4><dl>
+      <dt>match uid</dt><dd>${(r.match_uid||"").slice(0,16)}</dd>
+      <dt>logged</dt><dd>${(r.logged_at||"").slice(0,16)}</dd>
+      <dt>round</dt><dd>${r.round||"unresolved"}</dd>
+      <dt>features complete</dt><dd>${isTrue(r.features_complete)?"yes":"NO"}</dd>
+      <dt>defaults</dt><dd>${r.defaulted_features||"none"}</dd>
+      <dt>surface</dt><dd>${r.surface||"–"}</dd></dl></div>
+    <div><h4>Market path (P1 fair %)</h4>${driftHtml}</div>
+    <div><h4>Shadow models (P1)</h4><dl>${shadowList}</dl></div>
+    <div><h4>Full feature vector</h4><p style="font-size:12px;color:var(--muted)">Per-prediction feature persistence ships next — vectors will appear here for every new run.</p></div>
+  </div>`;
+}
+
+function vDrift(){
+  const v=$("#view"); v.innerHTML="";
+  const byMatch={};
+  D.odds.forEach(o=>{ (byMatch[o.match_uid]=byMatch[o.match_uid]||[]).push(o); });
+  const multi = Object.values(byMatch).filter(a=>a.length>1)
+    .map(a=>a.sort((x,y)=>(x.odds_scraped_at||"").localeCompare(y.odds_scraped_at||"")))
+    .sort((a,b)=> b.length-a.length).slice(0,24);
+  v.appendChild(el("h2",null,`Odds drift <span class="n">${multi.length} matches with 2+ hourly observations</span>`));
+  v.appendChild(el("p","note","Each chart is one match: the market's de-vigged P1 win probability at every hourly sighting. Flat lines mean a stable market; drift reveals where money moved. Density grows every hour the pipeline runs."));
+  const grid=el("div","cards");
+  multi.forEach(obs=>{
+    const first=obs[0];
+    const card=el("div","chartcard");
+    const xs=obs.map((o,i)=>i);
+    const c=lineChart({w:300,h:120,pad:30,xs,yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
+      series:[{color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
+    card.innerHTML=`<h3>${first.p1} vs ${first.p2}</h3>
+      <p class="sub">${first.tournament||""} · ${obs.length} obs · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</p>${c.svg}`;
+    grid.appendChild(card);
+  });
+  if(!multi.length) grid.innerHTML='<div class="loading">No multi-observation matches yet — the hourly runs are building this now.</div>';
+  v.appendChild(grid);
+}
+
+function vModels(){
+  const v=$("#view"); v.innerHTML="";
+  const settled = D.preds.filter(r=> (r.actual_winner==1||r.actual_winner==2) && isTrue(r.features_complete));
+  v.appendChild(el("h2",null,`Model report <span class="n">settled, complete-feature cohort · n=${settled.length}</span>`));
+  v.appendChild(el("p","note","Reliability curves: predicted probability (x) vs observed win rate (y) in 10 bins — the diagonal is perfect calibration. ECE = expected calibration error (lower is better). The market is the benchmark to beat."));
+  const entries=[
+    {name:"Market (de-vigged)", color:"var(--ink)", fn:r=>num(r.market_p1_prob)},
+    ...LIVE_MODELS.map(m=>({name:m.name,color:m.color,fn:r=>num(r[m.col])})),
+  ];
+  // shadow settled join by key
+  const winByKey={};
+  settled.forEach(r=>{ winByKey[matchKey(r)]=r.actual_winner; });
+  const shadowRows={};
+  D.shadow.forEach(s=>{ const w=winByKey[matchKey(s)];
+    if(w==null) return;
+    (shadowRows[s.model_version]=shadowRows[s.model_version]||[]).push({p:num(s.shadow_p1_prob), w}); });
+  const grid=el("div","cards");
+  const results=[];
+  entries.forEach(e=>{
+    const c=calBins(settled, e.fn);
+    const lls=settled.map(r=>{const p=e.fn(r); if(p==null)return null;
+      return r.actual_winner==1?p:1-p;}).filter(Boolean);
+    results.push({name:e.name,color:e.color,cal:c, ll:logloss(lls)});
+  });
+  Object.entries(SHADOW_LABELS).forEach(([mv,label])=>{
+    const rows=shadowRows[mv]||[]; if(rows.length<10) return;
+    const c={pts:[],ece:0,n:rows.length};
+    const bins=Array.from({length:10},()=>({n:0,p:0,w:0}));
+    rows.forEach(x=>{ if(x.p==null)return; const b=Math.min(9,Math.floor(x.p*10));
+      bins[b].n++;bins[b].p+=x.p;bins[b].w+=(x.w==1?1:0); });
+    c.pts=bins.filter(b=>b.n>0).map(b=>[b.p/b.n,b.w/b.n,b.n]);
+    c.ece=bins.filter(b=>b.n>0).reduce((a,b)=>a+(b.n/rows.length)*Math.abs(b.p/b.n-b.w/b.n),0);
+    results.push({name:label+" (shadow)",color:"var(--s3)",cal:c,
+      ll:logloss(rows.filter(x=>x.p!=null).map(x=>x.w==1?x.p:1-x.p))});
+  });
+  results.sort((a,b)=>a.ll-b.ll);
+  const mktLL = results.find(r=>r.name.startsWith("Market"))?.ll;
+  results.forEach(r=>{
+    const card=el("div","chartcard");
+    const beats = mktLL!=null && r.ll<mktLL && !r.name.startsWith("Market");
+    let g=""; const w=250,h=170,pad=30;
+    const X=p=>pad+p*(w-pad-8), Y=p=>(h-24)-p*(h-38);
+    g+=`<line class="ax" x1="${X(0)}" y1="${Y(0)}" x2="${X(1)}" y2="${Y(1)}" stroke-dasharray="3 3"/>`;
+    for(const t of [0,.5,1]){ g+=`<text x="${X(t)}" y="${h-4}" text-anchor="middle">${t}</text>`;
+      g+=`<text x="${pad-4}" y="${Y(t)+3}" text-anchor="end">${t}</text>`; }
+    r.cal.pts.forEach(([conf,acc,n])=>{
+      const rr=Math.max(3,Math.min(8,Math.sqrt(n)));
+      g+=`<circle cx="${X(conf)}" cy="${Y(acc)}" r="${rr}" fill="${r.color}" fill-opacity=".85" stroke="var(--surface)" stroke-width="2"/>`; });
+    card.innerHTML=`<h3>${r.name}${beats?' <span style="color:var(--good-text)">▲ beats market</span>':""}</h3>
+      <p class="sub">log loss <b style="color:var(--ink)">${fmt(r.ll,4)}</b> · ECE ${fmt(r.cal.ece*100,1)}% · n=${r.cal.n}</p>
+      <svg viewBox="0 0 ${w} ${h}" width="100%">${g}</svg>`;
+    grid.appendChild(card);
+  });
+  v.appendChild(grid);
+}
+
+function vBets(){
+  const v=$("#view"); v.innerHTML="";
+  const bets = D.preds.filter(r=> num(r.bet_amount)>0)
+    .sort((a,b)=>(a.logged_at||"").localeCompare(b.logged_at||""));
+  const settledBets = bets.filter(r=>r.actual_winner==1||r.actual_winner==2);
+  let bank=0; const path=[[0,0]];
+  settledBets.forEach((r,i)=>{
+    const betOn = r.bet_on_player==2?2:1;
+    const dec = num(betOn===1?r.p1_odds_decimal:r.p2_odds_decimal)||0;
+    const won = r.actual_winner==betOn;
+    const stake = num(r.bet_amount)||0;
+    bank += won ? stake*(dec-1) : -stake;
+    path.push([i+1, bank]);
+  });
+  v.appendChild(el("h2",null,`Paper P&amp;L <span class="n">${settledBets.length} settled bets · ${bets.length-settledBets.length} pending</span>`));
+  const card=el("div","chartcard");
+  if(path.length>1){
+    const c=lineChart({w:820,h:200,xs:path.map(p=>p[0]),yFmt:v=>"$"+Math.round(v),xFmt:v=>Math.round(v),
+      series:[{color:bank>=0?"var(--s2)":"var(--s6)",pts:path}]});
+    card.innerHTML=`<h3>Cumulative paper profit — actual staked bets</h3>
+      <p class="sub">running total after each settled bet · final: <b style="color:${bank>=0?'var(--good-text)':'var(--crit)'}">${usd(bank)}</b></p>${c.svg}`;
+  } else card.innerHTML='<div class="loading">No settled bets yet — settlement writes began 2026-07-08.</div>';
+  v.appendChild(card);
+  const wrapEl=el("div","tablewrap"), tb=el("table");
+  tb.innerHTML=`<thead><tr><th class="pl">Bet</th><th>Round</th><th>Odds</th><th>Stake</th><th>Model p</th><th>Market p</th><th>Edge</th><th>Result</th><th>P&amp;L</th><th>Placed</th></tr></thead>`;
+  const body=el("tbody");
+  [...bets].reverse().slice(0,300).forEach(r=>{
+    const betOn=r.bet_on_player==2?2:1;
+    const pick=betOn===1?r.p1:r.p2, opp=betOn===1?r.p2:r.p1;
+    const dec=num(betOn===1?r.p1_odds_decimal:r.p2_odds_decimal);
+    const mp=num(r.model_p1_prob), mkt=num(r.market_p1_prob);
+    const pModel=mp==null?null:(betOn===1?mp:1-mp), pMkt=mkt==null?null:(betOn===1?mkt:1-mkt);
+    const settled=r.actual_winner==1||r.actual_winner==2;
+    const won=settled&&r.actual_winner==betOn;
+    const stake=num(r.bet_amount)||0;
+    const pnl=settled?(won?stake*(dec-1):-stake):null;
+    const tr=el("tr");
+    tr.innerHTML=`<td class="pl">${pick}<span class="rnd">vs ${opp}</span></td>
+      <td>${r.round||"–"}</td><td>${american(dec)}</td><td>$${fmt(stake,0)}</td>
+      <td>${pct(pModel)}</td><td>${pct(pMkt)}</td><td>${pModel&&pMkt?fmt((pModel-pMkt)*100,1)+"pt":"–"}</td>
+      <td class="${settled?(won?"win":"loss"):""}">${settled?(won?"WON":"LOST"):"pending"}</td>
+      <td class="${pnl>0?"win":pnl<0?"loss":""}">${pnl==null?"–":usd(pnl)}</td>
+      <td>${(r.logged_at||"").slice(5,16)}</td>`;
+    body.appendChild(tr);
+  });
+  tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
+}
+
+function vSystem(){
+  const v=$("#view"); v.innerHTML="";
+  v.appendChild(el("h2",null,"System health"));
+  const wrapEl=el("div","tablewrap"), tb=el("table");
+  tb.innerHTML=`<thead><tr><th class="pl">Run</th><th>Started</th><th>Odds rows</th><th>Predictions</th><th>Bets</th><th>Settled</th></tr></thead>`;
+  const body=el("tbody");
+  [...D.runs].sort((a,b)=>(b.run_id||"").localeCompare(a.run_id||"")).forEach(r=>{
+    const tr=el("tr");
+    tr.innerHTML=`<td class="pl" style="font-family:var(--mono);font-weight:400">${r.run_id}</td>
+      <td>${(r.started_at||"").slice(0,16)}</td><td>${r.odds_rows_candidate??"–"}</td>
+      <td>${r.predictions_logged??"–"}</td><td>${r.bets_placed??"–"}</td><td>${r.rows_settled??"–"}</td>`;
+    body.appendChild(tr);
+  });
+  tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
+  v.appendChild(el("p","note",`Tables mirrored from the pipeline after every run: dash_predictions (${D.preds.length}), dash_odds_history (${D.odds.length}), dash_shadow (${D.shadow.length}), dash_runs (${D.runs.length}). The cloud commits logs to git AND syncs here — two independent backups.`));
+}
+
+/* ---------- boot ---------- */
+const VIEWS={slate:vSlate, drift:vDrift, models:vModels, bets:vBets, system:vSystem};
+$("#tabs").addEventListener("click",e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
+  VIEWS[b.dataset.v]();
+});
+(async()=>{
+  try{
+    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,bet_amount,bet_on_player";
+    [D.preds, D.odds, D.shadow, D.runs] = await Promise.all([
+      fetchAll("dash_predictions", PCOLS),
+      fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at"),
+      fetchAll("dash_shadow","p1,p2,match_date,model_version,shadow_p1_prob,logged_at,run_id"),
+      fetchAll("dash_runs","run_id,started_at,odds_rows_candidate,predictions_logged,bets_placed,rows_settled"),
+    ]);
+    D.lastRun = D.preds.map(r=>r.latest_run_id).filter(Boolean).sort().pop();
+    const upcoming=D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);
+    const bettable=upcoming.filter(r=>isTrue(r.features_complete)&&num(r.model_p1_prob)!=null);
+    const settled=D.preds.filter(r=>r.actual_winner==1||r.actual_winner==2);
+    const runTime = D.lastRun ? D.lastRun.replace("run_","").replace(/T(\d\d)(\d\d)(\d\d)Z/, " $1:$2 UTC") : "–";
+    $("#meta").innerHTML=`<span>latest run <b>${runTime}</b></span><span><b>${upcoming.length}</b> upcoming</span><span><b>${bettable.length}</b> bettable</span><span><b>${settled.length}</b> settled all-time</span><span>next run <b>~:17 each hour</b></span>`;
+    const tiles=$("#tiles");
+    const settledC = settled.filter(r=>isTrue(r.features_complete));
+    const mktLL = settledC.length? logloss(settledC.map(r=>{const p=num(r.market_p1_prob); return p==null?null:(r.actual_winner==1?p:1-p)}).filter(Boolean)) : null;
+    tiles.append(
+      tileEl("Upcoming matches", upcoming.length, `${bettable.length} bettable`),
+      tileEl("Settled predictions", settled.length, `${settledC.length} complete-feature`),
+      tileEl("Market log loss", mktLL?fmt(mktLL,4):"–", "the benchmark to beat"),
+      tileEl("Hourly observations", D.odds.length, "odds drift data"),
+      tileEl("Shadow rows", D.shadow.length, "10 variants logging"),
+    );
+    vSlate();
+  }catch(err){
+    $("#view").innerHTML=`<div class="loading">Failed to load: ${err.message}</div>`;
+  }
+})();
+function tileEl(lbl,val,sub){ const t=el("div","tile");
+  t.innerHTML=`<div class="lbl">${lbl}</div><div class="val">${val}</div><div class="sub">${sub}</div>`; return t; }
+</script>
+</body>
+</html>
