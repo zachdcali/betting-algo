@@ -429,13 +429,13 @@ function vSystem(){
   const v=$("#view"); v.innerHTML="";
   v.appendChild(el("h2",null,"System health"));
   const wrapEl=el("div","tablewrap"), tb=el("table");
-  tb.innerHTML=`<thead><tr><th class="pl">Run</th><th>Started</th><th>Odds rows</th><th>Predictions</th><th>Bets</th><th>Settled</th></tr></thead>`;
+  tb.innerHTML=`<thead><tr><th class="pl">Run</th><th>Started</th><th>Odds rows</th><th>Features ok</th><th>Predictions</th><th>Bets</th></tr></thead>`;
   const body=el("tbody");
   [...D.runs].sort((a,b)=>(b.run_id||"").localeCompare(a.run_id||"")).forEach(r=>{
     const tr=el("tr");
     tr.innerHTML=`<td class="pl" style="font-family:var(--mono);font-weight:400">${r.run_id}</td>
       <td>${(r.started_at||"").slice(0,16)}</td><td>${r.odds_rows_candidate??"–"}</td>
-      <td>${r.predictions_logged??"–"}</td><td>${r.bets_placed??"–"}</td><td>${r.rows_settled??"–"}</td>`;
+      <td>${r.feature_rows_ok??"–"}</td><td>${r.prediction_rows_success??"–"}</td><td>${r.bets_placed_count??"–"}</td>`;
     body.appendChild(tr);
   });
   tb.appendChild(body); wrapEl.appendChild(tb); v.appendChild(wrapEl);
@@ -454,9 +454,9 @@ $("#tabs").addEventListener("click",e=>{
     const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,bet_amount,bet_on_player";
     [D.preds, D.odds, D.shadow, D.runs] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
-      fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at"),
-      fetchAll("dash_shadow","p1,p2,match_date,model_version,shadow_p1_prob,logged_at,run_id"),
-      fetchAll("dash_runs","run_id,started_at,odds_rows_candidate,predictions_logged,bets_placed,rows_settled"),
+      fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
+      fetchAll("dash_shadow","p1,p2,match_date,model_version,shadow_p1_prob,logged_at,run_id").catch(()=>[]),
+      fetchAll("dash_runs","run_id,started_at,status,odds_rows_candidate,feature_rows_ok,prediction_rows_success,bets_placed_count").catch(()=>[]),
     ]);
     D.lastRun = D.preds.map(r=>r.latest_run_id).filter(Boolean).sort().pop();
     const upcoming=D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);
