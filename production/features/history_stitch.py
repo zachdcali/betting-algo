@@ -341,6 +341,8 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
                                    "a[href*='/en/scores/']")
             cal_cache["df"] = parse_challenger_calendar(html)
         cal = cal_cache["df"]
+        if cal.empty:
+            raise RuntimeError("challenger calendar parse returned no events")
         ref = pd.Timestamp(ref_date)
         seen_ids = {e.get("id") for e in events}
         window = cal[(pd.to_datetime(cal["start_date"]) <= ref)
@@ -470,17 +472,20 @@ def lookup_player_url(name: str, rankings_df: Optional[pd.DataFrame]) -> Optiona
 ITF_LEVELS = {"15", "25", "S", "F"}
 
 
-def _itf_client(cache: dict):
-    """Shared ItfClient for the run (Incapsula session is expensive)."""
-    if "itf_client" not in cache:
-        try:
-            from itf_results_scraper import ItfClient
-        except ImportError:
-            from scraping.itf_results_scraper import ItfClient
-        import atexit
-        cache["itf_client"] = ItfClient()
-        atexit.register(cache["itf_client"].close)
-    return cache["itf_client"]
+def _with_itf_client(fn):
+    """Run fn(client) in a short-lived ItfClient. A PERSISTENT client can't
+    coexist with the pipeline's other sync_playwright users in one thread
+    ('Sync API inside the asyncio loop') — so open, fetch, close. Results are
+    cached per run, so this costs a handful of opens per slate."""
+    try:
+        from itf_results_scraper import ItfClient
+    except ImportError:
+        from scraping.itf_results_scraper import ItfClient
+    client = ItfClient()
+    try:
+        return fn(client)
+    finally:
+        client.close()
 
 
 def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dict]:
@@ -492,18 +497,25 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dic
     if "itf_calendar" not in cache:
         ref = pd.Timestamp(ref_date)
         try:
-            cache["itf_calendar"] = get_calendar(
-                _itf_client(cache),
+            cache["itf_calendar"] = _with_itf_client(lambda c: get_calendar(
+                c,
                 str((ref - pd.Timedelta(days=10)).date()),
                 str((ref + pd.Timedelta(days=3)).date()),
-            )
+            ))
         except Exception as exc:
             print(f"      ⚠️ ITF calendar unavailable ({exc})")
             cache["itf_calendar"] = pd.DataFrame()
     cal = cache["itf_calendar"]
     if cal.empty:
         return None
-    city = str(tournament_label).replace("ITF Men", "").replace("ITF Women", "").strip().lower()
+    # Bovada labels look like "ITF Men's - ITF Men Wuning (7)" — take the text
+    # after the LAST 'ITF Men/Women' marker, then strip counters/punctuation
+    raw = str(tournament_label)
+    m = list(re.finditer(r"itf\s+(?:men|women)(?:'s)?", raw, re.I))
+    city = raw[m[-1].end():] if m else raw
+    city = re.sub(r"\(.*?\)", " ", city)
+    city = re.sub(r"[^a-zA-Z\s]", " ", city).strip().lower()
+    city = re.sub(r"\s+", " ", city)
     if not city:
         return None
     hit = cal[cal["location"].astype(str).str.lower().str.contains(city, regex=False)
@@ -520,7 +532,7 @@ def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
             from scraping.itf_results_scraper import get_event_matches
         try:
             print(f"      🧵 Fetching ITF order-of-play for {key} (shared, cached)")
-            matches_cache[key] = get_event_matches(_itf_client(cache), key)
+            matches_cache[key] = _with_itf_client(lambda c: get_event_matches(c, key))
         except Exception as exc:
             print(f"      ⚠️ ITF event fetch failed (non-fatal): {exc}")
             matches_cache[key] = pd.DataFrame()

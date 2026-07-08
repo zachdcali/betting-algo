@@ -871,6 +871,19 @@ class TAFeatureCalculator:
             try:
                 profile1 = self._store_profile(slug1)
                 profile2 = self._store_profile(slug2)
+                # per-player fallback: store couldn't resolve this name -> try TA
+                # for that player only (loud; cloud's TA circuit breaker makes it
+                # a clean honest skip when TA is blocked)
+                for _i, (_slug, _prof) in enumerate(((slug1, profile1), (slug2, profile2))):
+                    if _prof is None:
+                        print(f"      ↩️  Store has no profile for {_slug} — trying Tennis Abstract")
+                        _ta_prof = self.scraper.get_player_profile(
+                            _slug, force_refresh=force_refresh, persist=persist,
+                            session_cache=session_cache)
+                        if _i == 0:
+                            profile1 = _ta_prof
+                        else:
+                            profile2 = _ta_prof
             except Exception as _store_exc:
                 print(f"      🚨 Canonical store unavailable ({_store_exc}) — falling back to "
                       f"Tennis Abstract for this run (provenance: ta)")
@@ -895,8 +908,15 @@ class TAFeatureCalculator:
 
         # Get match histories (years=[] means ALL years for career stats)
         if self.use_store:
-            matches1 = self._store_history_frame(profile1, session_cache)
-            matches2 = self._store_history_frame(profile2, session_cache)
+            def _history(profile, slug):
+                if profile.get("player_id") is not None:
+                    return self._store_history_frame(profile, session_cache)
+                # per-player TA-profile fallback -> TA history for that player too
+                return self.scraper.get_player_matches(
+                    slug, years=[], force_refresh=force_refresh,
+                    persist=persist, session_cache=session_cache)
+            matches1 = _history(profile1, slug1)
+            matches2 = _history(profile2, slug2)
         else:
             matches1 = self.scraper.get_player_matches(
                 slug1,
@@ -938,6 +958,8 @@ class TAFeatureCalculator:
         # unranked (rank lookup failure on a player who must be ranked) stays odd,
         # and the loud print keeps it visible.
         for label, profile in [('P1', profile1), ('P2', profile2)]:
+            if profile.get('current_rank') is None and profile.get('name'):
+                profile['current_rank'] = get_player_rank(profile['name'], self._atp_rankings)
             if profile.get('current_rank') is None:
                 profile['current_rank'] = 999
                 profile['_unranked'] = True
@@ -959,8 +981,10 @@ class TAFeatureCalculator:
             _semantic_defaults.append(f'{player_label}_Rank_Points=500(not_found)')
             return 500.0
 
-        p1_display = profile1.get('name', slug1)
-        p2_display = profile2.get('name', slug2)
+        # TA profiles for obscure players can carry name=None — fall back to the
+        # slug-derived display form so downstream name matching keeps working
+        p1_display = profile1.get('name') or self._slug_to_name(slug1)
+        p2_display = profile2.get('name') or self._slug_to_name(slug2)
 
         # Stitch missing recent matches from ATP when TA is stale (real results
         # with source provenance — never silent defaults; see history_stitch.py).
@@ -995,11 +1019,12 @@ class TAFeatureCalculator:
         h2 = profile2.get('height_cm')
         if h1 is None or h2 is None:
             missing = []
-            if h1 is None:
+            if h1 is None and p1_display:
                 missing.append(p1_display)
-            if h2 is None:
+            if h2 is None and p2_display:
                 missing.append(p2_display)
-            atp_heights = batch_get_heights(missing, verbose=False)
+            missing = [m for m in missing if isinstance(m, str) and m.strip()]
+            atp_heights = batch_get_heights(missing, verbose=False) if missing else {}
             if h1 is None:
                 h1 = atp_heights.get(p1_display)
                 if h1 is not None:
