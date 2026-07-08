@@ -85,7 +85,6 @@ results/*/*.pkl
 
 # Logs
 *.log
-logs/
 
 # Temporary files
 *.tmp
@@ -115,7 +114,6 @@ results/professional_tennis/experiments/
 # Production runtime files (generated, not source)
 production/prediction_log.csv
 production/match_features_export.csv
-production/logs/
 production/search_error_*.png
 
 # HTML debug files
