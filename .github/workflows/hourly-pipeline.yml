@@ -63,9 +63,11 @@ jobs:
         run: |
           git config user.name "pipeline-bot"
           git config user.email "pipeline-bot@users.noreply.github.com"
-          git add -A production/prediction_log.csv production/prediction_snapshots.csv \
-                     production/odds_history.csv production/logs data/atp_rankings.csv \
-                     data/atp_heights.json || true
+          # -f: production/logs is gitignored locally, but cloud runs MUST persist
+          # the shadow predictions + audit trail or they die with the runner VM
+          git add -A -f production/prediction_log.csv production/prediction_snapshots.csv \
+                        production/odds_history.csv production/logs data/atp_rankings.csv \
+                        data/atp_heights.json || true
           git diff --cached --quiet && echo "no log changes" && exit 0
           git commit -m "Hourly run: logs $(date -u +%Y-%m-%dT%H:%MZ)"
           git pull --rebase origin main
