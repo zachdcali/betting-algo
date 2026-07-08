@@ -30,7 +30,14 @@ SYNC_SPECS = [
     ("dash_shadow", os.path.join(BASE, "logs", "performance_v1_shadow_predictions.csv"), None),
     ("dash_runs", os.path.join(BASE, "logs", "audit", "run_history.csv"), None),
     ("dash_bets", os.path.join(BASE, "logs", "all_bets.csv"), None),
+    ("dash_snapshots", os.path.join(BASE, "prediction_snapshots.csv"), None),
+    ("dash_settlement_audit", os.path.join(BASE, "logs", "audit", "settlement_audit.csv"), None),
 ]
+
+# Refuse to replace a table with a dramatically smaller one: a shrunken local
+# CSV (corruption, another clobber) must never propagate into the backup.
+# Override with ALLOW_DASH_SHRINK=1 only for a deliberate, understood shrink.
+SHRINK_GUARD_RATIO = 0.9
 
 
 def _pg_type(dtype) -> str:
@@ -44,6 +51,17 @@ def _pg_type(dtype) -> str:
 
 
 def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
+    cur.execute("SELECT to_regclass(%s)", (f'public."{table}"',))
+    if cur.fetchone()[0] is not None:
+        cur.execute(f'SELECT count(*) FROM "{table}"')
+        existing_n = cur.fetchone()[0]
+        if (len(df) < existing_n * SHRINK_GUARD_RATIO
+                and os.environ.get("ALLOW_DASH_SHRINK") != "1"):
+            print(f"   🚨 SHRINK GUARD: refusing to sync {table} "
+                  f"({existing_n} rows in Supabase, only {len(df)} locally) — "
+                  f"local file may be damaged; backup preserved. "
+                  f"Set ALLOW_DASH_SHRINK=1 to override deliberately.")
+            return
     cols = [c.strip().lower().replace(" ", "_") for c in df.columns]
     col_defs = ", ".join(
         f'"{c}" {_pg_type(df[orig].dtype)}' for c, orig in zip(cols, df.columns)
