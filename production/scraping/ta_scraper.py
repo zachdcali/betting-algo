@@ -51,8 +51,16 @@ class TennisAbstractScraper:
         self.last_request_time = time.time()
 
     def _fetch_with_retry(self, url: str, retries: int = MAX_RETRIES) -> Optional[str]:
-        """Fetch URL with retries and rate limiting"""
+        """Fetch URL with retries and rate limiting.
+
+        403 circuit breaker: TA 403-blocks datacenter IPs permanently — a 403 is
+        never transient, so it isn't retried, and after 3 consecutive 403s TA is
+        skipped for the rest of the session (loudly). ATP-sourced fallbacks
+        (settlement/stitching) take over; they work from any IP.
+        """
         import requests as _requests
+        if getattr(self, "_blocked_403s", 0) >= 3:
+            return None  # circuit open — announced when it tripped
         self.last_fetch_url = url
         for attempt in range(retries):
             try:
@@ -60,9 +68,18 @@ class TennisAbstractScraper:
                 response = self.session.get(url, timeout=15)
                 self.last_http_status = response.status_code
                 response.raise_for_status()
+                self._blocked_403s = 0
                 return response.text
             except _requests.exceptions.HTTPError as e:
                 self.last_http_status = e.response.status_code if e.response is not None else None
+                if e.response is not None and e.response.status_code == 403:
+                    self._blocked_403s = getattr(self, "_blocked_403s", 0) + 1
+                    if self._blocked_403s == 3:
+                        print("  🚨 TA 403 three times in a row — IP blocked; skipping Tennis "
+                              "Abstract for the rest of this session (ATP fallbacks take over)")
+                    else:
+                        print(f"  TA 403 (blocked IP) — not retrying: {url}")
+                    return None
                 if e.response is not None and e.response.status_code == 429:
                     self.rate_limit_hits += 1
                     wait = 30 + (attempt * 15)  # 30s, 45s, 60s
