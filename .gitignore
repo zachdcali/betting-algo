@@ -129,3 +129,5 @@ production/*_export.csv
 !analysis_scripts/backtests/apples_to_apples.png
 .env.supabase
 .claude/
+!production/models/feature_training_stats.json
+!production/models/model_registry.json
