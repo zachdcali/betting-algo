@@ -49,3 +49,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-09 20:08:02,session_20260709_200802,1000.0,0.0,Session started,0.0,0,0
 2026-07-09 20:36:35,session_20260709_203635,1000.0,0.0,Session started,0.0,0,0
 2026-07-09 20:39:41,session_20260709_203635,1000.0,-180.0,Placed 1 bets,180.0,1,0
+2026-07-09 20:57:37,session_20260709_205737,1000.0,0.0,Session started,0.0,0,0
+2026-07-09 21:02:34,session_20260709_205737,1000.0,-90.0,Placed 1 bets,90.0,1,0
