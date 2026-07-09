@@ -44,6 +44,19 @@ from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
 from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 
+
+def _itf_surface(event_label: str, session_cache: dict):
+    """Surface from the ITF calendar API (surfaceDesc) for ITF Men <City> labels."""
+    if "itf" not in str(event_label).lower():
+        return None
+    try:
+        from features.history_stitch import _itf_event_for
+        from datetime import date
+        ev = _itf_event_for(event_label, date.today(), session_cache)
+        return (ev or {}).get("surface") or None
+    except Exception:
+        return None
+
 class LiveBettingOrchestrator:
     """Main orchestrator for live tennis betting system"""
 
@@ -384,7 +397,7 @@ class LiveBettingOrchestrator:
                 else:
                     fallback_meta = get_fallback_tournament_meta(row['event'])
                     from canonical_store import surface_from_store
-                    _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache)
+                    _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
                     surface_is_guess = _store_surf is None
                     surface = _store_surf or surface
                     tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
@@ -394,7 +407,7 @@ class LiveBettingOrchestrator:
             else:
                 fallback_meta = get_fallback_tournament_meta(row['event'])
                 from canonical_store import surface_from_store
-                _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache)
+                _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
                 surface_is_guess = _store_surf is None
                 surface = _store_surf or surface
                 tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
