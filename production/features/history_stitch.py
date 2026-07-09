@@ -64,7 +64,9 @@ def _last_name(name: str) -> str:
 
 
 def _names_loosely_match(a: str, b: str) -> bool:
-    """Match 'J. Cerundolo' ~ 'Juan Manuel Cerundolo', 'C. Tabur' ~ 'Clement Tabur'."""
+    """Match 'J. Cerundolo' ~ 'Juan Manuel Cerundolo', 'C. Tabur' ~ 'Clement Tabur',
+    and truncated double surnames: 'Diego Dedura' ~ 'Diego Dedura-Palomero'
+    (Bovada shows the first half; ATP the full hyphenation)."""
     la, lb = _last_name(a), _last_name(b)
     if not la or not lb:
         return False
@@ -72,6 +74,11 @@ def _names_loosely_match(a: str, b: str) -> bool:
         ia = str(a).strip()[0].lower()
         ib = str(b).strip()[0].lower()
         return ia == ib or "." in a or "." in b  # initials tolerated
+    # token-subset: one full name (>=2 real tokens) contained in the other
+    ta = {t for t in str(a).lower().replace("-", " ").replace(".", "").split() if len(t) > 1}
+    tb = {t for t in str(b).lower().replace("-", " ").replace(".", "").split() if len(t) > 1}
+    if len(ta) >= 2 and len(tb) >= 2 and (ta <= tb or tb <= ta):
+        return True
     return False
 
 

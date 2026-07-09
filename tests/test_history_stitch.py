@@ -178,3 +178,11 @@ def test_names_match_hyphen_variants():
     assert _names_loosely_match("J. Struff", "Jan Lennard Struff")
     assert _names_loosely_match("Christopher O'Connell", "Christopher Oconnell")
     assert not _names_loosely_match("Novak Djokovic", "Felix Auger-Aliassime")
+
+
+def test_names_match_truncated_double_surname():
+    from features.history_stitch import _names_loosely_match
+    assert _names_loosely_match("Diego Dedura", "Diego Dedura-Palomero")
+    assert _names_loosely_match("Diego Dedura-Palomero", "Diego Dedura")
+    assert not _names_loosely_match("Alex de Minaur", "Alex Michelsen")
+    assert not _names_loosely_match("Jan Choinski", "Jan-Lennard Struff")
