@@ -368,7 +368,8 @@ function probCell(q, mktSide, extra){
   return `<td class="${cls} ${x}">${Math.round(q*100)}%</td>`;
 }
 function matchDetail(r, sh){
-  const obs = D.odds.filter(o=>o.match_uid===r.match_uid)
+  const _mk = matchKey(r);
+  const obs = D.odds.filter(o=>matchKey(o)===_mk)
       .sort((a,b)=>(a.odds_scraped_at||"").localeCompare(b.odds_scraped_at||""));
   let driftHtml="<em style='color:var(--muted)'>one observation so far — drift accumulates hourly</em>";
   if(obs.length>1){
@@ -447,7 +448,7 @@ function vResults(filter){
 function vDrift(){
   const v=$("#view"); v.innerHTML="";
   const byMatch={};
-  D.odds.forEach(o=>{ (byMatch[o.match_uid]=byMatch[o.match_uid]||[]).push(o); });
+  D.odds.forEach(o=>{ const k=matchKey(o); (byMatch[k]=byMatch[k]||[]).push(o); });
   const multi = Object.values(byMatch).filter(a=>a.length>1)
     .map(a=>a.sort((x,y)=>(x.odds_scraped_at||"").localeCompare(y.odds_scraped_at||"")))
     .sort((a,b)=> b.length-a.length).slice(0,24);
