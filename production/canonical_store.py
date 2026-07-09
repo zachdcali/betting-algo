@@ -570,7 +570,8 @@ def surface_from_store(event_name: str, cache: dict | None = None) -> str | None
     if cache is not None and ("surf::" + key) in cache:
         return cache["surf::" + key]
     needle = key.split(",")[0].split("(")[0].strip()
-    needle = " ".join(w for w in needle.split() if w not in ("atp", "challenger", "itf", "men", "mens", "men's"))
+    needle = " ".join(w for w in needle.split()
+                      if w.isalpha() and w not in ("atp", "challenger", "itf", "men", "mens", "wta"))
     result = None
     if len(needle) >= 4:
         try:

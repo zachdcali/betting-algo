@@ -53,7 +53,8 @@ def _atp_live_surface(event_label: str, session_cache: dict):
         if cal is None or cal.empty or "surface" not in cal.columns:
             return None
         city = str(event_label).split(",")[0].split("(")[0].strip().lower()
-        city = " ".join(w for w in city.split() if w not in ("atp", "challenger"))
+        city = " ".join(w for w in city.split()
+                        if w.isalpha() and w not in ("atp", "challenger", "itf", "men", "mens", "wta"))
         if len(city) < 4:
             return None
         hits = cal[cal["event"].astype(str).str.lower().str.contains(city, regex=False) & cal["surface"].notna()]
@@ -435,7 +436,8 @@ class LiveBettingOrchestrator:
                         # surface must equal the store's answer
                         try:
                             _city = str(row['event']).split(',')[0].split('(')[0].strip().lower()
-                            _city = " ".join(w for w in _city.split() if w not in ("atp","challenger","itf","men","mens","men's"))
+                            _city = " ".join(w for w in _city.split()
+                                             if w.isalpha() and w not in ("atp","challenger","itf","men","mens","wta"))
                             if len(_city) >= 4:
                                 _df = self.tournament_resolver.df
                                 _hits = _df[_df['canonical_name'].astype(str).str.lower().str.contains(_city, regex=False)]
