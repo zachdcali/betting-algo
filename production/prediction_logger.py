@@ -546,12 +546,19 @@ def log_prediction(
                                    'p1_rank', 'p2_rank',
                                    'odds_scraped_at', 'match_start_time',
                                    'run_id', 'feature_snapshot_id', 'prediction_uid'}
-                for col, val in row.items():
-                    if col not in df.columns:
-                        continue
-                    if col in PRESERVE_IF_SET and pd.notna(df.at[idx, col]):
-                        continue  # keep original market odds
-                    df.at[idx, col] = val
+                if existing_complete and not upgrading_to_complete:
+                    # Row is frozen at its first COMPLETE prediction. A later run
+                    # can flake (draw page down -> round=None) and must never
+                    # downgrade round/features_complete/defaults on a frozen row —
+                    # only the latest_* freshness stamps below may change.
+                    pass
+                else:
+                    for col, val in row.items():
+                        if col not in df.columns:
+                            continue
+                        if col in PRESERVE_IF_SET and pd.notna(df.at[idx, col]):
+                            continue  # keep original market odds
+                        df.at[idx, col] = val
                 df.at[idx, 'latest_logged_at'] = logged_at
                 df.at[idx, 'latest_model_version_seen'] = model_version
                 df.at[idx, 'latest_nn_model_version_seen'] = nn_model_version
