@@ -156,6 +156,7 @@ const SHADOW_LABELS = {
 };
 const D = {preds:[], odds:[], shadow:[], runs:[], bets:[]};   // data store
 const $ = s => document.querySelector(s);
+const esc = v => String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
 const fmt = (v,d=1)=> v==null||isNaN(v) ? "–" : Number(v).toFixed(d);
 const pct = v => v==null||isNaN(v) ? "–" : Math.round(v*100)+"%";
@@ -289,7 +290,7 @@ function parseSets(score, side){
     const m=set.match(/^(\d+(?:\((\d+)\))?)-(\d+(?:\((\d+)\))?)$/);
     if(!m){ own.push("·"); continue; }
     const a=m[1], b=m[3];
-    own.push(side===1?a:b);
+    own.push(String(side===1?a:b).replace(/[^0-9()]/g,""));
   }
   return own.map(x=>x.replace(/\((\d+)\)/,"<sup>$1</sup>")).join(" ");
 }
@@ -313,7 +314,7 @@ function renderMatchBlock(body, r, sh, opts){
   const nameCell=(side)=>{
     const name=side===1?r.p1:r.p2;
     const won=w===side;
-    return `<td class="pl">${won?"<b>"+name+"</b>":name}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}${side===1?`<span class="rnd">${metaBits.join(" · ")}</span>`:""}</td>`;
+    return `<td class="pl">${won?"<b>"+esc(name)+"</b>":esc(name)}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}${side===1?`<span class="rnd">${metaBits.join(" · ")}</span>`:""}</td>`;
   };
   const setsCell=(side)=>{
     if(!settled) return "";
@@ -350,7 +351,7 @@ function vSlate(){
   names.forEach(t=>{
     const ms=byTour[t]; if(!ms) return;
     ms.sort((a,b)=> (isTrue(b.features_complete)-isTrue(a.features_complete)) || a.p1.localeCompare(b.p1));
-    v.appendChild(el("h2",null,`${t} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
+    v.appendChild(el("h2",null,`${esc(t)} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
     const wrapEl=el("div","tablewrap"), tb=el("table");
     tb.innerHTML=matchTableHead(false);
     const body=el("tbody");
@@ -388,7 +389,7 @@ function matchDetail(r, sh){
       <dt>surface</dt><dd>${r.surface||"–"}</dd></dl></div>
     <div><h4>Market path (P1 fair %)</h4>${driftHtml}</div>
     <div><h4>Shadow models (P1)</h4><dl>${shadowList}</dl></div>
-    <div style="grid-column:1/-1"><h4>Full feature vector</h4><div class="fv" data-p1="${r.p1}" data-p2="${r.p2}" data-md="${(r.match_date||"").slice(0,10)}"><p style="font-size:12px;color:var(--muted)">loading…</p></div></div>
+    <div style="grid-column:1/-1"><h4>Full feature vector</h4><div class="fv" data-p1="${esc(r.p1)}" data-p2="${esc(r.p2)}" data-md="${(r.match_date||"").slice(0,10)}"><p style="font-size:12px;color:var(--muted)">loading…</p></div></div>
   </div>`;
 }
 
@@ -419,7 +420,7 @@ function vResults(filter){
     const acc=(fn)=>{ let ok=0,n=0; ms.forEach(r=>{const p=fn(r); if(p==null)return; n++;
       if((r.actual_winner==1&&p>=.5)||(r.actual_winner==2&&p<.5)) ok++;}); return n?`${ok}/${n}`:"–"; };
     det.innerHTML=`<summary style="cursor:pointer;list-style:none;background:var(--surface);border:1px solid var(--grid);border-radius:10px;padding:10px 14px">
-      <span style="font:600 15px var(--serif)">${t}</span>
+      <span style="font:600 15px var(--serif)">${esc(t)}</span>
       <span style="font:11px var(--mono);color:var(--muted);margin-left:10px">${first.slice(5,10)} → ${last.slice(5,10)} · ${ms.length} matches</span>
       <span style="font:11px var(--mono);color:var(--ink2);float:right">NN ${acc(r=>num(r.model_p1_prob))} · XGB ${acc(r=>num(r.xgb_p1_prob))} · Market ${acc(r=>num(r.market_p1_prob))}</span></summary>`;
     const inner=el("div"); inner.style.padding="6px 0 0";
@@ -459,7 +460,7 @@ function vDrift(){
     const xs=obs.map((o,i)=>i);
     const c=lineChart({w:300,h:120,pad:30,xs,yDomain:[0,1],yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
       series:[{color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
-    card.innerHTML=`<h3>${first.p1} vs ${first.p2}</h3>
+    card.innerHTML=`<h3>${esc(first.p1)} vs ${esc(first.p2)}</h3>
       <p class="sub">${first.tournament||""} · ${obs.length} obs · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</p>${c.svg}`;
     grid.appendChild(card);
   });
@@ -604,7 +605,7 @@ function vBets(){
     const done=b.outcome==="won"||b.outcome==="lost";
     const pnl=done?num(b.actual_profit):null;
     const tr=el("tr");
-    tr.innerHTML=`<td class="pl">${b.bet_on||""}<span class="rnd">${b.match||""}</span></td>
+    tr.innerHTML=`<td class="pl">${esc(b.bet_on)}<span class="rnd">${esc(b.match)}</span></td>
       <td>${american(b.odds_decimal)}</td><td>$${fmt(num(b.stake),0)}</td><td>${fmt(num(b.kelly_fraction),3)}</td>
       <td>${pct(num(b.model_prob))}</td><td>${pct(num(b.market_prob))}</td>
       <td>${b.edge!=null?fmt(num(b.edge)*100,1)+"pt":"–"}</td>
