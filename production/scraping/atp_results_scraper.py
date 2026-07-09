@@ -426,10 +426,12 @@ def parse_challenger_calendar(html: str) -> pd.DataFrame:
             continue
         seen.add(m.group(2))
         name = card_text.split("|")[0].strip() if "|" in card_text else card_text[:60].strip()
+        surf = re.search(r"\b(Clay|Grass|Hard|Carpet)\b", card_text, re.I)
         rows.append({
             "event": name, "slug": m.group(1), "id": m.group(2),
             "url": f"https://www.atptour.com/en/scores/current-challenger/{m.group(1)}/{m.group(2)}/results",
             "start_date": start,
+            "surface": surf.group(1).title() if surf else None,
         })
     return pd.DataFrame(rows)
 

@@ -45,6 +45,22 @@ from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_i
 from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 
 
+
+def _atp_live_surface(event_label: str, session_cache: dict):
+    """Surface from the live ATP challenger calendar (official, current season)."""
+    try:
+        cal = (session_cache.get("atp_calendar") or {}).get("df")
+        if cal is None or cal.empty or "surface" not in cal.columns:
+            return None
+        city = str(event_label).split(",")[0].split("(")[0].strip().lower()
+        city = " ".join(w for w in city.split() if w not in ("atp", "challenger"))
+        if len(city) < 4:
+            return None
+        hits = cal[cal["event"].astype(str).str.lower().str.contains(city, regex=False) & cal["surface"].notna()]
+        return hits.iloc[0]["surface"] if len(hits) == 1 else None
+    except Exception:
+        return None
+
 def _itf_surface(event_label: str, session_cache: dict):
     """Surface from the ITF calendar API (surfaceDesc) for ITF Men <City> labels."""
     if "itf" not in str(event_label).lower():
@@ -394,15 +410,20 @@ class LiveBettingOrchestrator:
                     resolver_source = "resolved"
                     surface_is_guess = False
                     from canonical_store import surface_from_store
-                    _corr = surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
-                    if _corr and surface and _corr != surface:
-                        print(f"      🚨 SURFACE DISAGREEMENT: registry={surface} vs store/ITF={_corr} — flagging as guess")
-                        surface_is_guess = True
+                    _live = _itf_surface(row['event'], session_cache) or _atp_live_surface(row['event'], session_cache)
+                    if _live and surface and _live != surface:
+                        print(f"      🔁 registry={surface} overridden by LIVE official source: {_live}")
+                        surface = _live
+                    elif not _live:
+                        _corr = surface_from_store(row['event'], session_cache)
+                        if _corr and surface and _corr != surface:
+                            print(f"      🚨 SURFACE DISAGREEMENT: registry={surface} vs store={_corr} — flagging as guess")
+                            surface_is_guess = True
                     print(f"      📍 {surface}, Level:{tournament_level}, Draw:{draw_size} (score:{score:.3f})")
                 else:
                     fallback_meta = get_fallback_tournament_meta(row['event'])
                     from canonical_store import surface_from_store
-                    _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
+                    _store_surf = fallback_meta.surface or _itf_surface(row['event'], session_cache) or _atp_live_surface(row['event'], session_cache) or surface_from_store(row['event'], session_cache)
                     surface_is_guess = _store_surf is None
                     surface = _store_surf or surface
                     # smart alias learning: if the registry HAD a near-miss candidate whose
@@ -432,7 +453,7 @@ class LiveBettingOrchestrator:
             else:
                 fallback_meta = get_fallback_tournament_meta(row['event'])
                 from canonical_store import surface_from_store
-                _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
+                _store_surf = fallback_meta.surface or _itf_surface(row['event'], session_cache) or _atp_live_surface(row['event'], session_cache) or surface_from_store(row['event'], session_cache)
                 surface_is_guess = _store_surf is None
                 surface = _store_surf or surface
                 tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
