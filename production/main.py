@@ -379,20 +379,27 @@ class LiveBettingOrchestrator:
                     draw_size = meta.draw_size
                     round_code = meta.round_code
                     resolver_source = "resolved"
+                    surface_is_guess = False
                     print(f"      📍 {surface}, Level:{tournament_level}, Draw:{draw_size} (score:{score:.3f})")
                 else:
                     fallback_meta = get_fallback_tournament_meta(row['event'])
-                    surface = fallback_meta.surface or surface
+                    from canonical_store import surface_from_store
+                    _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache)
+                    surface_is_guess = _store_surf is None
+                    surface = _store_surf or surface
                     tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
                     draw_size = fallback_meta.draw_size or draw_size
-                    resolver_source = "fallback_heuristic"
-                    print(f"      ⚠️  Fallback metadata: {surface}, Level:{tournament_level}, Draw:{draw_size}")
+                    resolver_source = "store_surface" if (_store_surf and not fallback_meta.surface) else "fallback_heuristic"
+                    print(f"      {'🎾' if not surface_is_guess else '⚠️ '} Fallback metadata: {surface}{'' if not surface_is_guess else ' (GUESS — flagged)'} Level:{tournament_level}, Draw:{draw_size}")
             else:
                 fallback_meta = get_fallback_tournament_meta(row['event'])
-                surface = fallback_meta.surface or surface
+                from canonical_store import surface_from_store
+                _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache)
+                surface_is_guess = _store_surf is None
+                surface = _store_surf or surface
                 tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
                 draw_size = fallback_meta.draw_size or draw_size
-                resolver_source = "fallback_heuristic"
+                resolver_source = "store_surface" if (_store_surf and not fallback_meta.surface) else "fallback_heuristic"
 
             if not round_code:
                 round_code = self.parse_round_from_text(row.get('event', ''))
@@ -431,6 +438,9 @@ class LiveBettingOrchestrator:
                         match_date_is_explicit=match_date_is_explicit,
                         metadata_source=resolver_source,
                     )
+                    if locals().get('surface_is_guess'):
+                        _d = features.get('_defaulted_features') or ''
+                        features['_defaulted_features'] = (_d + ',' if _d else '') + f'Surface={surface}(guess)'
                     # features_complete=False if ANY meaningful feature was defaulted
                     # (includes ATP points fallback, round=None, structural defaults)
                     has_defaulted = bool(features.get('_defaulted_features', ''))

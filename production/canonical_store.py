@@ -557,3 +557,37 @@ if __name__ == "__main__":
             backfill_sackmann(conn)
         if args.summary or not any(vars(args).values()):
             summary(conn)
+
+
+def surface_from_store(event_name: str, cache: dict | None = None) -> str | None:
+    """Resolve a tournament's surface from our own match history.
+
+    The store holds years of ground truth (Braunschweig=Clay, Newport=Grass);
+    a new season's event just needs a name match. Self-extends as ingest
+    appends new events. Returns None when no confident match exists.
+    """
+    key = str(event_name).strip().lower()
+    if cache is not None and ("surf::" + key) in cache:
+        return cache["surf::" + key]
+    needle = key.split(",")[0].split("(")[0].strip()
+    needle = " ".join(w for w in needle.split() if w not in ("atp", "challenger", "itf", "men", "mens", "men's"))
+    result = None
+    if len(needle) >= 4:
+        try:
+            with connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """SELECT surface, count(*) AS n FROM matches
+                       WHERE surface IS NOT NULL AND match_date >= '2018-01-01'
+                         AND event ILIKE %s
+                       GROUP BY surface ORDER BY n DESC LIMIT 2""",
+                    (f"%{needle}%",),
+                )
+                rows = cur.fetchall()
+                # confident only when one surface clearly dominates
+                if rows and (len(rows) == 1 or rows[0][1] >= 3 * max(1, rows[1][1])):
+                    result = rows[0][0]
+        except Exception as exc:
+            print(f"      ⚠️ store surface lookup failed ({exc})")
+    if cache is not None:
+        cache["surf::" + key] = result
+    return result
