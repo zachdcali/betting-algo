@@ -240,36 +240,45 @@ async function loadFeaturePanel(container){
   try{
     const r=await fetch(`${SB}/dash_features?select=features_json,features_complete,logged_at&p1=ilike.${encodeURIComponent(p1)}&p2=ilike.${encodeURIComponent(p2)}&match_date=eq.${md}&limit=1`,{headers:{apikey:KEY}});
     const rows=await r.json();
-    if(!rows.length){ box.innerHTML='<p style="font-size:12px;color:var(--muted)">No stored vector for this match — persistence began Jul 9; new predictions carry one.</p>'; return; }
+    if(!rows.length){ box.innerHTML='<p style="font-size:12px;color:var(--muted)">No stored vector — persistence began Jul 9; new predictions carry one.</p>'; return; }
     const f=JSON.parse(rows[0].features_json);
     const defaulted=new Set(String(f._defaulted_features||"").split(",").map(x=>x.split("=")[0].trim()).filter(Boolean));
+    const GRAN=/Ace|Double_Fault|DF_|Serve|BP_|Break_Point|Stat_Matches|Game_WinRate|Set_WinRate|Tiebreak|Return_|Score_Matches/i;
+    const FAM=[["Ranking",/Rank|Points|Seed/i],["Form & schedule",/Win|Streak|Matches_|Days_|Form|Momentum|Fatigue/i],
+      ["Surface",/Surface|Clay|Grass|Hard|Carpet/i],["Head-to-head",/H2H/i],
+      ["Serve & return (granular)",GRAN],["Physical",/Height|Age|Hand|Left|Right/i],["Context",/./]];
+    const fam=k=>{for(const [n,re] of FAM) if(re.test(k)) return n; return "Context";};
     const pairs={}, singles={};
-    Object.entries(f).forEach(([k,val])=>{
-      if(k.startsWith("_"))return;
+    Object.entries(f).forEach(([k,v])=>{ if(k.startsWith("_"))return;
       const m=k.match(/^(?:Player|P)([12])_(.+)$/);
-      if(m){ (pairs[m[2]]=pairs[m[2]]||{})[m[1]]=val; } else singles[k]=val;
-    });
-    const fmtv=v=>{ const n=parseFloat(v); if(isNaN(n))return String(v);
-      return Math.abs(n)>=100?n.toFixed(0):(Number.isInteger(n)?String(n):n.toFixed(3)); };
-    const flag=k=> defaulted.has(k)||defaulted.has("Player1_"+k)||defaulted.has("Player2_"+k)||defaulted.has("P1_"+k)||defaulted.has("P2_"+k);
-    let html="";
-    if(defaulted.size) html+=`<p style="font-size:12px;color:var(--crit);font-weight:600">Missing / defaulted: ${[...defaulted].join(", ")}</p>`;
-    html+=`<table style="min-width:0;width:100%"><thead><tr><th class="pl" style="position:static">Paired feature</th><th>${p1.split(" ").pop()}</th><th>${p2.split(" ").pop()}</th></tr></thead><tbody>`;
-    Object.keys(pairs).sort().forEach(k=>{
-      const bad=flag(k)?' style="color:var(--crit);font-weight:700"':"";
-      html+=`<tr><td class="pl" style="position:static;font-weight:400">${k}</td><td${bad}>${fmtv(pairs[k][1])}</td><td${bad}>${fmtv(pairs[k][2])}</td></tr>`;
-    });
-    html+="</tbody></table>";
-    html+=`<table style="min-width:0;width:100%;margin-top:10px"><thead><tr><th class="pl" style="position:static">Match feature</th><th>Value</th></tr></thead><tbody>`;
-    Object.keys(singles).sort().forEach(k=>{
-      const bad=flag(k)?' style="color:var(--crit);font-weight:700"':"";
-      html+=`<tr><td class="pl" style="position:static;font-weight:400">${k}</td><td${bad}>${fmtv(singles[k])}</td></tr>`;
-    });
-    html+="</tbody></table>";
+      if(m){ (pairs[m[2]]=pairs[m[2]]||{})[m[1]]=v; } else singles[k]=v; });
+    const fmtv=v=>{const n=parseFloat(v); if(isNaN(n))return String(v);
+      return Math.abs(n)>=100?n.toFixed(0):(Number.isInteger(n)?String(n):n.toFixed(3));};
+    const flag=k=>defaulted.has(k)||["Player1_","Player2_","P1_","P2_"].some(pre=>defaulted.has(pre+k));
+    const groups={};
+    Object.keys(pairs).forEach(k=>{(groups[fam(k)]=groups[fam(k)]||[]).push({k,pair:pairs[k]});});
+    Object.keys(singles).forEach(k=>{(groups[fam(k)]=groups[fam(k)]||[]).push({k,val:singles[k]});});
+    let html=`<input placeholder="Filter features…" style="width:220px;padding:5px 9px;font:12px var(--sans);color:var(--ink);background:var(--surface);border:1px solid var(--grid);border-radius:7px;margin:0 0 6px" oninput="const q=this.value.toLowerCase();this.parentElement.querySelectorAll('tr[data-f]').forEach(t=>t.style.display=t.dataset.f.includes(q)?'':'none')">`;
+    if(defaulted.size) html+=`<p style="font-size:12px;color:var(--crit);font-weight:600">Missing / defaulted → not bettable: ${[...defaulted].join(", ")}</p>`;
+    html+=`<p style="font-size:11px;color:var(--muted)">Temporal features (Days_Since_Last, Matches_14d/30d) use training's round-offset date heuristic, not calendar dates — deliberate train/serve parity; can differ from real dates by ±2d. Features tagged <b>g</b> feed only the 10 shadow variants; everything else feeds all 13 models.</p>`;
+    html+=`<div style="columns:2;column-gap:18px">`;
+    for(const [name,items] of Object.entries(groups)){
+      if(!items.length) continue;
+      html+=`<details open style="break-inside:avoid;margin-bottom:8px"><summary style="cursor:pointer;font:600 12px var(--sans);color:var(--ink2)">${name} · ${items.length}</summary>
+        <table style="min-width:0;width:100%"><thead><tr><th class="pl" style="position:static;font-size:9.5px">Feature</th><th style="font-size:9.5px">${items.some(i=>i.pair)?p1.split(" ").pop():"Value"}</th><th style="font-size:9.5px">${items.some(i=>i.pair)?p2.split(" ").pop():""}</th></tr></thead><tbody>`;
+      items.sort((a,b)=>a.k.localeCompare(b.k)).forEach(({k,pair,val})=>{
+        const bad=flag(k)?' style="color:var(--crit);font-weight:700"':"";
+        const gb=GRAN.test(k)?' <b style="color:var(--aub);font-size:9px">g</b>':"";
+        html+=`<tr data-f="${k.toLowerCase()}"><td class="pl" style="position:static;font-weight:400;font-size:11.5px">${k}${gb}</td>`+
+          (pair?`<td${bad} style="font-size:11.5px">${fmtv(pair[1])}</td><td${bad} style="font-size:11.5px">${fmtv(pair[2])}</td>`
+               :`<td${bad} style="font-size:11.5px">${fmtv(val)}</td><td></td>`)+`</tr>`;
+      });
+      html+=`</tbody></table></details>`;
+    }
+    html+=`</div>`;
     box.innerHTML=html;
   }catch(e){ box.innerHTML=`<p style="font-size:12px;color:var(--muted)">feature fetch failed: ${e.message}</p>`; }
 }
-
 
 /* one renderer for every match block — layout can never depend on the winner */
 function parseSets(score, side){
