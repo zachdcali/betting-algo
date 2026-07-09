@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
+    # GitHub throttles busy schedule slots (~50% delivery observed); a second
+    # offset keeps effective cadence hourly
+    - cron: "47 * * * *"
 
 concurrency:
   group: hourly-pipeline
