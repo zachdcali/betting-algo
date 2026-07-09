@@ -393,6 +393,11 @@ class LiveBettingOrchestrator:
                     round_code = meta.round_code
                     resolver_source = "resolved"
                     surface_is_guess = False
+                    from canonical_store import surface_from_store
+                    _corr = surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
+                    if _corr and surface and _corr != surface:
+                        print(f"      🚨 SURFACE DISAGREEMENT: registry={surface} vs store/ITF={_corr} — flagging as guess")
+                        surface_is_guess = True
                     print(f"      📍 {surface}, Level:{tournament_level}, Draw:{draw_size} (score:{score:.3f})")
                 else:
                     fallback_meta = get_fallback_tournament_meta(row['event'])
@@ -400,6 +405,26 @@ class LiveBettingOrchestrator:
                     _store_surf = fallback_meta.surface or surface_from_store(row['event'], session_cache) or _itf_surface(row['event'], session_cache)
                     surface_is_guess = _store_surf is None
                     surface = _store_surf or surface
+                    # smart alias learning: if the registry HAD a near-miss candidate whose
+                    # surface the store independently confirms, adopt it and remember the
+                    # sponsor-mangled title permanently (two sources agree -> safe to learn)
+                    if _store_surf and self.tournament_resolver is not None:
+                        # two independent confirmations before learning: the city token
+                        # must identify exactly one registry tournament AND that entry's
+                        # surface must equal the store's answer
+                        try:
+                            _city = str(row['event']).split(',')[0].split('(')[0].strip().lower()
+                            _city = " ".join(w for w in _city.split() if w not in ("atp","challenger","itf","men","mens","men's"))
+                            if len(_city) >= 4:
+                                _df = self.tournament_resolver.df
+                                _hits = _df[_df['canonical_name'].astype(str).str.lower().str.contains(_city, regex=False)]
+                                if len(_hits) == 1 and str(_hits.iloc[0].get('surface')) == str(_store_surf):
+                                    _idx = _hits.index[0]
+                                    self.tournament_resolver.learn_alias(row['event'], _idx, 1.0)
+                                    tournament_level = _hits.iloc[0].get('level') or tournament_level
+                                    print(f"      🧠 Learned alias: '{str(row['event'])[:40]}' -> {_hits.iloc[0].get('canonical_name','?')} (city+surface corroborated: {_store_surf})")
+                        except Exception as _la_exc:
+                            print(f"      ⚠️ alias learning skipped: {_la_exc}")
                     tournament_level = fallback_meta.level or level_hint_from_title(row['event']) or "A"
                     draw_size = fallback_meta.draw_size or draw_size
                     resolver_source = "store_surface" if (_store_surf and not fallback_meta.surface) else "fallback_heuristic"
