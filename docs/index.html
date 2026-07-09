@@ -194,6 +194,14 @@ function showTip(ev,text){ tip.textContent=text; tip.style.display="block";
 function hideTip(){ tip.style.display="none"; }
 
 /* ---------- SVG helpers (2px lines, hairline grid, per dataviz spec) ---------- */
+function probDomain(vals){
+  const v=vals.filter(x=>x!=null&&!isNaN(x));
+  if(!v.length) return [0,1];
+  let lo=Math.min(...v), hi=Math.max(...v);
+  const mid=(lo+hi)/2, span=Math.max(hi-lo+0.04, 0.08);
+  lo=Math.max(0, mid-span/2); hi=Math.min(1, mid+span/2);
+  return [lo,hi];
+}
 function lineChart({w=560,h=170,pad=34,series,xs,yFmt=v=>v,xFmt=v=>v,yDomain}){
   const all = series.flatMap(s=>s.pts.map(p=>p[1])).filter(v=>v!=null);
   let [y0,y1] = yDomain || [Math.min(...all), Math.max(...all)];
@@ -378,7 +386,7 @@ function matchDetail(r, sh){
   let driftHtml="<em style='color:var(--muted)'>one observation so far — drift accumulates hourly</em>";
   if(obs.length>1){
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:420,h:120,xs,yDomain:[0,1],yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
+    const c=lineChart({w:420,h:120,xs,yDomain:probDomain(obs.map(o=>num(o.market_p1_prob))),yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
       {color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
     driftHtml=c.svg+`<div class="sub">${obs.length} observations · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</div>`;
   }
@@ -463,7 +471,7 @@ function vDrift(){
     const first=obs[0];
     const card=el("div","chartcard");
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:300,h:120,pad:30,xs,yDomain:[0,1],yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
+    const c=lineChart({w:300,h:120,pad:30,xs,yDomain:probDomain(obs.map(o=>num(o.market_p1_prob))),yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
       series:[{color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
     card.innerHTML=`<h3>${esc(first.p1)} vs ${esc(first.p2)}</h3>
       <p class="sub">${first.tournament||""} · ${obs.length} obs · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</p>${c.svg}`;
