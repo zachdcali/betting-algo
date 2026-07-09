@@ -650,6 +650,11 @@ class LiveBettingOrchestrator:
                 )
 
             try:
+                from feature_audit import validate_features
+                validate_features(features, p1, p2, self.run_metrics.get('run_id', ''))
+            except Exception as _fa_exc:
+                print(f"      ⚠️ feature audit failed (non-fatal): {_fa_exc}")
+            try:
                 from feature_vector_log import save_feature_vector
                 save_feature_vector(p1, p2, match_date, self.run_metrics.get('run_id', ''),
                                     features, ordered_features.get('features_complete', False))

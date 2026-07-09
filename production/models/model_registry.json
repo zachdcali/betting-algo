@@ -1,5 +1,5 @@
 {
-  "current_version": "v1.2.1",
+  "current_version": "v1.2.2",
   "candidate_version": "v1.3.0",
   "models": {
     "v1.0.0": {
@@ -45,8 +45,8 @@
       "features": 141,
       "architecture": "128-64-32-16-1",
       "test_accuracy": 0.6623,
-      "test_auc": 0.7280,
-      "notes": "Dynamic round-day offset heuristic (anchored on 'finals are Sunday', adapts to actual start dow). Removed duplicate Peak_Age_P1/P2 (143->141). Single source of truth for offsets in round_offsets.py. M/64 all treated as 1-week (bug — Madrid/Rome should be 2-week). Static qualifier offsets per level.",
+      "test_auc": 0.728,
+      "notes": "Dynamic round-day offset heuristic (anchored on 'finals are Sunday', adapts to actual start dow). Removed duplicate Peak_Age_P1/P2 (143->141). Single source of truth for offsets in round_offsets.py. M/64 all treated as 1-week (bug \u2014 Madrid/Rome should be 2-week). Static qualifier offsets per level.",
       "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.0.pth",
       "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.0.pkl",
       "archived": true
@@ -66,6 +66,23 @@
       "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
       "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
       "archived": false
+    },
+    "v1.2.2": {
+      "name": "NN-141-DYNAMIC_OFFSETS_v2",
+      "date": "2026-07-09",
+      "features": 141,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6639,
+      "test_auc": 0.7282,
+      "test_brier": 0.2104,
+      "test_ece": 0.0064,
+      "probability_mode": "raw",
+      "calibrated_model_file": "neural_network_calibrated_SURFACE_FIX.pkl",
+      "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
+      "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
+      "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
+      "pipeline_only": true,
+      "weights_identical_to": "v1.2.1"
     }
   },
   "candidates": {
@@ -88,7 +105,7 @@
     }
   },
   "xgboost": {
-    "current_version": "v1.2.0",
+    "current_version": "v1.2.1",
     "models": {
       "v1.0.0": {
         "name": "XGB-143-SURFACE_FIX",
@@ -120,11 +137,23 @@
         "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was balanced_depth6. Promoted because training protocol changed, even though headline metrics moved only slightly.",
         "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
         "archived": false
+      },
+      "v1.2.1": {
+        "name": "XGB-141-FIXED_SPLIT",
+        "date": "2026-07-09",
+        "features": 141,
+        "test_accuracy": 0.6649,
+        "test_auc": 0.7302,
+        "test_log_loss": 0.6064,
+        "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
+        "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
+        "pipeline_only": true,
+        "weights_identical_to": "v1.2.0"
       }
     }
   },
   "random_forest": {
-    "current_version": "v1.2.0",
+    "current_version": "v1.2.1",
     "models": {
       "v1.0.0": {
         "name": "RF-143-SURFACE_FIX",
@@ -156,6 +185,18 @@
         "notes": "Retrained with honest chronological split: train < 2022-01-01, validation = 2022, test >= 2023-01-01. Validation winner was rf_depth15_currentish. Promoted because training protocol changed, even though headline metrics moved only slightly.",
         "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
         "archived": false
+      },
+      "v1.2.1": {
+        "name": "RF-141-FIXED_SPLIT",
+        "date": "2026-07-09",
+        "features": 141,
+        "test_accuracy": 0.6603,
+        "test_auc": 0.7251,
+        "test_log_loss": 0.6105,
+        "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
+        "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
+        "pipeline_only": true,
+        "weights_identical_to": "v1.2.0"
       }
     }
   }
