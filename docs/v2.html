@@ -157,6 +157,10 @@ const SHADOW_LABELS = {
 };
 const D = {preds:[], odds:[], shadow:[], runs:[], bets:[]};   // data store
 const $ = s => document.querySelector(s);
+const SUSPECT_KEYS=["braunschweig","iasi","bogota","trieste","liege","brasov","milan","quito","troyes","newport","nottingham"];
+const SUSPECT_CUTOFF="2026-07-09T18";
+const surfaceSuspect=(tourn,at)=>{const t=String(tourn||"").toLowerCase();
+  return (at||"")<SUSPECT_CUTOFF && SUSPECT_KEYS.some(k=>t.includes(k));};
 const esc = v => String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const el = (t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e;};
 const fmt = (v,d=1)=> v==null||isNaN(v) ? "–" : Number(v).toFixed(d);
@@ -470,7 +474,7 @@ function vDrift(){
   v.appendChild(grid);
 }
 
-let MR = {era:"all", version:"all", gate:5};
+let MR = {era:"all", version:"all", gate:5, exclSuspect:true};
 function vModels(){
   const v=$("#view"); v.innerHTML="";
   const HOURLY_START="2026-07-08";
@@ -479,6 +483,8 @@ function vModels(){
   if(MR.era==="hourly") settled=settled.filter(r=>(r.settled_at||"")>=HOURLY_START);
   if(MR.era==="pre") settled=settled.filter(r=>(r.settled_at||"")<HOURLY_START);
   if(MR.version!=="all") settled=settled.filter(r=>r.model_version===MR.version);
+  const nSusp=settled.filter(r=>surfaceSuspect(r.tournament,r.logged_at)).length;
+  if(MR.exclSuspect) settled=settled.filter(r=>!surfaceSuspect(r.tournament,r.logged_at));
   // apples-to-apples core cohort: market + all three live models present
   const cohort = settled.filter(r=>[r.market_p1_prob,r.model_p1_prob,r.xgb_p1_prob,r.rf_p1_prob].every(x=>num(x)!=null));
 
@@ -490,11 +496,13 @@ function vModels(){
       <option value="pre">Pre-hourly (odds age unknown)</option></select></span>
     <span>Model version:
       <select id="mr-ver"><option value="all">All</option>${versions.map(x=>`<option>${x}</option>`).join("")}</select></span>
+    <span><label style="cursor:pointer"><input type="checkbox" id="mr-susp" ${MR.exclSuspect?"checked":""}> exclude ${nSusp} surface-suspect</label></span>
     <span style="color:var(--muted)">cohort: settled · complete features · market+NN+XGB+RF all present → same ${cohort.length} matches for every row</span>`;
   v.appendChild(bar);
   $("#mr-era").value=MR.era; $("#mr-ver").value=MR.version;
   $("#mr-era").onchange=e=>{MR.era=e.target.value; vModels();};
   $("#mr-ver").onchange=e=>{MR.version=e.target.value; vModels();};
+  $("#mr-susp").onchange=e=>{MR.exclSuspect=e.target.checked; vModels();};
 
   const entries=[
     {name:"Market (de-vigged)", fn:r=>num(r.market_p1_prob), market:true},
@@ -607,7 +615,8 @@ function vBets(){
     const done=b.outcome==="won"||b.outcome==="lost";
     const pnl=done?num(b.actual_profit):null;
     const tr=el("tr");
-    tr.innerHTML=`<td class="pl">${esc(b.bet_on)}<span class="rnd">${esc(b.match)}</span></td>
+    const _susp=surfaceSuspect(b.event||b.match,b.timestamp);
+    tr.innerHTML=`<td class="pl">${esc(b.bet_on)}${_susp?' <span class="badge" style="background:var(--aub-bg);color:var(--aub);border-color:var(--aub)" title="placed on wrong-surface features (pre Jul 9 fix)">⚠ surface</span>':""}<span class="rnd">${esc(b.match)}</span></td>
       <td>${american(b.odds_decimal)}</td><td>$${fmt(num(b.stake),0)}</td><td>${fmt(num(b.kelly_fraction),3)}</td>
       <td>${pct(num(b.model_prob))}</td><td>${pct(num(b.market_prob))}</td>
       <td>${b.edge!=null?fmt(num(b.edge)*100,1)+"pt":"–"}</td>
