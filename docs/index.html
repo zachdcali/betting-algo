@@ -238,7 +238,7 @@ async function loadFeaturePanel(container){
   const box=container.querySelector(".fv"); if(!box||box._loaded) return; box._loaded=true;
   const {p1,p2,md}=box.dataset;
   try{
-    const r=await fetch(`${SB}/dash_features?select=features_json,features_complete,logged_at&p1=eq.${encodeURIComponent(p1)}&p2=eq.${encodeURIComponent(p2)}&match_date=eq.${md}&limit=1`,{headers:{apikey:KEY}});
+    const r=await fetch(`${SB}/dash_features?select=features_json,features_complete,logged_at&p1=ilike.${encodeURIComponent(p1)}&p2=ilike.${encodeURIComponent(p2)}&match_date=eq.${md}&limit=1`,{headers:{apikey:KEY}});
     const rows=await r.json();
     if(!rows.length){ box.innerHTML='<p style="font-size:12px;color:var(--muted)">No stored vector for this match — persistence began Jul 9; new predictions carry one.</p>'; return; }
     const f=JSON.parse(rows[0].features_json);

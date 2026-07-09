@@ -87,8 +87,8 @@ jobs:
             CONFLICTS=$(git diff --name-only --diff-filter=U)
             if [ -n "$CONFLICTS" ]; then
               git checkout --theirs -- $CONFLICTS || true
-              git add -A $CONFLICTS
-              GIT_EDITOR=true git rebase --continue || git rebase --abort
+              git add -A -f $CONFLICTS || true
+              GIT_EDITOR=true git rebase --continue || git rebase --abort || true
             fi
             sleep 5
           done
