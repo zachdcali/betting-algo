@@ -578,6 +578,13 @@ class LiveBettingOrchestrator:
                     defaulted_features=features.get('_defaulted_features', '') or '',
                 )
 
+            try:
+                from feature_vector_log import save_feature_vector
+                save_feature_vector(p1, p2, match_date, self.run_metrics.get('run_id', ''),
+                                    features, ordered_features.get('features_complete', False))
+            except Exception as _fv_exc:
+                print(f"      ⚠️ feature-vector log failed (non-fatal): {_fv_exc}")
+
             feature_rows.append(ordered_features)
 
         features_df = pd.DataFrame(feature_rows)

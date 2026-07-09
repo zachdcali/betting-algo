@@ -32,6 +32,7 @@ SYNC_SPECS = [
     ("dash_bets", os.path.join(BASE, "logs", "all_bets.csv"), None),
     ("dash_snapshots", os.path.join(BASE, "prediction_snapshots.csv"), None),
     ("dash_settlement_audit", os.path.join(BASE, "logs", "audit", "settlement_audit.csv"), None),
+    ("dash_features", os.path.join(BASE, "logs", "feature_vectors.csv"), None),
 ]
 
 # Refuse to replace a table with a dramatically smaller one: a shrunken local

@@ -234,6 +234,43 @@ function calBins(rows, probFn){ // rows settled; returns bins + ece + n
 
 /* ---------- views ---------- */
 
+async function loadFeaturePanel(container){
+  const box=container.querySelector(".fv"); if(!box||box._loaded) return; box._loaded=true;
+  const {p1,p2,md}=box.dataset;
+  try{
+    const r=await fetch(`${SB}/dash_features?select=features_json,features_complete,logged_at&p1=eq.${encodeURIComponent(p1)}&p2=eq.${encodeURIComponent(p2)}&match_date=eq.${md}&limit=1`,{headers:{apikey:KEY}});
+    const rows=await r.json();
+    if(!rows.length){ box.innerHTML='<p style="font-size:12px;color:var(--muted)">No stored vector for this match — persistence began Jul 9; new predictions carry one.</p>'; return; }
+    const f=JSON.parse(rows[0].features_json);
+    const defaulted=new Set(String(f._defaulted_features||"").split(",").map(x=>x.split("=")[0].trim()).filter(Boolean));
+    const pairs={}, singles={};
+    Object.entries(f).forEach(([k,val])=>{
+      if(k.startsWith("_"))return;
+      const m=k.match(/^(?:Player|P)([12])_(.+)$/);
+      if(m){ (pairs[m[2]]=pairs[m[2]]||{})[m[1]]=val; } else singles[k]=val;
+    });
+    const fmtv=v=>{ const n=parseFloat(v); if(isNaN(n))return String(v);
+      return Math.abs(n)>=100?n.toFixed(0):(Number.isInteger(n)?String(n):n.toFixed(3)); };
+    const flag=k=> defaulted.has(k)||defaulted.has("Player1_"+k)||defaulted.has("Player2_"+k)||defaulted.has("P1_"+k)||defaulted.has("P2_"+k);
+    let html="";
+    if(defaulted.size) html+=`<p style="font-size:12px;color:var(--crit);font-weight:600">Missing / defaulted: ${[...defaulted].join(", ")}</p>`;
+    html+=`<table style="min-width:0;width:100%"><thead><tr><th class="pl" style="position:static">Paired feature</th><th>${p1.split(" ").pop()}</th><th>${p2.split(" ").pop()}</th></tr></thead><tbody>`;
+    Object.keys(pairs).sort().forEach(k=>{
+      const bad=flag(k)?' style="color:var(--crit);font-weight:700"':"";
+      html+=`<tr><td class="pl" style="position:static;font-weight:400">${k}</td><td${bad}>${fmtv(pairs[k][1])}</td><td${bad}>${fmtv(pairs[k][2])}</td></tr>`;
+    });
+    html+="</tbody></table>";
+    html+=`<table style="min-width:0;width:100%;margin-top:10px"><thead><tr><th class="pl" style="position:static">Match feature</th><th>Value</th></tr></thead><tbody>`;
+    Object.keys(singles).sort().forEach(k=>{
+      const bad=flag(k)?' style="color:var(--crit);font-weight:700"':"";
+      html+=`<tr><td class="pl" style="position:static;font-weight:400">${k}</td><td${bad}>${fmtv(singles[k])}</td></tr>`;
+    });
+    html+="</tbody></table>";
+    box.innerHTML=html;
+  }catch(e){ box.innerHTML=`<p style="font-size:12px;color:var(--muted)">feature fetch failed: ${e.message}</p>`; }
+}
+
+
 /* one renderer for every match block — layout can never depend on the winner */
 function parseSets(score, side){
   // stored p1-first per set: "4-6 6(4)-7 0-6" -> p1:["4","6(4)","0"], p2:["6","7","6"]
@@ -281,7 +318,7 @@ function renderMatchBlock(body, r, sh, opts){
   const dRow=el("tr","detail"); dRow.style.display="none";
   const dCell=el("td"); dCell.colSpan=opts.ncols; dRow.appendChild(dCell);
   [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
-    if(!dCell.innerHTML) dCell.innerHTML=matchDetail(r, sh); });
+    if(!dCell.innerHTML){ dCell.innerHTML=matchDetail(r, sh); loadFeaturePanel(dCell); } });
   body.append(tr1,tr2,dRow);
 }
 function matchTableHead(settled){
@@ -326,7 +363,7 @@ function matchDetail(r, sh){
   let driftHtml="<em style='color:var(--muted)'>one observation so far — drift accumulates hourly</em>";
   if(obs.length>1){
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:420,h:120,xs,yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
+    const c=lineChart({w:420,h:120,xs,yDomain:[0,1],yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
       {color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
     driftHtml=c.svg+`<div class="sub">${obs.length} observations · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</div>`;
   }
@@ -342,7 +379,7 @@ function matchDetail(r, sh){
       <dt>surface</dt><dd>${r.surface||"–"}</dd></dl></div>
     <div><h4>Market path (P1 fair %)</h4>${driftHtml}</div>
     <div><h4>Shadow models (P1)</h4><dl>${shadowList}</dl></div>
-    <div><h4>Full feature vector</h4><p style="font-size:12px;color:var(--muted)">Per-prediction feature persistence ships next — vectors will appear here for every new run.</p></div>
+    <div style="grid-column:1/-1"><h4>Full feature vector</h4><div class="fv" data-p1="${r.p1}" data-p2="${r.p2}" data-md="${(r.match_date||"").slice(0,10)}"><p style="font-size:12px;color:var(--muted)">loading…</p></div></div>
   </div>`;
 }
 
@@ -411,7 +448,7 @@ function vDrift(){
     const first=obs[0];
     const card=el("div","chartcard");
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:300,h:120,pad:30,xs,yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
+    const c=lineChart({w:300,h:120,pad:30,xs,yDomain:[0,1],yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
       series:[{color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
     card.innerHTML=`<h3>${first.p1} vs ${first.p2}</h3>
       <p class="sub">${first.tournament||""} · ${obs.length} obs · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</p>${c.svg}`;
