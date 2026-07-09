@@ -41,3 +41,4 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-09 15:41:42,session_20260708_094211,1001.5567032835372,-13.92137197455178,Settled bet: Pedro Martinez vs Maks Kasnikowski (LOSS),180.00000000000006,7,6
 2026-07-09 15:41:42,session_20260708_094211,987.6353313089854,-13.92137197455178,Settled bet: Lukas Neumayer vs Guido Ivan Justo (LOSS),180.00000000000006,6,7
 2026-07-09 15:41:42,session_20260708_165413,927.6353313089854,-60.0,Settled bet: Bernard Tomic vs Braden Shick (LOSS),120.0,0,2
+2026-07-09 16:19:26,session_20260709_161926,1000.0,0.0,Session started,0.0,0,0
