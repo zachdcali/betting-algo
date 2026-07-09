@@ -575,12 +575,17 @@ def surface_from_store(event_name: str, cache: dict | None = None) -> str | None
     if len(needle) >= 4:
         try:
             with connect() as conn, conn.cursor() as cur:
+                # month window disambiguates multi-venue cities: July 'Newport'
+                # = grass Rhode Island; the hard Newport Beach event is January
+                from datetime import date as _date
+                _m = _date.today().month
                 cur.execute(
                     """SELECT surface, count(*) AS n FROM matches
                        WHERE surface IS NOT NULL AND match_date >= '2018-01-01'
                          AND event ILIKE %s
+                         AND EXTRACT(MONTH FROM match_date) BETWEEN %s AND %s
                        GROUP BY surface ORDER BY n DESC LIMIT 2""",
-                    (f"%{needle}%",),
+                    (f"%{needle}%", max(1, _m - 1), min(12, _m + 1)),
                 )
                 rows = cur.fetchall()
                 # confident only when one surface clearly dominates
