@@ -386,9 +386,11 @@ function matchDetail(r, sh){
   let driftHtml="<em style='color:var(--muted)'>one observation so far — drift accumulates hourly</em>";
   if(obs.length>1){
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:420,h:120,xs,yDomain:probDomain(obs.map(o=>num(o.market_p1_prob))),yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
-      {color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
-    driftHtml=c.svg+`<div class="sub">${obs.length} observations · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</div>`;
+    const p1v=obs.map((o,i)=>[i,num(o.market_p1_prob)]), p2v=obs.map((o,i)=>[i,(x=>x==null?null:1-x)(num(o.market_p1_prob))]);
+    const c=lineChart({w:420,h:130,xs,yDomain:probDomain([...p1v,...p2v].map(x=>x[1])),yFmt:v=>Math.round(v*100)+"%",xFmt:v=>"",series:[
+      {color:"var(--s1)",pts:p1v},{color:"var(--s6)",pts:p2v}]});
+    const _l1=p1v[p1v.length-1][1], _l2=p2v[p2v.length-1][1];
+    driftHtml=c.svg+`<div class="sub"><span class="k" style="display:inline-block;width:12px;height:3px;background:var(--s1);border-radius:2px"></span> ${esc(r.p1.split(" ").pop())} ${pct(_l1)} &nbsp; <span class="k" style="display:inline-block;width:12px;height:3px;background:var(--s6);border-radius:2px"></span> ${esc(r.p2.split(" ").pop())} ${pct(_l2)} · ${obs.length} obs</div>`;
   }
   const shadowList = Object.entries(SHADOW_LABELS).map(([mv,label])=>{
     const e=sh[mv]; return `<dt>${label}</dt><dd>${e&&e.p!=null?pct(e.p)+" P1":"–"}</dd>`; }).join("");
@@ -471,10 +473,12 @@ function vDrift(){
     const first=obs[0];
     const card=el("div","chartcard");
     const xs=obs.map((o,i)=>i);
-    const c=lineChart({w:300,h:120,pad:30,xs,yDomain:probDomain(obs.map(o=>num(o.market_p1_prob))),yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
-      series:[{color:"var(--s1)",pts:obs.map((o,i)=>[i,num(o.market_p1_prob)])}]});
+    const p1v=obs.map((o,i)=>[i,num(o.market_p1_prob)]), p2v=obs.map((o,i)=>[i,(x=>x==null?null:1-x)(num(o.market_p1_prob))]);
+    const c=lineChart({w:300,h:130,pad:30,xs,yDomain:probDomain([...p1v,...p2v].map(x=>x[1])),yFmt:v=>Math.round(v*100)+"%",xFmt:()=> "",
+      series:[{color:"var(--s1)",pts:p1v},{color:"var(--s6)",pts:p2v}]});
+    const _f1=p1v[p1v.length-1][1];
     card.innerHTML=`<h3>${esc(first.p1)} vs ${esc(first.p2)}</h3>
-      <p class="sub">${first.tournament||""} · ${obs.length} obs · ${(obs[0].odds_scraped_at||"").slice(5,16)} → ${(obs[obs.length-1].odds_scraped_at||"").slice(5,16)}</p>${c.svg}`;
+      <p class="sub"><span style="display:inline-block;width:12px;height:3px;background:var(--s1);border-radius:2px"></span> ${esc(first.p1.split(" ").pop())} ${pct(_f1)} &nbsp;<span style="display:inline-block;width:12px;height:3px;background:var(--s6);border-radius:2px"></span> ${esc(first.p2.split(" ").pop())} ${pct(_f1==null?null:1-_f1)} · ${first.tournament||""} · ${obs.length} obs</p>${c.svg}`;
     grid.appendChild(card);
   });
   if(!multi.length) grid.innerHTML='<div class="loading">No multi-observation matches yet — the hourly runs are building this now.</div>';
