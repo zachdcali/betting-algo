@@ -36,8 +36,11 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
     mask = (df["p1"] == row["p1"]) & (df["p2"] == row["p2"]) & (df["match_date"] == row["match_date"])
     if mask.any():
         already_complete = str(df.loc[mask, "features_complete"].iloc[0]) in ("True", "true", "1")
-        if already_complete or not features_complete:
-            return  # frozen (or nothing better to offer)
-        df = df[~mask]  # upgrade incomplete -> first complete, then frozen
+        if already_complete:
+            return  # frozen at first complete
+        # incomplete vectors TRACK the latest build (a round can resolve while a
+        # height stays missing — the panel must show current truth, not the first
+        # snapshot); they freeze only once a complete build arrives
+        df = df[~mask]
     df = pd.concat([df, pd.DataFrame([{c: str(row[c]) for c in COLS}])], ignore_index=True)
     df.to_csv(PATH, index=False)
