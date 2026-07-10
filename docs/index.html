@@ -485,7 +485,7 @@ function vDrift(){
   v.appendChild(grid);
 }
 
-let MR = {era:"all", version:"all", gate:5, exclSuspect:true};
+let MR = {era:"all", version:"all", gate:5, exclSuspect:true, cohort:"all13"};
 function vModels(){
   const v=$("#view"); v.innerHTML="";
   const HOURLY_START="2026-07-08";
@@ -497,7 +497,15 @@ function vModels(){
   const nSusp=settled.filter(r=>surfaceSuspect(r.tournament,r.logged_at)).length;
   if(MR.exclSuspect) settled=settled.filter(r=>!surfaceSuspect(r.tournament,r.logged_at));
   // apples-to-apples core cohort: market + all three live models present
-  const cohort = settled.filter(r=>[r.market_p1_prob,r.model_p1_prob,r.xgb_p1_prob,r.rf_p1_prob].every(x=>num(x)!=null));
+  let cohort = settled.filter(r=>[r.market_p1_prob,r.model_p1_prob,r.xgb_p1_prob,r.rf_p1_prob].every(x=>num(x)!=null));
+  // strict cohort: only matches where ALL 10 shadow variants also predicted —
+  // every row in the table (market included) then scores the SAME matches
+  const shadowCount={};
+  D.shadow.forEach(x=>{ const k=matchKey(x);
+    (shadowCount[k]=shadowCount[k]||new Set()).add(x.model_version); });
+  const NSHADOW=Object.keys(SHADOW_LABELS).length;
+  const strict = cohort.filter(r=> (shadowCount[matchKey(r)]||new Set()).size===NSHADOW);
+  if(MR.cohort==="all13") cohort=strict;
 
   const bar=el("div","legend");
   bar.innerHTML=`
@@ -507,13 +515,17 @@ function vModels(){
       <option value="pre">Pre-hourly (odds age unknown)</option></select></span>
     <span>Model version:
       <select id="mr-ver"><option value="all">All</option>${versions.map(x=>`<option>${x}</option>`).join("")}</select></span>
+    <span>Cohort:
+      <select id="mr-cohort"><option value="all13" ${MR.cohort==="all13"?"selected":""}>All 13 models — same ${strict.length} matches</option>
+      <option value="core" ${MR.cohort==="core"?"selected":""}>Core trio + market — same ${cohort.length===strict.length&&MR.cohort==="all13"?"":""}${MR.cohort==="core"?cohort.length:settled.filter(r=>[r.market_p1_prob,r.model_p1_prob,r.xgb_p1_prob,r.rf_p1_prob].every(x=>num(x)!=null)).length} matches</option></select></span>
     <span><label style="cursor:pointer"><input type="checkbox" id="mr-susp" ${MR.exclSuspect?"checked":""}> exclude ${nSusp} surface-suspect</label></span>
-    <span style="color:var(--muted)">cohort: settled · complete features · market+NN+XGB+RF all present → same ${cohort.length} matches for every row</span>`;
+    <span style="color:var(--muted)">every row scored on the same ${cohort.length} matches</span>`;
   v.appendChild(bar);
   $("#mr-era").value=MR.era; $("#mr-ver").value=MR.version;
   $("#mr-era").onchange=e=>{MR.era=e.target.value; vModels();};
   $("#mr-ver").onchange=e=>{MR.version=e.target.value; vModels();};
   $("#mr-susp").onchange=e=>{MR.exclSuspect=e.target.checked; vModels();};
+  $("#mr-cohort").onchange=e=>{MR.cohort=e.target.value; vModels();};
 
   const entries=[
     {name:"Market (de-vigged)", fn:r=>num(r.market_p1_prob), market:true},
@@ -558,7 +570,7 @@ function vModels(){
   const rows=[];
   entries.forEach(e=>{ const m=metricsFor(cohort.map(r=>({r,p:e.fn(r)})));
     if(m) rows.push({name:e.name, market:e.market, m}); });
-  Object.entries(SHADOW_LABELS).forEach(([mv,label])=>{
+  if(MR.cohort==="all13") Object.entries(SHADOW_LABELS).forEach(([mv,label])=>{
     const m=metricsFor(shadowRows[mv]||[]);
     if(m) rows.push({name:label+" (shadow)", m, shadow:true}); });
   rows.sort((a,b)=>a.m.ll-b.m.ll);
