@@ -7370,3 +7370,9 @@ logged_at,run_id,p1,p2,flag
 2026-07-10T18:25:17+00:00,run_20260710T181510Z,spencer johnson,ronald hohmann,P2_Rank_Change_90d=MISSING
 2026-07-10T18:25:17+00:00,run_20260710T181510Z,spencer johnson,ronald hohmann,P2_BigMatch_WinRate=MISSING
 2026-07-10T18:25:17+00:00,run_20260710T181510Z,spencer johnson,ronald hohmann,P2_Country_FRA=MISSING
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,Rank_Points_Diff=6260 (z=8.4)
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,Player1_Rank_Points=1.345e+04 (z=18.8)
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,Player2_Rank_Points=7190 (z=9.7)
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,Avg_Rank_Points=1.032e+04 (z=16.7)
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,H2H_Total_Matches=14 (z=16.5)
+2026-07-10T18:56:05+00:00,run_20260710T184958Z,jannik sinner,alexander zverev,H2H_P1_Wins=10 (z=19.1)
