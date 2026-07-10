@@ -144,10 +144,18 @@ def _lookup(player_name: str, col: str, df: pd.DataFrame) -> Optional[int]:
     if not match.empty:
         return int(match.iloc[0][col])
 
-    parts = name.split()
+    parts = name.replace("-", " ").split()
     last_name = parts[-1].lower() if parts else ""
     first_initial = parts[0][0].lower() if parts else ""
 
+    # 2b. Multi-surname names: ATP's display may abbreviate to ANY surname
+    # token ("Diego Dedura Palomero" appears as "D. Dedura", rank feed form)
+    for tok in parts[1:-1]:
+        t = tok.lower()
+        if len(t) >= 4:
+            m = df[df_lower == f"{first_initial}. {t}"]
+            if not m.empty:
+                return int(m.iloc[0][col])
     # 2. Abbreviated name: "F. Last" format
     abbrev = f"{first_initial}. {last_name}"
     match = df[df_lower == abbrev]

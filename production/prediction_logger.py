@@ -287,7 +287,7 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
             df.at[idx, 'latest_match_start_time'] = row.get('match_start_time', '')
 
     if 'features_complete' in df.columns:
-        df['features_complete'] = _coerce_bool_series(df['features_complete'], default=True)
+        df['features_complete'] = _coerce_bool_series(df['features_complete'], default=False)
 
     if write:
         df.to_csv(target, index=False)
@@ -318,7 +318,7 @@ def log_prediction(
     odds_scraped_at: str = None,
     match_start_time: str = None,
     actual_winner: int = None, score: str = None,
-    features_complete: bool = True,
+    features_complete: bool = False,
     defaulted_features: str = '',
     allow_update: bool = True,
 ):
