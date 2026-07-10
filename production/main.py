@@ -657,7 +657,8 @@ class LiveBettingOrchestrator:
             try:
                 from feature_vector_log import save_feature_vector
                 save_feature_vector(p1, p2, match_date, self.run_metrics.get('run_id', ''),
-                                    features, ordered_features.get('features_complete', False))
+                                    features,
+                                    not bool(features.get('_defaulted_features', '')))
             except Exception as _fv_exc:
                 print(f"      ⚠️ feature-vector log failed (non-fatal): {_fv_exc}")
 
