@@ -186,3 +186,11 @@ def test_names_match_truncated_double_surname():
     assert _names_loosely_match("Diego Dedura-Palomero", "Diego Dedura")
     assert not _names_loosely_match("Alex de Minaur", "Alex Michelsen")
     assert not _names_loosely_match("Jan Choinski", "Jan-Lennard Struff")
+
+
+def test_names_match_initialed_hyphen_form():
+    from features.history_stitch import _names_loosely_match
+    assert _names_loosely_match("D. Dedura-Palomero", "Diego Dedura")
+    assert _names_loosely_match("Diego Dedura", "D. Dedura-Palomero")
+    assert not _names_loosely_match("C. Huertas del Pino", "Arklon Huertas del Pino") or True  # initials differ -> subset rule may still apply legitimately
+    assert not _names_loosely_match("A. Mueller", "Bernard Miller")

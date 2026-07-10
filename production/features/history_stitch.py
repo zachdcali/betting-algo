@@ -79,6 +79,11 @@ def _names_loosely_match(a: str, b: str) -> bool:
     tb = {t for t in str(b).lower().replace("-", " ").replace(".", "").split() if len(t) > 1}
     if len(ta) >= 2 and len(tb) >= 2 and (ta <= tb or tb <= ta):
         return True
+    # initialed + truncated double surname: "D. Dedura-Palomero" ~ "Diego Dedura" —
+    # one name's LAST token appears among the other's tokens and first initials agree
+    ia, ib = str(a).strip()[:1].lower(), str(b).strip()[:1].lower()
+    if ia == ib and (la in tb or lb in ta) and (min(len(la), len(lb)) >= 4):
+        return True
     return False
 
 
@@ -527,6 +532,13 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dic
         return None
     hit = cal[cal["location"].astype(str).str.lower().str.contains(city, regex=False)
               | cal["event"].astype(str).str.lower().str.contains(city, regex=False)]
+    if len(hit) > 1:
+        # same city hosts multi-week series (M15 Tokyo wk1..4) — keep the event
+        # whose date window covers the reference date
+        ref = pd.Timestamp(ref_date)
+        live = hit[(pd.to_datetime(hit["start_date"]) <= ref + pd.Timedelta(days=1))
+                   & (pd.to_datetime(hit["end_date"]) >= ref - pd.Timedelta(days=1))]
+        hit = live if len(live) else hit.iloc[:1]
     return hit.iloc[0].to_dict() if len(hit) >= 1 else None
 
 
