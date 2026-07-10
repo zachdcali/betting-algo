@@ -960,6 +960,19 @@ class TAFeatureCalculator:
         for label, profile in [('P1', profile1), ('P2', profile2)]:
             if profile.get('current_rank') is None and profile.get('name'):
                 profile['current_rank'] = get_player_rank(profile['name'], self._atp_rankings)
+            if profile.get('current_rank') is None and profile.get('player_id') is not None:
+                # deeper than the rankings file reaches (~1500): use the latest
+                # rank recorded on their matches — the exact lineage training saw
+                try:
+                    from canonical_store import connect as _cs_connect
+                    from store_history import latest_recorded_rank
+                    with _cs_connect() as _conn:
+                        _lr = latest_recorded_rank(_conn, profile['player_id'])
+                    if _lr:
+                        profile['current_rank'] = _lr
+                        print(f"      {label} rank from store history: {_lr} (deeper than rankings file)")
+                except Exception as _lr_exc:
+                    print(f"      ⚠️ store-rank fallback failed ({_lr_exc})")
             if profile.get('current_rank') is None:
                 profile['current_rank'] = 999
                 profile['_unranked'] = True

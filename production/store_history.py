@@ -117,3 +117,26 @@ def get_profile(conn, name: str) -> Optional[dict]:
         "birthdate": birthdate,
         "age": round(age, 1) if age is not None else None,
     }
+
+
+def latest_recorded_rank(conn, player_id: int, max_age_days: int = 120) -> Optional[int]:
+    """Most recent rank recorded on the player's matches (training lineage).
+
+    Covers players ranked deeper than the live rankings file reaches
+    (~1500): training data carried their real ranks via Sackmann's columns,
+    so serving 999 for a #1800 player is train/serve skew. Staleness-capped —
+    beyond max_age_days the snapshot is too old to trust and callers fall
+    through to the unranked convention.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT CASE WHEN winner_id = %s THEN winner_rank ELSE loser_rank END AS r
+               FROM matches
+               WHERE (winner_id = %s OR loser_id = %s)
+                 AND match_date >= CURRENT_DATE - %s
+                 AND CASE WHEN winner_id = %s THEN winner_rank ELSE loser_rank END IS NOT NULL
+               ORDER BY match_date DESC LIMIT 1""",
+            (player_id, player_id, player_id, max_age_days, player_id),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] else None
