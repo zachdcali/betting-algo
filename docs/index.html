@@ -504,6 +504,7 @@ function vModels(){
   D.shadow.forEach(x=>{ const k=matchKey(x);
     (shadowCount[k]=shadowCount[k]||new Set()).add(x.model_version); });
   const NSHADOW=Object.keys(SHADOW_LABELS).length;
+  const coreN = cohort.length;
   const strict = cohort.filter(r=> (shadowCount[matchKey(r)]||new Set()).size===NSHADOW);
   if(MR.cohort==="all13") cohort=strict;
 
@@ -517,7 +518,7 @@ function vModels(){
       <select id="mr-ver"><option value="all">All</option>${versions.map(x=>`<option>${x}</option>`).join("")}</select></span>
     <span>Cohort:
       <select id="mr-cohort"><option value="all13" ${MR.cohort==="all13"?"selected":""}>All 13 models — same ${strict.length} matches</option>
-      <option value="core" ${MR.cohort==="core"?"selected":""}>Core trio + market — same ${cohort.length===strict.length&&MR.cohort==="all13"?"":""}${MR.cohort==="core"?cohort.length:settled.filter(r=>[r.market_p1_prob,r.model_p1_prob,r.xgb_p1_prob,r.rf_p1_prob].every(x=>num(x)!=null)).length} matches</option></select></span>
+      <option value="core" ${MR.cohort==="core"?"selected":""}>Core trio + market — same ${coreN} matches</option></select></span>
     <span><label style="cursor:pointer"><input type="checkbox" id="mr-susp" ${MR.exclSuspect?"checked":""}> exclude ${nSusp} surface-suspect</label></span>
     <span style="color:var(--muted)">every row scored on the same ${cohort.length} matches</span>`;
   v.appendChild(bar);
@@ -535,8 +536,14 @@ function vModels(){
   ];
   // shadow models join the SAME cohort matches where they have rows
   const winByKey={}; cohort.forEach(r=>{ winByKey[matchKey(r)]=r; });
+  // shadow file logs each match once PER RUN — dedupe to the latest row per
+  // (match, variant) so every match counts exactly once, same as the trio
+  const shadowLast={};
+  D.shadow.forEach(x=>{ const k=matchKey(x)+"|"+x.model_version;
+    const prev=shadowLast[k];
+    if(!prev || String(x.logged_at||"")>String(prev.logged_at||"")) shadowLast[k]=x; });
   const shadowRows={};
-  D.shadow.forEach(x=>{ const pr=winByKey[matchKey(x)];
+  Object.values(shadowLast).forEach(x=>{ const pr=winByKey[matchKey(x)];
     if(!pr) return;
     (shadowRows[x.model_version]=shadowRows[x.model_version]||[]).push({r:pr, p:num(x.shadow_p1_prob)}); });
 
