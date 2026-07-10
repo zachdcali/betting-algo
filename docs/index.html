@@ -255,7 +255,11 @@ async function loadFeaturePanel(container){
     const rows=await r.json();
     if(!rows.length){ box.innerHTML='<p style="font-size:12px;color:var(--muted)">No stored vector — persistence began Jul 9; new predictions carry one.</p>'; return; }
     const f=JSON.parse(rows[0].features_json);
-    const defaulted=new Set(String(f._defaulted_features||"").split(",").map(x=>x.split("=")[0].trim()).filter(Boolean));
+    // bettability truth lives on the ROW (best-known metadata); the vector is a
+    // build snapshot whose defaults can lag (e.g. a round resolved between runs)
+    const rowDef=String(box.dataset.rowdef||"");
+    const vecDef=String(f._defaulted_features||"");
+    const defaulted=new Set((rowDef||vecDef).split(",").map(x=>x.split("=")[0].trim()).filter(Boolean));
     const GRAN=/Ace|Double_Fault|DF_|Serve|BP_|Break_Point|Stat_Matches|Game_WinRate|Set_WinRate|Tiebreak|Return_|Score_Matches/i;
     const FAM=[["Ranking",/Rank|Points|Seed/i],["Form & schedule",/Win|Streak|Matches_|Days_|Form|Momentum|Fatigue/i],
       ["Surface",/Surface|Clay|Grass|Hard|Carpet/i],["Head-to-head",/H2H/i],
@@ -273,6 +277,7 @@ async function loadFeaturePanel(container){
     Object.keys(singles).forEach(k=>{(groups[fam(k)]=groups[fam(k)]||[]).push({k,val:singles[k]});});
     let html=`<input placeholder="Filter features…" style="width:220px;padding:5px 9px;font:12px var(--sans);color:var(--ink);background:var(--surface);border:1px solid var(--grid);border-radius:7px;margin:0 0 6px" oninput="const q=this.value.toLowerCase();this.parentElement.querySelectorAll('tr[data-f]').forEach(t=>t.style.display=t.dataset.f.includes(q)?'':'none')">`;
     if(defaulted.size) html+=`<p style="font-size:12px;color:var(--crit);font-weight:600">Missing / defaulted → not bettable: ${[...defaulted].join(", ")}</p>`;
+    if(rowDef && vecDef && rowDef!==vecDef) html+=`<p style="font-size:11px;color:var(--muted)">stored snapshot from ${String(rows[0].logged_at||"").slice(0,16)} had: ${esc(vecDef)} — values below are that build's; the banner reflects current row state</p>`;
     html+=`<p style="font-size:11px;color:var(--muted)">Temporal features (Days_Since_Last, Matches_14d/30d) use training's round-offset date heuristic, not calendar dates — deliberate train/serve parity; can differ from real dates by ±2d. Features tagged <b>g</b> feed only the 10 shadow variants; everything else feeds all 13 models.</p>`;
     html+=`<div style="columns:2;column-gap:18px">`;
     for(const [name,items] of Object.entries(groups)){
@@ -404,7 +409,7 @@ function matchDetail(r, sh){
       <dt>surface</dt><dd>${r.surface||"–"}</dd></dl></div>
     <div><h4>Market path (P1 fair %)</h4>${driftHtml}</div>
     <div><h4>Shadow models (P1)</h4><dl>${shadowList}</dl></div>
-    <div style="grid-column:1/-1"><h4>Full feature vector</h4><div class="fv" data-p1="${esc(r.p1)}" data-p2="${esc(r.p2)}" data-md="${(r.match_date||"").slice(0,10)}"><p style="font-size:12px;color:var(--muted)">loading…</p></div></div>
+    <div style="grid-column:1/-1"><h4>Full feature vector</h4><div class="fv" data-p1="${esc(r.p1)}" data-p2="${esc(r.p2)}" data-md="${(r.match_date||"").slice(0,10)}" data-rowdef="${esc(r.defaulted_features||"")}"><p style="font-size:12px;color:var(--muted)">loading…</p></div></div>
   </div>`;
 }
 
