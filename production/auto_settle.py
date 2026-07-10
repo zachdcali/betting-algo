@@ -991,6 +991,45 @@ def run(
                     result = atp_result
                     break
 
+        # Tertiary source: ITF order-of-play (itftennis.com API) for ITF-tier
+        # matches — the ATP pages never carry these. Same conservative matching.
+        if result.get('status') in _ATP_FALLBACK_ELIGIBLE and "itf" in str(row.get('tournament', '')).lower():
+            try:
+                from features.history_stitch import _itf_event_for, _itf_event_matches, _names_loosely_match
+                ev = _itf_event_for(str(row.get('tournament', '')), match_date, atp_results_cache)
+                if ev:
+                    em = _itf_event_matches(ev["key"], atp_results_cache)
+                    if em is not None and not em.empty:
+                        done = em[em["completed"] & em["winner"].notna()]
+                        for _, card in done.iterrows():
+                            fwd = _names_loosely_match(card["p1"], p1) and _names_loosely_match(card["p2"], p2)
+                            rev = _names_loosely_match(card["p1"], p2) and _names_loosely_match(card["p2"], p1)
+                            if not (fwd or rev):
+                                continue
+                            won_p1 = (int(card["winner"]) == 1) if fwd else (int(card["winner"]) == 2)
+                            # ITF cards store scores WINNER-first; our log stores P1-first.
+                            # Winner-first == our-P1-first exactly when OUR P1 won.
+                            score = str(card["score"])
+                            if not won_p1:
+                                score = " ".join("-".join(reversed(seg.split("-"))) for seg in score.split())
+                            from datetime import datetime as _dt
+                            result = {
+                                'status': 'matched_and_settled',
+                                'actual_winner': 1 if won_p1 else 2,
+                                'score': score,
+                                'settled_at': _dt.now().isoformat(),
+                                'ta_player_slug': '', 'ta_match_date_found': str(card.get("date", "")),
+                                'ta_event_found': ev["event"], 'ta_round_found': str(card.get("round", "")),
+                                'ta_surface_found': ev.get("surface", ""),
+                                'settlement_score': 85,
+                                'settlement_evidence': {'source': 'itf_oop', 'event': ev["event"]},
+                                'outcome_detail': f"{p1 if won_p1 else p2} won | source=itf_oop | event={ev['event']}",
+                            }
+                            print(f"    Found on ITF ({ev['event']}): {p1 if won_p1 else p2} won  |  score: {score}")
+                            break
+            except Exception as _itf_exc:
+                print(f"    ⚠️ ITF settle fallback failed (non-fatal): {_itf_exc}")
+
         outcome_code = result.get('status', 'unknown')
         reason_counts[outcome_code] += 1
         rate_hits_after = getattr(SCRAPER, 'rate_limit_hits', 0)
