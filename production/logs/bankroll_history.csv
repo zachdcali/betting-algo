@@ -101,3 +101,4 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-10 20:46:30,session_20260710_204630,1000.0,0.0,Session started,0.0,0,0
 2026-07-10 20:49:37,session_20260710_013750,992.0603722119708,-7.939627788029318,Settled bet: Dan Added vs Oliver Crawford (LOSS),100.6037221197068,10,3
 2026-07-10 21:02:59,session_20260710_204630,1000.0,-36.0,Placed 1 bets,36.0,1,0
+2026-07-10 21:48:55,session_20260710_214854,1000.0,0.0,Session started,0.0,0,0
