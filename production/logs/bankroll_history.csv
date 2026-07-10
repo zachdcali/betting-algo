@@ -60,3 +60,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-10 00:04:25,session_20260710_000425,1000.0,0.0,Session started,0.0,0,0
 2026-07-10 00:06:36,session_20260709_004018,964.0,-36.0,Settled bet: Amit Vales vs Henry Searle (LOSS),180.0,4,1
 2026-07-10 00:10:36,session_20260710_000425,1000.0,-51.42857142857142,Placed 2 bets,51.42857142857142,2,0
+2026-07-10 00:16:03,session_20260710_001603,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 00:23:58,session_20260710_001603,1000.0,-90.0,Placed 5 bets,90.0,5,0
