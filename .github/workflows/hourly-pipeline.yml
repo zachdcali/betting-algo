@@ -22,7 +22,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -58,10 +58,9 @@ jobs:
 
       - name: Run pipeline (paper mode, store-backed features)
         working-directory: production
-        env:
-          SKIP_ITF_MATCHES: "1"
         # full paper mode: bets are CSV rows (no real money) and settlement must
-        # WRITE results — --dry-run was silently keeping settled counts at zero
+        # WRITE results. ITF unskipped 2026-07-09 (store-mode + ITF caching changed
+        # the budget math — 35/52 of the board was ITF); revert if runs exceed ~40m
         run: python -u main.py
 
       - name: Commit updated logs
