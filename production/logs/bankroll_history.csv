@@ -95,3 +95,6 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-10 18:20:09,session_20260709_203635,820.0,-180.0,Settled bet: Jacob Fearnley vs Stefan Kozlov (LOSS),180.0,0,1
 2026-07-10 18:25:57,session_20260710_181510,1000.0,-90.0,Placed 2 bets,90.0,2,0
 2026-07-10 18:49:58,session_20260710_184958,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 20:09:10,session_20260710_200910,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 20:11:36,session_20260710_013750,994.671811336645,-5.3281886633549975,Settled bet: Vladyslav Orlov vs Petros Tsitsipas (LOSS),100.6037221197068,12,1
+2026-07-10 20:11:45,session_20260710_013750,986.7321835486157,-7.939627788029318,Settled bet: Hanyi Liu vs Hoyoung Roh (LOSS),100.60372211970679,11,2
