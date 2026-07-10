@@ -108,3 +108,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-10 22:22:32,session_20260710_081558,1004.77161001154,-7.137831670504015,Settled bet: Max Wiskandt vs Anton Matusevich (LOSS),87.2081882834478,12,1
 2026-07-10 22:22:32,session_20260710_112249,994.6045145614212,-10.167095450118811,Settled bet: Max Wiskandt vs Anton Matusevich (LOSS),101.6709545011881,9,1
 2026-07-10 22:44:57,session_20260710_224457,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 23:18:20,session_20260710_231820,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 23:34:16,session_20260710_231820,1000.0,-60.0,Placed 2 bets,60.0,2,0
