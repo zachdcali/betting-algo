@@ -110,3 +110,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-10 22:44:57,session_20260710_224457,1000.0,0.0,Session started,0.0,0,0
 2026-07-10 23:18:20,session_20260710_231820,1000.0,0.0,Session started,0.0,0,0
 2026-07-10 23:34:16,session_20260710_231820,1000.0,-60.0,Placed 2 bets,60.0,2,0
+2026-07-10 23:43:00,session_20260710_234300,1000.0,0.0,Session started,0.0,0,0
+2026-07-10 23:45:18,session_20260710_041911,1011.7,11.7,Settled bet: Enzo Kohlmann de Freitas vs Thiago Cigarran (WIN),72.0,7,1
