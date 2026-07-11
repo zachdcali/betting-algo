@@ -513,11 +513,14 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                 # Navigate
                 page.goto(url, timeout=NAV_TIMEOUT_MS)
                 page.wait_for_load_state("domcontentloaded")
+                # escalate waits on later attempts — a slow render at low-traffic
+                # hours needs patience, not three identical fast failures
+                _extra = attempt * 15000
                 try:
-                    page.wait_for_selector("sp-coupon", timeout=15000)
+                    page.wait_for_selector("sp-coupon", timeout=15000 + _extra)
                 except Exception:
                     vprint("⚠️  'sp-coupon' not seen; waiting for '.grouped-events' instead…")
-                    page.wait_for_selector(".grouped-events", timeout=10000)
+                    page.wait_for_selector(".grouped-events", timeout=10000 + _extra)
 
                 # STEP 1: page-wide load + bottom drain
                 print("🔄 Initial lazy scroll and Show More drain...")

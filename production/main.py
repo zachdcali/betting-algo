@@ -341,14 +341,17 @@ class LiveBettingOrchestrator:
     def fetch_odds(self) -> pd.DataFrame:
         """Fetch current odds from Bovada"""
         print("🎾 Fetching odds from Bovada...")
+        self._odds_fetch_failed = False
         try:
             odds_df = fetch_bovada_tennis_odds(headless=True)
         except Exception as exc:
-            # A slow/empty Bovada board (late-night lull, transient bot-wall)
-            # must not kill the run — settlement/ingest already did real work.
-            # Empty odds flows into the healthy no-odds path below.
-            print(f"❌ Bovada odds fetch failed (continuing without odds): {exc}")
+            # Fetch CRASH is not the same as an empty board: settlement/ingest
+            # work still persists, but the failure stays loud (status
+            # 'odds_fetch_error'), and two consecutive crashes hard-fail the
+            # run so persistent breakage alerts instead of scrolling by.
+            print(f"❌ Bovada odds fetch failed (continuing to persist settlement work): {exc}")
             self.run_metrics['odds_fetch_error'] = str(exc)[:200]
+            self._odds_fetch_failed = True
             odds_df = pd.DataFrame()
         self.run_metrics['odds_rows_fetched'] = len(odds_df)
         
@@ -1162,6 +1165,24 @@ class LiveBettingOrchestrator:
         except Exception as e:
             print(f"  ⚠️  Canonical store ingest skipped (non-fatal): {e}")
 
+    def _previous_run_status(self) -> str:
+        """Status of the run before this one, from the Supabase run mirror
+        (visible even for runs whose git log-commit was skipped)."""
+        try:
+            import canonical_store as cs
+            with cs.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT status FROM dash_runs
+                           WHERE run_id <> %s ORDER BY started_at DESC LIMIT 1""",
+                        (self.run_metrics.get('run_id', ''),),
+                    )
+                    row = cur.fetchone()
+                    return str(row[0]) if row else ''
+        except Exception as exc:
+            print(f"  ⚠️ previous-run status unavailable (non-fatal): {exc}")
+            return ''
+
     def run_full_pipeline(self, start_session: bool = True, auto_settle: bool = True, dry_run: bool = False) -> bool:
         """Run the complete betting pipeline with bet tracking"""
         session_id = None
@@ -1208,12 +1229,21 @@ class LiveBettingOrchestrator:
             # Step 1: Fetch odds
             odds_df = self.fetch_odds()
             if odds_df.empty:
-                # settlement already ran; persist its work and report a healthy
-                # no-odds hour (status field keeps the signal for the ledger)
-                print("⚠️  No odds available — closing out as a no-odds hour")
+                # settlement already ran; persist its work first, THEN decide
+                # health: a parsed-but-empty board is a genuine no-odds hour;
+                # a fetch crash is tolerated once (transient) and hard-fails
+                # on the second consecutive occurrence so real breakage alerts.
                 self._refresh_database()
                 self._ingest_store_events()
-                self._flush_run_history(status='no_odds')
+                if not getattr(self, '_odds_fetch_failed', False):
+                    print("⚠️  Board parsed but empty — closing out as a no-odds hour")
+                    self._flush_run_history(status='no_odds')
+                    return True
+                self._flush_run_history(status='odds_fetch_error')
+                if self._previous_run_status() == 'odds_fetch_error':
+                    print("💥 Second consecutive odds-fetch failure — failing loudly")
+                    return False
+                print("⚠️  Odds fetch failed once — settlement work persisted; will alert if it repeats")
                 return True
             
             # Step 2: Extract features
