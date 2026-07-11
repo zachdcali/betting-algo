@@ -21,6 +21,8 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
                         features: dict, features_complete: bool) -> None:
     payload = {k: v for k, v in features.items() if not str(k).startswith("_")}
     payload["_defaulted_features"] = features.get("_defaulted_features", "") or ""
+    for dbg in ("_build_ref", "_hist_tail_p1", "_hist_tail_p2"):
+        if features.get(dbg): payload[dbg] = features[dbg]
     row = {
         "p1": str(p1).strip(), "p2": str(p2).strip(),
         "match_date": str(match_date)[:10],
