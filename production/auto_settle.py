@@ -880,7 +880,7 @@ def run(
 
     pending = df[df['actual_winner'].isna()].copy()
     if 'record_status' in pending.columns:
-        pending = pending[~pending['record_status'].isin(['stale_no_model'])]
+        pending = pending[~pending['record_status'].isin(['stale_no_model', 'expired_unsettled'])]
     if not include_market_only:
         pending = pending[pending['model_p1_prob'].notna()]
     age_skip_reasons = []
@@ -1159,6 +1159,25 @@ def run(
     summary['settlement_reason_summary'] = dict(reason_counts)
     summary['status'] = 'stopped_rate_limited' if stopped_for_rate_limit else 'success'
     summary['completed_at'] = utc_now().replace(microsecond=0).isoformat()
+    # terminal state for the permanently unsettleable: no source produced a
+    # result 21+ days after the match. They stop consuming candidate slots but
+    # remain in the log (honest record); reversible by clearing record_status.
+    try:
+        if not dry_run:
+            df2 = pd.read_csv(LOG_PATH, low_memory=False)
+            md = pd.to_datetime(df2['match_date'], errors='coerce')
+            cond = (df2['actual_winner'].isna()
+                    & (md < pd.Timestamp.now() - pd.Timedelta(days=21))
+                    & (~df2.get('record_status', pd.Series('', index=df2.index)).astype(str).isin(['expired_unsettled', 'settled'])))
+            n_exp = int(cond.sum())
+            if n_exp:
+                df2.loc[cond, 'record_status'] = 'expired_unsettled'
+                df2.to_csv(LOG_PATH, index=False)
+                print(f"  ⏳ expired {n_exp} unsettleable row(s) (>21d, no source result)")
+                summary['rows_expired'] = n_exp
+    except Exception as _exp_exc:
+        print(f"  ⚠️ expiry pass failed (non-fatal): {_exp_exc}")
+
     if record_run_history:
         upsert_run_history(summary)
 
