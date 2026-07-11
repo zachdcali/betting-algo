@@ -87,6 +87,9 @@ def get_history_frame(conn, player_id: int) -> pd.DataFrame:
     for col in ("event", "round", "level", "opp_name", "opp_hand", "opp_country", "score"):
         df[col] = df[col].fillna("")
     df["source"] = "store"
+    # same real match can exist under two event labels (hub vs calendar
+    # discovery) — one row per (date, opponent, round) or form windows double-count
+    df = df.drop_duplicates(subset=["date", "opp_id", "round"], keep="first")
     return df.drop(columns=["round_ord", "opp_id", "match_id"])
 
 

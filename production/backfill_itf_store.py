@@ -41,13 +41,17 @@ with connect() as conn:
         if not ok or em is None or em.empty:
             continue
         try:
-            r = ingest_itf_results(conn, em, event=str(ev["event"]),
-                                   start_date=str(ev["start_date"]),
-                                   surface=(str(ev.get("surface")) or None),
-                                   level="25" if "25" in str(ev.get("category", "")) else "15")
+            # own transaction per event: an SQL error in one event must not
+            # poison the connection for every event after it (v2 lost a full
+            # run that way — 'current transaction is aborted')
+            with conn.transaction():
+                r = ingest_itf_results(conn, em, event=str(ev["event"]),
+                                       start_date=str(ev["start_date"]),
+                                       surface=(str(ev.get("surface")) or None),
+                                       level="25" if "25" in str(ev.get("category", "")) else "15")
             for k in total: total[k] += r.get(k, 0)
         except Exception as e:
-            print(f"  ⚠️ ingest {ev['event']}: {str(e)[:60]}", flush=True)
+            print(f"  ⚠️ ingest {ev['event']}: {e}", flush=True)
         time.sleep(1.5)
         if i % 20 == 0:
             print(f"  progress {i}/{len(cal)} — {total}", flush=True)

@@ -1109,10 +1109,12 @@ class LiveBettingOrchestrator:
                     ev = metas.get(url)
                     if ev is None or df is None or df.empty:
                         continue
-                    r = cs.ingest_event_results(
-                        conn, df, event=ev["event"], start_date=ev["start_date"],
-                        surface=ev.get("surface") or None, level=ev.get("level") or None,
-                    )
+                    # per-event transaction: one bad event must not abort the rest
+                    with conn.transaction():
+                        r = cs.ingest_event_results(
+                            conn, df, event=ev["event"], start_date=ev["start_date"],
+                            surface=ev.get("surface") or None, level=ev.get("level") or None,
+                        )
                     total += r["inserted"]
                 # ITF events fetched this run (rounds/history) carry completed
                 # results too — persist them so ITF histories accumulate weekly
@@ -1127,11 +1129,12 @@ class LiveBettingOrchestrator:
                         if evrow.empty:
                             continue
                         ev = evrow.iloc[0]
-                        r = cs.ingest_itf_results(
-                            conn, em, event=str(ev["event"]), start_date=str(ev["start_date"]),
-                            surface=(str(ev.get("surface")) or None),
-                            level="25" if "25" in str(ev.get("category", "")) else "15",
-                        )
+                        with conn.transaction():
+                            r = cs.ingest_itf_results(
+                                conn, em, event=str(ev["event"]), start_date=str(ev["start_date"]),
+                                surface=(str(ev.get("surface")) or None),
+                                level="25" if "25" in str(ev.get("category", "")) else "15",
+                            )
                         total += r["inserted"]
                 print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
         except Exception as e:

@@ -36,8 +36,9 @@ PLAYERS_CSV = REPO_ROOT / "data" / "JeffSackmann" / "ATP Players" / "atp_players
 MASTER_CSV = REPO_ROOT / "data" / "JeffSackmann" / "jeffsackmann_master_combined.csv"
 
 SCHEMA_SQL = """
+CREATE SEQUENCE IF NOT EXISTS players_new_id_seq START 9000000;
 CREATE TABLE IF NOT EXISTS players (
-    player_id  BIGINT PRIMARY KEY,
+    player_id  BIGINT PRIMARY KEY DEFAULT nextval('players_new_id_seq'),
     name       TEXT NOT NULL,
     hand       TEXT,
     height_cm  REAL,
@@ -508,20 +509,27 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
             score = " ".join(f"{a}-{b}" for a, b in zip(str(w_sets).split(), str(l_sets).split()))
             # ranks left NULL here; fill_missing_ranks() carry-forward-fills them
             # from each player's own prior observations (leak-free by construction)
+            rnd = str(card.get("round") or "") or None
+            # label-blind guard: the same tournament can be discovered under two
+            # names (live hub vs calendar) across runs — same players+date+round
+            # is the same match regardless of the event string
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
                                         winner_id, loser_id, score, source)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM matches x
+                       WHERE x.match_date=%s AND x.winner_id=%s AND x.loser_id=%s
+                         AND x.round IS NOT DISTINCT FROM %s)
                    ON CONFLICT DO NOTHING""",
-                (start_date, event, surface, level, str(card.get("round") or "") or None,
-                 wid, lid, score or None, source),
+                (start_date, event, surface, level, rnd, wid, lid, score or None, source,
+                 start_date, wid, lid, rnd),
             )
             inserted += cur.rowcount
         cur.execute(
             "UPDATE ingest_runs SET finished_at=now(), rows_inserted=%s, rows_skipped=%s WHERE run_id=%s",
             (inserted, skipped, run_id),
         )
-    conn.commit()
     if unresolved:
         uniq = sorted(set(unresolved))
         print(f"  unresolved players ({len(uniq)}): {', '.join(uniq[:8])}{'...' if len(uniq) > 8 else ''}")
@@ -638,20 +646,24 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
             if wid is None or lid is None or wid == lid:
                 skipped += 1
                 continue
+            rnd = str(card.get("round") or "") or None
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
                                         winner_id, loser_id, score, source)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'itf_oop')
+                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,'itf_oop'
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM matches x
+                       WHERE x.match_date=%s AND x.winner_id=%s AND x.loser_id=%s
+                         AND x.round IS NOT DISTINCT FROM %s)
                    ON CONFLICT DO NOTHING""",
-                (start_date, event, surface, level,
-                 str(card.get("round") or "") or None, wid, lid,
-                 str(card.get("score") or "") or None),
+                (start_date, event, surface, level, rnd, wid, lid,
+                 str(card.get("score") or "") or None,
+                 start_date, wid, lid, rnd),
             )
             inserted += cur.rowcount
         cur.execute(
             "UPDATE ingest_runs SET finished_at=now(), rows_inserted=%s, rows_skipped=%s WHERE run_id=%s",
             (inserted, skipped, run_id),
         )
-    conn.commit()
     print(f"  itf ingest [{event}]: inserted={inserted} skipped={skipped} players_created={created}")
     return {"inserted": inserted, "skipped": skipped, "created": created}
