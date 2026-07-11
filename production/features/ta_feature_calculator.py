@@ -1428,6 +1428,12 @@ class TAFeatureCalculator:
 
         # Expose resolved round_code and inferred match date so caller (main.py) can log correctly
         final['_resolved_round_code'] = round_code or ''
+        final['_build_ref'] = str(when)
+        try:
+            final['_hist_tail_p1'] = ','.join(str(d)[:10] for d in pd.to_datetime(matches1['date'], errors='coerce').sort_values(ascending=False).head(3)) if not matches1.empty else ''
+            final['_hist_tail_p2'] = ','.join(str(d)[:10] for d in pd.to_datetime(matches2['date'], errors='coerce').sort_values(ascending=False).head(3)) if not matches2.empty else ''
+        except Exception:
+            pass
         final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
         final['_resolved_surface'] = surface or ''
 
