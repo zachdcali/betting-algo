@@ -66,4 +66,5 @@ run_20260711T035114Z,prediction_pipeline,2026-07-11T03:51:14+00:00,2026-07-11T03
 Call log:
   - waiting for locator("".grouped-events"") to be visible
 "
-run_20260711T042422Z,prediction_pipeline,2026-07-11T04:24:22+00:00,2026-07-11T04:47:54+00:00,success,True,True,54,54,54,50,4,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1, ""scheduled_start_passed"": 3}",54,50,4,54,7,47,0,13,3,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500,500,10,
+run_20260711T042422Z,prediction_pipeline,2026-07-11T04:24:22+00:00,2026-07-11T04:47:54+00:00,success,True,True,54,54,54,50,4,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1, ""scheduled_start_passed"": 3}",54,50,4,54,7,47,0,13,3,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500.0,500.0,10.0,
+run_20260711T075440Z,prediction_pipeline,2026-07-11T07:54:40+00:00,2026-07-11T08:09:33+00:00,success,True,True,57,57,57,52,5,"{""scheduled_start_passed"": 5}",57,52,5,57,6,51,0,24,4,73,11,0,"{""matched_and_settled"": 11, ""ta_empty"": 62, ""too_recent_to_settle"": 53}",520,520,10,
