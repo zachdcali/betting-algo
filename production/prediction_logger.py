@@ -533,7 +533,18 @@ def log_prediction(
                 upgrading_to_complete = bool(features_complete) and not existing_complete
                 if upgrading_to_complete:
                     print(f"  ⬆️  Upgrading incomplete prediction to first complete one: {p1} vs {p2}")
-                PRESERVE_IF_SET = set() if upgrading_to_complete else {'model_p1_prob', 'model_p2_prob',
+                # A model-regime bump (pipeline fix that changes feature semantics)
+                # unfreezes complete rows: post-bump probabilities supersede the
+                # stale ones. Only matches still on the live odds board reach this
+                # path, so started/settled matches never re-price. The refreshing
+                # prediction must itself be complete — never downgrade.
+                _stored_ver = str(df.at[idx, 'nn_model_version'] or '').strip()
+                regime_refresh = (bool(features_complete) and existing_complete
+                                  and bool(_stored_ver) and bool(nn_model_version)
+                                  and _stored_ver != str(nn_model_version))
+                if regime_refresh:
+                    print(f"  🔁 Regime refresh {_stored_ver} → {nn_model_version}: re-pricing open match {p1} vs {p2}")
+                PRESERVE_IF_SET = set() if (upgrading_to_complete or regime_refresh) else {'model_p1_prob', 'model_p2_prob',
                                    'xgb_p1_prob', 'xgb_p2_prob',
                                    'rf_p1_prob', 'rf_p2_prob',
                                    'market_p1_prob', 'market_p2_prob',
@@ -546,7 +557,7 @@ def log_prediction(
                                    'p1_rank', 'p2_rank',
                                    'odds_scraped_at', 'match_start_time',
                                    'run_id', 'feature_snapshot_id', 'prediction_uid'}
-                if existing_complete and not upgrading_to_complete:
+                if existing_complete and not upgrading_to_complete and not regime_refresh:
                     # Row is frozen at its first COMPLETE prediction. A later run
                     # can flake (draw page down -> round=None) and must never
                     # downgrade round/features_complete/defaults on a frozen row —

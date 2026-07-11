@@ -21,7 +21,7 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
                         features: dict, features_complete: bool) -> None:
     payload = {k: v for k, v in features.items() if not str(k).startswith("_")}
     payload["_defaulted_features"] = features.get("_defaulted_features", "") or ""
-    for dbg in ("_build_ref", "_hist_tail_p1", "_hist_tail_p2"):
+    for dbg in ("_build_ref", "_hist_tail_p1", "_hist_tail_p2", "_regime"):
         if features.get(dbg): payload[dbg] = features[dbg]
     row = {
         "p1": str(p1).strip(), "p2": str(p2).strip(),
@@ -39,7 +39,16 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
     if mask.any():
         already_complete = str(df.loc[mask, "features_complete"].iloc[0]) in ("True", "true", "1")
         if already_complete:
-            return  # frozen at first complete
+            # frozen at first complete — EXCEPT across a model-regime bump
+            # (feature-semantics fix): a complete new build under a different
+            # regime replaces the stale vector, mirroring the prediction log
+            try:
+                stored_regime = json.loads(df.loc[mask, "features_json"].iloc[0]).get("_regime", "")
+            except Exception:
+                stored_regime = ""
+            new_regime = str(payload.get("_regime", ""))
+            if not (bool(features_complete) and new_regime and stored_regime != new_regime):
+                return
         # incomplete vectors TRACK the latest build (a round can resolve while a
         # height stays missing — the panel must show current truth, not the first
         # snapshot); they freeze only once a complete build arrives

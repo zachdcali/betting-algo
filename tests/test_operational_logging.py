@@ -420,3 +420,44 @@ def test_incomplete_prediction_upgrades_to_first_complete(tmp_path, monkeypatch)
                       features_complete=True, defaulted_features="", **common)
     df = pd.read_csv(tmp_path / "prediction_log.csv")
     assert abs(df.iloc[0]["model_p1_prob"] - 0.55) < 1e-9  # frozen at first COMPLETE
+
+
+def test_regime_bump_unfreezes_complete_rows(tmp_path, monkeypatch):
+    """A model-regime version bump must re-price a frozen complete row (the
+    fix that regime marks is exactly why the stored probabilities are stale);
+    same-version re-logs stay frozen."""
+    import pandas as pd
+    import prediction_logger as PL
+    monkeypatch.setattr(PL, "LOG_PATH", tmp_path / "prediction_log.csv")
+    monkeypatch.setattr(PL, "SNAPSHOT_PATH", tmp_path / "prediction_snapshots.csv", raising=False)
+    monkeypatch.setattr(PL, "ODDS_HISTORY_PATH", tmp_path / "odds_history.csv", raising=False)
+    common = dict(p1="Player A", p2="Player B", match_date="2026-07-08",
+                  tournament="Testville", surface="Hard", level="C", round_code="R32",
+                  market_p1_prob=0.5, market_p2_prob=0.5,
+                  p1_odds_american="-110", p2_odds_american="-110",
+                  p1_odds_decimal=1.91, p2_odds_decimal=1.91)
+    PL.log_prediction(model_p1_prob=0.55, model_p2_prob=0.45, model_version="v1.2.2",
+                      nn_model_version="v1.2.2", features_complete=True,
+                      defaulted_features="", **common)
+    # same regime -> frozen at first complete
+    PL.log_prediction(model_p1_prob=0.70, model_p2_prob=0.30, model_version="v1.2.2",
+                      nn_model_version="v1.2.2", features_complete=True,
+                      defaulted_features="", **common)
+    df = pd.read_csv(tmp_path / "prediction_log.csv")
+    assert abs(df.iloc[0]["model_p1_prob"] - 0.55) < 1e-9
+    # regime bump -> refresh probs
+    r = PL.log_prediction(model_p1_prob=0.62, model_p2_prob=0.38, model_version="v1.2.3",
+                          nn_model_version="v1.2.3", features_complete=True,
+                          defaulted_features="", **common)
+    assert r == "updated"
+    df = pd.read_csv(tmp_path / "prediction_log.csv")
+    assert len(df) == 1
+    assert abs(df.iloc[0]["model_p1_prob"] - 0.62) < 1e-9
+    assert df.iloc[0]["nn_model_version"] == "v1.2.3"
+    # an INCOMPLETE build under an even newer regime must NOT downgrade the row
+    PL.log_prediction(model_p1_prob=0.50, model_p2_prob=0.50, model_version="v1.2.4",
+                      nn_model_version="v1.2.4", features_complete=False,
+                      defaulted_features="height=missing", **common)
+    df = pd.read_csv(tmp_path / "prediction_log.csv")
+    assert abs(df.iloc[0]["model_p1_prob"] - 0.62) < 1e-9
+    assert str(df.iloc[0]["features_complete"]) in ("True", "1", "1.0")

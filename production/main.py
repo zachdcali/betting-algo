@@ -656,6 +656,7 @@ class LiveBettingOrchestrator:
                 print(f"      ⚠️ feature audit failed (non-fatal): {_fa_exc}")
             try:
                 from feature_vector_log import save_feature_vector
+                features['_regime'] = MODEL_VERSION  # regime bump unfreezes complete vectors
                 save_feature_vector(p1, p2, match_date, self.run_metrics.get('run_id', ''),
                                     features,
                                     not bool(features.get('_defaulted_features', '')))

@@ -690,7 +690,7 @@ $("#tabs").addEventListener("click",e=>{
 });
 (async()=>{
   try{
-    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at";
+    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at,match_start_time";
     [D.preds, D.odds, D.shadow, D.runs, D.bets] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
       fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
