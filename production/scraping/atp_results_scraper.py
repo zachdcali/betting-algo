@@ -295,11 +295,17 @@ def parse_active_events(html: str, level: str = "") -> list[dict]:
 def discover_active_events() -> list[dict]:
     """Fetch active tour + challenger events from the live-scores hubs."""
     events: list[dict] = []
-    for url, level in [("https://www.atptour.com/en/scores/current", ""),
+    # tour hub defaults to 'A' (Sackmann tour-level code); slams are corrected
+    # by the registry override downstream, Davis Cup by name here
+    for url, level in [("https://www.atptour.com/en/scores/current", "A"),
                        ("https://www.atptour.com/en/scores/current-challenger", "C")]:
         try:
             html = _fetch_rendered(url, "a[href*='/en/scores/current']")
-            events.extend(parse_active_events(html, level))
+            found = parse_active_events(html, level)
+            for ev in found:
+                if "davis cup" in str(ev.get("event", "")).lower():
+                    ev["level"] = "D"
+            events.extend(found)
         except Exception as exc:  # discovery is best-effort; stitching falls back to registry
             print(f"      ⚠️ active-event discovery failed for {url}: {exc}")
     # dedupe by id, tour page wins on collisions
