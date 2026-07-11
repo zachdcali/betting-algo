@@ -512,6 +512,12 @@ def sync_shadow_settlements(shadow_path: Path, prediction_log_path: Path) -> int
     settled["_snapshot_key"] = settled.apply(_prediction_snapshot_key, axis=1)
     settled_by_snapshot = settled.drop_duplicates("_snapshot_key", keep="last").set_index("_snapshot_key")
     settled_by_match = settled.drop_duplicates("match_uid", keep="last").set_index("match_uid")
+    def _players_key(row) -> str:
+        return (str(row.get("p1", "")).strip().lower() + "|" +
+                str(row.get("p2", "")).strip().lower() + "|" +
+                str(row.get("match_date", ""))[:10])
+    settled["_players_key"] = settled.apply(_players_key, axis=1)
+    settled_by_players = settled.drop_duplicates("_players_key", keep="last").set_index("_players_key")
 
     updated = 0
     for idx, shadow_row in shadow_df.iterrows():
@@ -522,6 +528,10 @@ def sync_shadow_settlements(shadow_path: Path, prediction_log_path: Path) -> int
             pred_row = settled_by_snapshot.loc[key]
         elif shadow_row.get("match_uid", "") in settled_by_match.index:
             pred_row = settled_by_match.loc[shadow_row.get("match_uid", "")]
+        elif _players_key(shadow_row) in settled_by_players.index:
+            # match_uid drifts across runs (it hashes round/odds context);
+            # players+date is the stable identity
+            pred_row = settled_by_players.loc[_players_key(shadow_row)]
         else:
             continue
 
