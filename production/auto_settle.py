@@ -1166,8 +1166,18 @@ def run(
         if not dry_run:
             df2 = pd.read_csv(LOG_PATH, low_memory=False)
             md = pd.to_datetime(df2['match_date'], errors='coerce')
+            # rows with unparseable dates must not dodge expiry forever —
+            # fall back to the freshest odds/log timestamp as their age
+            fallback = pd.to_datetime(
+                df2.get('latest_odds_scraped_at', pd.Series('', index=df2.index))
+                   .fillna(df2.get('odds_scraped_at', ''))
+                   .fillna(df2.get('latest_logged_at', ''))
+                   .fillna(df2.get('logged_at', '')),
+                errors='coerce', utc=True).dt.tz_localize(None)
+            age_basis = md.fillna(fallback)
+            cutoff = pd.Timestamp.now() - pd.Timedelta(days=21)
             cond = (df2['actual_winner'].isna()
-                    & (md < pd.Timestamp.now() - pd.Timedelta(days=21))
+                    & (age_basis.isna() | (age_basis < cutoff))
                     & (~df2.get('record_status', pd.Series('', index=df2.index)).astype(str).isin(['expired_unsettled', 'settled'])))
             n_exp = int(cond.sum())
             if n_exp:
