@@ -66,4 +66,5 @@ run_20260711T035114Z,prediction_pipeline,2026-07-11T03:51:14+00:00,2026-07-11T03
 Call log:
   - waiting for locator("".grouped-events"") to be visible
 "
-run_20260711T045028Z,prediction_pipeline,2026-07-11T04:50:28+00:00,2026-07-11T05:02:56+00:00,success,True,True,51,51,51,50,1,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1}",51,50,1,51,5,46,0,10,2,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500,500,10,
+run_20260711T045028Z,prediction_pipeline,2026-07-11T04:50:28+00:00,2026-07-11T05:02:56+00:00,success,True,True,51,51,51,50,1,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1}",51,50,1,51,5,46,0,10,2,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500.0,500.0,10.0,
+run_20260711T152008Z,prediction_pipeline,2026-07-11T15:20:08+00:00,2026-07-11T15:38:29+00:00,success,True,True,18,18,18,18,0,{},18,18,0,18,6,12,0,7,3,76,14,2,"{""matched_and_settled"": 14, ""ta_empty"": 62, ""too_recent_to_settle"": 50}",180,180,10,
