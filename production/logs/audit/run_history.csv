@@ -66,4 +66,5 @@ run_20260711T035114Z,prediction_pipeline,2026-07-11T03:51:14+00:00,2026-07-11T03
 Call log:
   - waiting for locator("".grouped-events"") to be visible
 "
-run_20260711T045028Z,prediction_pipeline,2026-07-11T04:50:28+00:00,2026-07-11T05:02:56+00:00,success,True,True,51,51,51,50,1,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1}",51,50,1,51,5,46,0,10,2,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500,500,10,
+run_20260711T045028Z,prediction_pipeline,2026-07-11T04:50:28+00:00,2026-07-11T05:02:56+00:00,success,True,True,51,51,51,50,1,"{""feature_error:TA profile load failed for slug: ManasManojDhamne"": 1}",51,50,1,51,5,46,0,10,2,4,2,2,"{""matched_and_settled"": 2, ""recently_attempted"": 70, ""ta_empty"": 2, ""too_recent_to_settle"": 49}",500.0,500.0,10.0,
+run_20260711T154114Z,prediction_pipeline,2026-07-11T15:41:14+00:00,2026-07-11T16:00:48+00:00,success,True,True,26,26,26,20,6,"{""feature_error:TA profile load failed for slug: JoelJosefSchwarzler"": 1, ""inside_pre_match_buffer_5m"": 5}",26,20,6,26,15,11,0,6,3,76,15,3,"{""matched_and_settled"": 15, ""ta_empty"": 61, ""too_recent_to_settle"": 50}",200,200,10,
