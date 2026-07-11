@@ -1,5 +1,5 @@
 {
-  "current_version": "v1.2.2",
+  "current_version": "v1.2.3",
   "candidate_version": "v1.3.0",
   "models": {
     "v1.0.0": {
@@ -83,6 +83,23 @@
       "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
       "pipeline_only": true,
       "weights_identical_to": "v1.2.1"
+    },
+    "v1.2.3": {
+      "name": "NN-141-DYNAMIC_OFFSETS_v2",
+      "date": "2026-07-11",
+      "features": 141,
+      "architecture": "128-64-32-16-1",
+      "test_accuracy": 0.6639,
+      "test_auc": 0.7282,
+      "test_brier": 0.2104,
+      "test_ece": 0.0064,
+      "probability_mode": "raw",
+      "calibrated_model_file": "neural_network_calibrated_SURFACE_FIX.pkl",
+      "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
+      "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
+      "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
+      "pipeline_only": true,
+      "weights_identical_to": "v1.2.1"
     }
   },
   "candidates": {
@@ -105,7 +122,7 @@
     }
   },
   "xgboost": {
-    "current_version": "v1.2.1",
+    "current_version": "v1.2.2",
     "models": {
       "v1.0.0": {
         "name": "XGB-143-SURFACE_FIX",
@@ -149,11 +166,23 @@
         "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"
+      },
+      "v1.2.2": {
+        "name": "XGB-141-FIXED_SPLIT",
+        "date": "2026-07-11",
+        "features": 141,
+        "test_accuracy": 0.6649,
+        "test_auc": 0.7302,
+        "test_log_loss": 0.6064,
+        "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
+        "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
+        "pipeline_only": true,
+        "weights_identical_to": "v1.2.0"
       }
     }
   },
   "random_forest": {
-    "current_version": "v1.2.1",
+    "current_version": "v1.2.2",
     "models": {
       "v1.0.0": {
         "name": "RF-143-SURFACE_FIX",
@@ -194,6 +223,18 @@
         "test_auc": 0.7251,
         "test_log_loss": 0.6105,
         "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
+        "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
+        "pipeline_only": true,
+        "weights_identical_to": "v1.2.0"
+      },
+      "v1.2.2": {
+        "name": "RF-141-FIXED_SPLIT",
+        "date": "2026-07-11",
+        "features": 141,
+        "test_accuracy": 0.6603,
+        "test_auc": 0.7251,
+        "test_log_loss": 0.6105,
+        "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
         "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"

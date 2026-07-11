@@ -175,3 +175,18 @@ def test_h2h_orientation():
     assert float(f21["H2H_P1_Wins"]) == 1.0
     assert float(f21["H2H_P2_Wins"]) == 2.0
     assert float(f21["H2H_P1_WinRate"]) < 0.5
+
+
+def test_days_since_last_week_boundary():
+    """A ref with a clock time must not turn the current week's rows into a
+    'previous tournament' (the Days_Since_Last=5 bug, task #38): with rows in
+    the current week and one previous event, days-since counts from the
+    PREVIOUS event's Monday."""
+    calc = TAFeatureCalculator(StubScraper())
+    df = pd.DataFrame([
+        {"date": pd.Timestamp("2026-07-08"), "result": "W"},   # current week (Mon Jul 6)
+        {"date": pd.Timestamp("2026-06-29"), "result": "W"},   # previous event Monday
+    ])
+    ref = datetime(2026, 7, 11, 12, 20)  # Saturday afternoon — carries a time
+    days = calc._days_since_last_tournament(df, ref)
+    assert days == (pd.Timestamp(ref) - pd.Timestamp("2026-06-29")).days == 12

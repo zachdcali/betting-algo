@@ -394,8 +394,12 @@ class TAFeatureCalculator:
 
     @staticmethod
     def _monday_of(dt: pd.Timestamp) -> pd.Timestamp:
-        """Get Monday of week"""
-        return dt - pd.Timedelta(days=int(dt.weekday()))
+        """Monday of dt's week, at midnight. Without normalize(), a ref carrying
+        a clock time (Bovada datetimes) makes current_week 'Mon 12:20' while row
+        Mondays are 'Mon 00:00' — strictly less, so the CURRENT week's rows count
+        as a previous tournament and days-since collapses to ref-minus-own-Monday
+        (the impossible '5 days' class). Training refs were midnight-based."""
+        return (dt - pd.Timedelta(days=int(dt.weekday()))).normalize()
 
     def _days_since_last_tournament(self, df: pd.DataFrame, ref: datetime) -> Optional[int]:
         """Days since last tournament (week-based).

@@ -12,12 +12,15 @@ Regime boundary: **NN v1.2.2 / XGB v1.2.1 / RF v1.2.1** (2026-07-09) = clean-fea
 | First-complete freeze + no-downgrade | silent row corruption | ✅ live |
 | Store-vs-TA parity (141 features, 2026-07-06) | pipeline divergence | ✅ 138/145 identical, 7 = rank-lineage (documented) |
 | Granular raw-stat verification vs official ATP pages | ingestion errors | ✅ spot-verified (Fritz–Zverev QF, 8/8 columns) |
-| P1/P2 symmetry invariant pytest | asymmetric feature math | ⬜ phase 2 |
+| P1/P2 symmetry invariant pytest (`test_feature_symmetry.py`, all 141 mirror under swap) | asymmetric feature math | ✅ live in CI — calculator verified orientation-clean |
 | Golden-match hand verification (famous match, every feature vs public record) | formula errors | ⬜ phase 2 |
 | Granular aggregate recompute (Last10 windows by hand vs pipeline) | window math | ⬜ phase 2 |
 
 ## Known incidents (all fixed, all annotated)
 
+- **Days-since week-boundary collapse** (fixed 2026-07-11, versions NN v1.2.3 / XGB v1.2.2 / RF v1.2.2): refs carrying a clock time (Bovada datetimes) made the current week's rows count as a "previous tournament" (`Mon 00:00 < Mon 12:20`), collapsing `Days_Since_Last` to ~5 for any player with matches this week. Training refs were midnight-based, so training never hit it. Regression-tested.
+- **Store label duplicates** (fixed 2026-07-11): the same tournament discovered as "Bogota" (calendar) and "Bogota, Colombia Kia Open" (live hub) across runs double-inserted 513 rows, double-counting form windows. Writes now label-blind (players+date+round identity), reads dedupe defensively.
+- **Wrong-week event dating** (fixed 2026-07-11): finished events still on the live hub were stamped with the scrape week's Monday; five events (210 rows) sat one week late — corrupts week-based features. Discovery now takes true start dates from the calendar; `tourney_id` stored for id-keyed repair.
 - **Surface fallback-Hard** (fixed 2026-07-09): 158 predictions / 35 paper bets on wrong surfaces; suspect-flagged in UI, excluded from headline metrics by default.
 - **Frozen-row downgrade** (fixed 2026-07-09): flaky runs could strip round/completeness; now structurally impossible.
 - **Unranked hard-fail** (fixed 2026-07-08): live rejected unranked players; training used rank=999 — now mirrored.
