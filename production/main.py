@@ -341,7 +341,15 @@ class LiveBettingOrchestrator:
     def fetch_odds(self) -> pd.DataFrame:
         """Fetch current odds from Bovada"""
         print("🎾 Fetching odds from Bovada...")
-        odds_df = fetch_bovada_tennis_odds(headless=True)
+        try:
+            odds_df = fetch_bovada_tennis_odds(headless=True)
+        except Exception as exc:
+            # A slow/empty Bovada board (late-night lull, transient bot-wall)
+            # must not kill the run — settlement/ingest already did real work.
+            # Empty odds flows into the healthy no-odds path below.
+            print(f"❌ Bovada odds fetch failed (continuing without odds): {exc}")
+            self.run_metrics['odds_fetch_error'] = str(exc)[:200]
+            odds_df = pd.DataFrame()
         self.run_metrics['odds_rows_fetched'] = len(odds_df)
         
         if not odds_df.empty:
@@ -1200,9 +1208,13 @@ class LiveBettingOrchestrator:
             # Step 1: Fetch odds
             odds_df = self.fetch_odds()
             if odds_df.empty:
-                print("⚠️  No odds available, stopping pipeline")
+                # settlement already ran; persist its work and report a healthy
+                # no-odds hour (status field keeps the signal for the ledger)
+                print("⚠️  No odds available — closing out as a no-odds hour")
+                self._refresh_database()
+                self._ingest_store_events()
                 self._flush_run_history(status='no_odds')
-                return False
+                return True
             
             # Step 2: Extract features
             features_df = self.extract_features(odds_df)
