@@ -1114,6 +1114,25 @@ class LiveBettingOrchestrator:
                         surface=ev.get("surface") or None, level=ev.get("level") or None,
                     )
                     total += r["inserted"]
+                # ITF events fetched this run (rounds/history) carry completed
+                # results too — persist them so ITF histories accumulate weekly
+                # instead of freezing at Sackmann's last drop
+                itf_frames = cache.get("itf_event_matches") or {}
+                itf_cal = cache.get("itf_calendar")
+                if itf_frames and itf_cal is not None and not itf_cal.empty:
+                    for key, em in itf_frames.items():
+                        if em is None or em.empty:
+                            continue
+                        evrow = itf_cal[itf_cal["key"] == key]
+                        if evrow.empty:
+                            continue
+                        ev = evrow.iloc[0]
+                        r = cs.ingest_itf_results(
+                            conn, em, event=str(ev["event"]), start_date=str(ev["start_date"]),
+                            surface=(str(ev.get("surface")) or None),
+                            level="25" if "25" in str(ev.get("category", "")) else "15",
+                        )
+                        total += r["inserted"]
                 print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
         except Exception as e:
             print(f"  ⚠️  Canonical store ingest skipped (non-fatal): {e}")

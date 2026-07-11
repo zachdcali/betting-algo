@@ -597,3 +597,61 @@ def surface_from_store(event_name: str, cache: dict | None = None) -> str | None
     if cache is not None:
         cache["surf::" + key] = result
     return result
+
+
+def ingest_itf_results(conn, em_df, event: str, start_date: str,
+                       surface: str | None, level: str) -> dict:
+    """Upsert one ITF event's completed order-of-play matches into the store.
+
+    ITF frames carry (p1, p2, winner, score winner-first, round, completed).
+    Unlike ATP ingest, unknown players are CREATED (name + nothing else):
+    deep-ITF juniors predate any Sackmann coverage, and their histories can
+    only accumulate if their first professional rows are storable.
+    """
+    inserted = skipped = created = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ingest_runs (source, started_at, notes) VALUES ('itf_oop', now(), %s) RETURNING run_id",
+            (f"{event} {start_date}",),
+        )
+        run_id = cur.fetchone()[0]
+
+        def resolve_or_create(name: str):
+            nonlocal created
+            pid = _resolve_player_id(cur, name)
+            if pid is None and len(str(name).strip()) >= 5:
+                cur.execute(
+                    "INSERT INTO players (name, updated_at) VALUES (%s, now()) RETURNING player_id",
+                    (str(name).strip(),),
+                )
+                pid = cur.fetchone()[0]
+                created += 1
+            return pid
+
+        for _, card in em_df.iterrows():
+            if not bool(card.get("completed")) or card.get("winner") not in (1, 2):
+                skipped += 1
+                continue
+            w_name = card["p1"] if int(card["winner"]) == 1 else card["p2"]
+            l_name = card["p2"] if int(card["winner"]) == 1 else card["p1"]
+            wid, lid = resolve_or_create(w_name), resolve_or_create(l_name)
+            if wid is None or lid is None or wid == lid:
+                skipped += 1
+                continue
+            cur.execute(
+                """INSERT INTO matches (match_date, event, surface, level, round,
+                                        winner_id, loser_id, score, source)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'itf_oop')
+                   ON CONFLICT DO NOTHING""",
+                (start_date, event, surface, level,
+                 str(card.get("round") or "") or None, wid, lid,
+                 str(card.get("score") or "") or None),
+            )
+            inserted += cur.rowcount
+        cur.execute(
+            "UPDATE ingest_runs SET finished_at=now(), rows_inserted=%s, rows_skipped=%s WHERE run_id=%s",
+            (inserted, skipped, run_id),
+        )
+    conn.commit()
+    print(f"  itf ingest [{event}]: inserted={inserted} skipped={skipped} players_created={created}")
+    return {"inserted": inserted, "skipped": skipped, "created": created}
