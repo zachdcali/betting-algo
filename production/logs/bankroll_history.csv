@@ -129,3 +129,7 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-11 04:51:04,session_20260710_081558,992.862168329496,-7.137831670504015,Settled bet: Reece Falck vs Emon van Loben Sels (LOSS),87.2081882834478,11,2
 2026-07-11 04:51:04,session_20260710_081558,985.724336658992,-7.137831670504015,Settled bet: Spencer Johnson vs Ronald Hohmann (LOSS),87.2081882834478,10,3
 2026-07-11 05:00:09,session_20260711_045028,1000.0,-36.06903567496771,Placed 2 bets,36.0690356749677,2,0
+2026-07-11 13:58:35,session_20260711_135835,1000.0,0.0,Session started,0.0,0,0
+2026-07-11 14:00:03,session_20260710_171229,1060.0,60.0,Settled bet: Matthew Dellavedova vs Omar Jasika (WIN),120.0,3,1
+2026-07-11 14:00:03,session_20260710_171229,1091.5,31.499999999999996,Settled bet: Naoki Nakagawa vs Koki Matsuda (WIN),120.0,2,2
+2026-07-11 14:14:39,session_20260711_135835,1000.0,-60.0,Placed 3 bets,60.0,3,0
