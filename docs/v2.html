@@ -102,6 +102,7 @@ td.shadowtier{background:color-mix(in srgb, var(--aub) 3%, transparent)}
 th.shfirst,td.shfirst{border-left:2px solid var(--line-strong)}
 td.hot.shadowtier{background:var(--grass-bg)} td.cold.shadowtier{background:var(--aub-bg)}
 @media (max-width:700px){ .tile .val{font-size:21px} }
+.be{display:block;font-size:.72em;opacity:.55;letter-spacing:.02em}
 </style>
 </head>
 <body>
@@ -168,6 +169,13 @@ const pct = v => v==null||isNaN(v) ? "–" : Math.round(v*100)+"%";
 const usd = v => (v<0?"−$":"$")+Math.abs(v).toFixed(2);
 const num = v => { const f=parseFloat(v); return isNaN(f)?null:f; };
 const isTrue = v => v===true || v==="True" || v==="1" || v==="1.0" || v===1;
+// The de-vig % is the market's fair opinion; the BE (break-even) % is the raw
+// implied probability of the price — the hurdle a model must beat for +EV.
+function beCell(dec){
+  const d = parseFloat(dec);
+  if(!d || d <= 1) return "";
+  return `<span class="be" title="break-even: model must exceed this for +EV">BE ${(100/d).toFixed(1)}%</span>`;
+}
 // Bovada times are scraped by a UTC browser — "7/12/26 3:20 PM" is UTC.
 // Render in the viewer's local timezone.
 function localTime(raw){
@@ -349,9 +357,9 @@ function renderMatchBlock(body, r, sh, opts){
     return `<td class="sets">${digits}${w===side?'<span class="tick">✓</span>':""}</td>`;
   };
   const tr1=el("tr","expandable"+(bett?" betrow":""));
-  tr1.innerHTML=`${nameCell(1)}${setsCell(1)}<td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}</td>${cells(1)}`;
+  tr1.innerHTML=`${nameCell(1)}${setsCell(1)}<td>${american(r.p1_odds_decimal)}</td><td class="mkt">${pct(mkt1)}${beCell(r.p1_odds_decimal)}</td>${cells(1)}`;
   const tr2=el("tr","p2row expandable");
-  tr2.innerHTML=`${nameCell(2)}${setsCell(2)}<td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}</td>${cells(2)}`;
+  tr2.innerHTML=`${nameCell(2)}${setsCell(2)}<td>${american(r.p2_odds_decimal)}</td><td class="mkt">${pct(mkt2)}${beCell(r.p2_odds_decimal)}</td>${cells(2)}`;
   const dRow=el("tr","detail"); dRow.style.display="none";
   const dCell=el("td"); dCell.colSpan=opts.ncols; dRow.appendChild(dCell);
   [tr1,tr2].forEach(x=>x.onclick=()=>{ dRow.style.display=dRow.style.display==="none"?"":"none";
