@@ -14,7 +14,8 @@ Regime boundary: **NN v1.2.2 / XGB v1.2.1 / RF v1.2.1** (2026-07-09) = clean-fea
 | Granular raw-stat verification vs official ATP pages | ingestion errors | ✅ spot-verified (Fritz–Zverev QF, 8/8 columns) |
 | P1/P2 symmetry invariant pytest (`test_feature_symmetry.py`, all 141 mirror under swap) | asymmetric feature math | ✅ live in CI — calculator verified orientation-clean |
 | Golden-match hand verification (famous match, every feature vs public record) | formula errors | ⬜ phase 2 |
-| Granular aggregate recompute (Last10 windows by hand vs pipeline) | window math | ⬜ phase 2 |
+| Granular aggregate recompute / window-math fixtures (`test_form_windows.py`) | window math | ✅ live in CI — Laplace constants, EWM half-life, window edges, streaks pinned to hand values |
+| Cross-source reconciliation (`reconcile_store.py`, hourly): conflicts table, Sackmann-wins level repair, stats gap-fill | source disagreement, silent gaps | ✅ live — activates on source overlap (next Sackmann drop) |
 
 ## Known incidents (all fixed, all annotated)
 
@@ -24,6 +25,15 @@ Regime boundary: **NN v1.2.2 / XGB v1.2.1 / RF v1.2.1** (2026-07-09) = clean-fea
 - **Surface fallback-Hard** (fixed 2026-07-09): 158 predictions / 35 paper bets on wrong surfaces; suspect-flagged in UI, excluded from headline metrics by default.
 - **Frozen-row downgrade** (fixed 2026-07-09): flaky runs could strip round/completeness; now structurally impossible.
 - **Unranked hard-fail** (fixed 2026-07-08): live rejected unranked players; training used rank=999 — now mirrored.
+
+## Hand_U missingness (measured 2026-07-11)
+
+Live `Hand_U` ran hot vs training — unknown handedness was acting as a missingness proxy:
+challenger 9.6% live vs 2.4% training (4×), ITF-15 44% vs 18% (2.4×), tour/slam ≈ parity.
+Fix shipped: the ATP bio fetch now captures `Plays:` alongside height (same page, zero extra
+fetches), caches to `data/atp_hands.json`, and writes through to `players.hand` — every
+ranked player self-heals on first encounter. Honest residual: deep-ITF juniors with no ATP
+profile stay `U` (they are also the bulk of training's 18% `U` at that level).
 
 ## Data coverage (2026 rows, granular serve stats)
 

@@ -18,7 +18,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
 from atp_rankings_scraper import load_rankings, get_player_points, get_player_rank
-from atp_height_scraper import batch_get_heights
+from atp_height_scraper import batch_get_profiles
 
 # Import shared round offset function (same directory)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -80,6 +80,27 @@ class TAFeatureCalculator:
             import canonical_store
             self._store_conn = canonical_store.connect()
         return self._store_conn
+
+    def _persist_player_field(self, profile: dict, field: str, value) -> None:
+        """Write an officially-sourced profile field back to the store so the
+        enrichment is permanent (non-fatal; only fires with a store identity)."""
+        pid = profile.get('player_id')
+        if pid is None or value in (None, '', 'U') or not self.use_store:
+            return
+        try:
+            conn = self._store()
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE players SET {field} = %s, updated_at = now() "
+                        f"WHERE player_id = %s AND ({field} IS NULL OR {field} = 'U')"
+                        if field == 'hand' else
+                        f"UPDATE players SET {field} = %s, updated_at = now() "
+                        f"WHERE player_id = %s AND {field} IS NULL",
+                        (value, pid),
+                    )
+        except Exception as exc:
+            print(f"      ⚠️ player {field} write-through failed (non-fatal): {exc}")
 
     @staticmethod
     def _slug_to_name(slug: str) -> str:
@@ -1034,27 +1055,34 @@ class TAFeatureCalculator:
         # ATP height fallback: if TA is missing height for either player, try ATP bio page
         h1 = profile1.get('height_cm')
         h2 = profile2.get('height_cm')
-        if h1 is None or h2 is None:
+        hand1 = profile1.get('hand') or 'U'
+        hand2 = profile2.get('hand') or 'U'
+        if h1 is None or h2 is None or hand1 == 'U' or hand2 == 'U':
             missing = []
-            if h1 is None and p1_display:
+            if (h1 is None or hand1 == 'U') and p1_display:
                 missing.append(p1_display)
-            if h2 is None and p2_display:
+            if (h2 is None or hand2 == 'U') and p2_display:
                 missing.append(p2_display)
             missing = [m for m in missing if isinstance(m, str) and m.strip()]
-            atp_heights = batch_get_heights(missing, verbose=False) if missing else {}
-            if h1 is None:
-                h1 = atp_heights.get(p1_display)
-                if h1 is not None:
-                    print(f"  ATP height fallback: {p1_display} → {h1}cm")
-            if h2 is None:
-                h2 = atp_heights.get(p2_display)
-                if h2 is not None:
-                    print(f"  ATP height fallback: {p2_display} → {h2}cm")
+            atp_profiles = batch_get_profiles(missing, verbose=False) if missing else {}
+            def _fill(display, h, hand, profile):
+                prof = atp_profiles.get(display) or {}
+                if h is None and prof.get('height_cm') is not None:
+                    h = prof['height_cm']
+                    print(f"  ATP height fallback: {display} → {h}cm")
+                    self._persist_player_field(profile, 'height_cm', h)
+                if hand == 'U' and prof.get('hand'):
+                    hand = prof['hand']
+                    print(f"  ATP hand fallback: {display} → {hand}")
+                    self._persist_player_field(profile, 'hand', hand)
+                return h, hand
+            h1, hand1 = _fill(p1_display, h1, hand1, profile1)
+            h2, hand2 = _fill(p2_display, h2, hand2, profile2)
 
         s1 = {
             'height': h1,
             'age': _fractional_age(profile1, when),
-            'hand': profile1.get('hand'),
+            'hand': hand1,
             'country': profile1.get('country'),
             'rank': float(profile1['current_rank']),
             'rank_points': _atp_points(p1_display, float(profile1['current_rank']), 'P1'),
@@ -1062,7 +1090,7 @@ class TAFeatureCalculator:
         s2 = {
             'height': h2,
             'age': _fractional_age(profile2, when),
-            'hand': profile2.get('hand'),
+            'hand': hand2,
             'country': profile2.get('country'),
             'rank': float(profile2['current_rank']),
             'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),

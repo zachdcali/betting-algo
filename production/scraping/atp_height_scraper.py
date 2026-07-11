@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_heights.json"
+HANDS_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_hands.json"
 RANKINGS_PATH = Path(__file__).parent.parent.parent / "data" / "atp_rankings.csv"
 ATP_BASE = "https://www.atptour.com"
 
@@ -54,6 +55,19 @@ def _save_cache(cache: dict):
 
 def _cache_key(name: str) -> str:
     return name.strip().lower()
+
+
+def _load_hands_cache() -> dict:
+    if HANDS_CACHE_PATH.exists():
+        with open(HANDS_CACHE_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_hands_cache(cache: dict):
+    HANDS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(HANDS_CACHE_PATH, "w") as f:
+        json.dump(cache, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -128,16 +142,28 @@ def _extract_height_cm(text: str) -> Optional[int]:
     return None
 
 
-def _scrape_profile(page, profile_url: str) -> Optional[int]:
-    """Navigate to an ATP overview page and extract height."""
+def _extract_hand(text: str) -> Optional[str]:
+    """'Plays: Right-Handed' / 'Left-Handed' on the bio page -> 'R'/'L'."""
+    m = re.search(r"(right|left)\s*-?\s*handed", text, re.IGNORECASE)
+    if m:
+        return "R" if m.group(1).lower() == "right" else "L"
+    return None
+
+
+def _fetch_profile_text(page, profile_url: str) -> str:
     full_url = ATP_BASE + profile_url if profile_url.startswith("/") else profile_url
     try:
         page.goto(full_url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(5)
-        return _extract_height_cm(page.inner_text("body"))
+        return page.inner_text("body")
     except Exception as e:
         print(f"  ATP profile page error ({full_url}): {e}")
-        return None
+        return ""
+
+
+def _scrape_profile(page, profile_url: str) -> Optional[int]:
+    """Navigate to an ATP overview page and extract height."""
+    return _extract_height_cm(_fetch_profile_text(page, profile_url))
 
 
 # ---------------------------------------------------------------------------
@@ -185,20 +211,23 @@ def get_height_cm(player_name: str, cache: Optional[dict] = None) -> Optional[in
     return height
 
 
-def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
+def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
     """
-    Fetch heights for multiple players in a single Playwright browser session.
-    Returns {name: height_cm_or_None}.
-    New results are merged into the persistent cache.
+    Fetch height AND handedness for multiple players, one page fetch each,
+    shared browser. Returns {name: {"height_cm": int|None, "hand": 'R'/'L'/None}}.
+    Both persistent caches are updated (heights: atp_heights.json,
+    hands: atp_hands.json — hands were the Hand_U missingness gap: live
+    Hand_U ran 4x training incidence at challenger level before this).
     """
-    cache = _load_cache()
-    results = {}
+    h_cache = _load_cache()
+    hd_cache = _load_hands_cache()
+    results: dict = {}
     to_scrape = []
 
     for name in player_names:
         key = _cache_key(name)
-        if key in cache:
-            results[name] = cache[key]
+        if key in h_cache and key in hd_cache:
+            results[name] = {"height_cm": h_cache[key], "hand": hd_cache[key]}
         else:
             to_scrape.append(name)
 
@@ -206,40 +235,45 @@ def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
         return results
 
     url_map = _load_url_map()
-
-    # Split into those with known URLs vs those without
     with_url = [(n, _find_profile_url(n, url_map)) for n in to_scrape]
     needs_scraping = [(n, u) for n, u in with_url if u]
     no_url = [n for n, u in with_url if not u]
 
     for name in no_url:
-        results[name] = None
-        cache[_cache_key(name)] = None
+        results[name] = {"height_cm": h_cache.get(_cache_key(name)),
+                         "hand": hd_cache.get(_cache_key(name))}
+        h_cache.setdefault(_cache_key(name), None)
+        hd_cache.setdefault(_cache_key(name), None)
         if verbose:
-            print(f"  ATP: no URL for '{name}' — skipping height lookup")
+            print(f"  ATP: no URL for '{name}' — skipping profile lookup")
 
-    if not needs_scraping:
-        _save_cache(cache)
-        return results
+    if needs_scraping:
+        if verbose:
+            print(f"  ATP profile scraper: fetching {len(needs_scraping)} players...")
+        from browser_session import new_page
+        pg = new_page()
+        try:
+            for name, bio_url in needs_scraping:
+                text = _fetch_profile_text(pg, bio_url)
+                h = _extract_height_cm(text)
+                hd = _extract_hand(text)
+                results[name] = {"height_cm": h, "hand": hd}
+                h_cache[_cache_key(name)] = h
+                hd_cache[_cache_key(name)] = hd
+                if verbose:
+                    print(f"    {name}: {h or '?'}cm hand={hd or '?'}")
+        finally:
+            pg.close()
 
-    if verbose:
-        print(f"  ATP height scraper: fetching {len(needs_scraping)} players...")
-
-    from browser_session import new_page
-    pg = new_page()
-    if True:
-        for name, bio_url in needs_scraping:
-            h = _scrape_profile(pg, bio_url)
-            results[name] = h
-            cache[_cache_key(name)] = h
-            if verbose:
-                status = f"{h}cm" if h else "not found"
-                print(f"    {name}: {status}")
-
-        pg.close()
-
-    _save_cache(cache)
+    _save_cache(h_cache)
+    _save_hands_cache(hd_cache)
     return results
+
+
+def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
+    """Back-compat wrapper: heights only."""
+    profs = batch_get_profiles(player_names, verbose=verbose)
+    return {n: (v or {}).get("height_cm") for n, v in profs.items()}
 
 
 if __name__ == "__main__":

@@ -1140,6 +1140,17 @@ class LiveBettingOrchestrator:
                             )
                         total += r["inserted"]
                 print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
+                # cross-source reconciliation: conflicts loud, curated-level
+                # repair, capped stats gap-fill for the active registry events
+                try:
+                    import reconcile_store as rcs
+                    from features.history_stitch import CURRENT_EVENT_REGISTRY
+                    import pandas as _pd
+                    urls = [ev["url"] for ev in CURRENT_EVENT_REGISTRY
+                            if _pd.Timestamp(ev["window"][0]) <= _pd.Timestamp.now() <= _pd.Timestamp(ev["window"][1])]
+                    rcs.run(conn=conn, since_days=75, stats_urls=urls, stats_cap=10)
+                except Exception as _rc_exc:
+                    print(f"  ⚠️  reconcile skipped (non-fatal): {_rc_exc}")
         except Exception as e:
             print(f"  ⚠️  Canonical store ingest skipped (non-fatal): {e}")
 
