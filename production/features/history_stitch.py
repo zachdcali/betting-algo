@@ -500,7 +500,7 @@ def _with_itf_client(fn):
         client.close()
 
 
-def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dict]:
+def _itf_event_for(tournament_label: str, ref_date, cache: dict, players=None) -> Optional[dict]:
     """Map a Bovada 'ITF Men <City>' label to an ITF calendar event by location."""
     try:
         from itf_results_scraper import get_calendar
@@ -539,6 +539,16 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict) -> Optional[dic
         live = hit[(pd.to_datetime(hit["start_date"]) <= ref + pd.Timedelta(days=1))
                    & (pd.to_datetime(hit["end_date"]) >= ref - pd.Timedelta(days=1))]
         hit = live if len(live) else hit.iloc[:1]
+    if len(hit) > 1 and players:
+        # factory venues (Monastir/Antalya/Sharm) run PARALLEL same-week events:
+        # pick the candidate whose schedule actually contains the players
+        for _, cand in hit.iterrows():
+            em = _itf_event_matches(cand["key"], cache)
+            if em is None or em.empty:
+                continue
+            names = (em["p1"].astype(str) + "|" + em["p2"].astype(str)).str.lower()
+            if any(str(p).split()[-1].lower() in " ".join(names.tolist()) for p in players if p):
+                return cand.to_dict()
     return hit.iloc[0].to_dict() if len(hit) >= 1 else None
 
 
@@ -567,7 +577,7 @@ def gather_itf_rows(display_name: str, tournament_label: str, ref_date,
     ITF's API publishes scores; coverage features count this honestly).
     """
     cache = session_cache if session_cache is not None else {}
-    ev = _itf_event_for(tournament_label, ref_date, cache)
+    ev = _itf_event_for(tournament_label, ref_date, cache, players=(display_name,))
     if not ev:
         return pd.DataFrame()
     em = _itf_event_matches(ev["key"], cache)
@@ -606,7 +616,7 @@ def itf_round_for(p1_name: str, p2_name: str, tournament_label: str, ref_date,
                   session_cache: Optional[dict] = None) -> Optional[str]:
     """Round of an upcoming ITF match from the event's order of play."""
     cache = session_cache if session_cache is not None else {}
-    ev = _itf_event_for(tournament_label, ref_date, cache)
+    ev = _itf_event_for(tournament_label, ref_date, cache, players=(p1_name, p2_name))
     if not ev:
         return None
     em = _itf_event_matches(ev["key"], cache)
