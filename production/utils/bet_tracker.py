@@ -127,8 +127,10 @@ class BetTracker:
             match_mask = pending.get('match', pd.Series('', index=pending.index)).apply(_norm) == match_label
             bet_mask = pending.get('bet_on', pd.Series('', index=pending.index)).apply(_norm) == bet_on
             date_mask = pending.get('match_date', pd.Series('', index=pending.index)).fillna('').astype(str).str.strip() == match_date
-            event_mask = pending.get('event', pd.Series('', index=pending.index)).apply(_norm) == event
-            return bool((match_mask & bet_mask & date_mask & event_mask).any())
+            # players+side+date is the identity of a bet. Never key on the event
+            # label: Bovada's "(N)" suffix mutates every scrape, which let the
+            # same match get staked repeatedly across hourly runs.
+            return bool((match_mask & bet_mask & date_mask).any())
         
         # Prepare bet records
         bet_records = []
