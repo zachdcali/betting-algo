@@ -349,6 +349,30 @@ def _resolve_player_id(cur, name: str) -> int | None:
         rows = cur.fetchall()
         if len(rows) == 1:
             return rows[0][0]
+    # token-subset: "Manas Manoj Dhamne" (odds board, middle name) vs
+    # "Manas Dhamne" (store). Candidates share the LAST token; accept only if
+    # the store name's tokens are a subset of the query's (or vice versa) and
+    # the hit is unique — never guessed.
+    if len(parts) >= 2:
+        last = parts[-1]
+        cur.execute(
+            """SELECT player_id, name FROM players
+               WHERE regexp_replace(lower(unaccent(name)), '[^a-z ]', '', 'g')
+                     LIKE '%%' || regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g')""",
+            (last,),
+        )
+        cands = cur.fetchall()
+        if cands:
+            cur.execute("SELECT regexp_replace(lower(unaccent(%s)), '[^a-z ]', '', 'g')", (name,))
+            q_toks = set(cur.fetchone()[0].split())
+            hits = []
+            for pid, nm in cands:
+                cur.execute("SELECT regexp_replace(lower(unaccent(%s)), '[^a-z ]', '', 'g')", (nm,))
+                n_toks = set(cur.fetchone()[0].split())
+                if len(n_toks) >= 2 and len(q_toks) >= 2 and (n_toks <= q_toks or q_toks <= n_toks):
+                    hits.append(pid)
+            if len(set(hits)) == 1:
+                return hits[0]
     return None
 
 
@@ -580,6 +604,8 @@ def surface_from_store(event_name: str, cache: dict | None = None) -> str | None
     if cache is not None and ("surf::" + key) in cache:
         return cache["surf::" + key]
     needle = key.split(",")[0].split("(")[0].strip()
+    # hyphenated/slashed venues ("Bastia-Lucciana") must split, not vanish
+    needle = needle.replace("-", " ").replace("/", " ")
     needle = " ".join(w for w in needle.split()
                       if w.isalpha() and w not in ("atp", "challenger", "itf", "men", "mens", "wta"))
     result = None

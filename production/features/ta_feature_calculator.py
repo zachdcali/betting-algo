@@ -1015,6 +1015,15 @@ class TAFeatureCalculator:
                 return float(pts)
             if ta_rank >= 999:  # unranked: 0 points is the factual value, not a default
                 return 0.0
+            # ranked player missing from the CSV (beyond scrape depth / name form):
+            # interpolate points from the official rank->points curve — a real,
+            # deterministic estimate; a flat 500 is a top-110 player's points
+            if self._atp_rankings is not None and len(self._atp_rankings) > 50:
+                curve = self._atp_rankings[["rank", "points"]].dropna().sort_values("rank")
+                import numpy as _np
+                est = float(_np.interp(float(ta_rank), curve["rank"], curve["points"]))
+                print(f"  ATP points for '{display_name}' interpolated from rank curve: rank {int(ta_rank)} → {est:.0f} pts")
+                return est
             print(f"  ATP points not found for '{display_name}' — defaulting to 500")
             _semantic_defaults.append(f'{player_label}_Rank_Points=500(not_found)')
             return 500.0

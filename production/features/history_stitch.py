@@ -542,8 +542,15 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict, players=None) -
     city = re.sub(r"\s+", " ", city)
     if not city:
         return None
-    hit = cal[cal["location"].astype(str).str.lower().str.contains(city, regex=False)
-              | cal["event"].astype(str).str.lower().str.contains(city, regex=False)]
+    # normalize the calendar side the same way as the needle — an ITF event
+    # named "M25 Bastia-Lucciana +H" must match the de-hyphenated needle
+    def _norm_side(col):
+        return (col.astype(str)
+                   .str.replace(r"[^a-zA-Z\s]", " ", regex=True)
+                   .str.replace(r"\s+", " ", regex=True)
+                   .str.strip().str.lower())
+    hit = cal[_norm_side(cal["location"]).str.contains(city, regex=False)
+              | _norm_side(cal["event"]).str.contains(city, regex=False)]
     if len(hit) > 1:
         # same city hosts multi-week series (M15 Tokyo wk1..4) — keep the event
         # whose date window covers the reference date
