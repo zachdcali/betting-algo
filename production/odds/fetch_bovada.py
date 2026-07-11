@@ -14,7 +14,6 @@ Key points:
 - Prints both raw and adjusted expected totals and compares found vs adjusted
 """
 
-from playwright.sync_api import sync_playwright
 import pandas as pd
 from datetime import datetime, timezone
 import re
@@ -23,6 +22,15 @@ import unicodedata
 import random
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+
+# Shared process-wide browser (see scraping/browser_session.py). A private
+# sync_playwright() here collides with it ('Sync API inside the asyncio loop')
+# once any other fetcher has run in the same process.
+import sys
+_SCRAPING_DIR = str(Path(__file__).resolve().parent.parent / "scraping")
+if _SCRAPING_DIR not in sys.path:
+    sys.path.insert(0, _SCRAPING_DIR)
+from browser_session import new_context
 
 # =========================
 # Configuration / Filters
@@ -485,16 +493,15 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
 
     for attempt in range(max_retries):
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                context = browser.new_context(
-                    viewport={"width": 1360, "height": 900},
-                    user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/118.0.0.0 Safari/537.36"),
-                    java_script_enabled=True,
-                    locale="en-US",
-                )
+            context = new_context(
+                viewport={"width": 1360, "height": 900},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/118.0.0.0 Safari/537.36"),
+                java_script_enabled=True,
+                locale="en-US",
+            )
+            try:
                 page = context.new_page()
                 page.set_default_timeout(DEFAULT_TIMEOUT_MS)
 
@@ -825,7 +832,6 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                 except Exception:
                     pass
 
-                browser.close()
 
                 # Summary with adjusted totals
                 sum_expected_adjusted = sum(s["expected_adjusted"] for s in bucket_stats.values())
@@ -844,6 +850,11 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                         print(f"   • {t}: found {d['found']}/{adj} (raw {raw}, minus doubles {dbl})")
 
                 return pd.DataFrame(out_rows)
+            finally:
+                try:
+                    context.close()
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")

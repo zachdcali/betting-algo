@@ -42,6 +42,12 @@ def new_page():
     return page
 
 
+def new_context(**kwargs):
+    """A fresh context on the shared browser for callers that need their own
+    viewport/UA/locale (e.g. Bovada). Caller closes the context (not the browser)."""
+    return _ensure_browser().new_context(**kwargs)
+
+
 def shutdown():
     global _pw, _browser
     for closer in (lambda: _browser.close(), lambda: _pw.stop()):

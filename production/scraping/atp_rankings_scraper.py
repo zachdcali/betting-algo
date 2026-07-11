@@ -9,7 +9,6 @@ Usage:
     # -> writes data/atp_rankings.csv with columns: rank, player_name, points
 """
 
-from playwright.sync_api import sync_playwright
 import pandas as pd
 import re
 import time
@@ -33,17 +32,10 @@ def fetch_atp_rankings(headless: bool = True, timeout_ms: int = 60000) -> pd.Dat
     """
     rows = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        page = browser.new_page()
+    from browser_session import new_page
 
-        page.set_extra_http_headers({
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        })
+    page = new_page()
+    try:
 
         print("Loading ATP rankings page...")
         # The page is JS-rendered. A blind sleep intermittently parsed an empty
@@ -98,7 +90,8 @@ def fetch_atp_rankings(headless: bool = True, timeout_ms: int = 60000) -> pd.Dat
             if player_name:
                 rows.append({"rank": rank, "player_name": player_name, "points": points, "player_url": player_url})
 
-        browser.close()
+    finally:
+        page.close()
 
     df = pd.DataFrame(rows)
 
