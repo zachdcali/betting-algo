@@ -54,7 +54,7 @@ def test_gather_itf_rows_and_round_with_fixtures(monkeypatch):
     em = __import__("scraping.itf_results_scraper", fromlist=["parse_oop_matches"]).parse_oop_matches(
         _load("itf_oop_day.json.gz"), "2026-07-05")
     cache = {"itf_calendar": cal, "itf_event_matches": {ev["key"]: em}}
-    monkeypatch.setattr(hs, "_itf_event_for", lambda label, ref, c: ev)
+    monkeypatch.setattr(hs, "_itf_event_for", lambda label, ref, c, players=None: ev)
     done = em[em.completed]
     player = done.iloc[0]["p1"] if done.iloc[0]["winner"] == 1 else done.iloc[0]["p2"]
     rows = hs.gather_itf_rows(player, "ITF Men Test", "2026-07-08", cache)
