@@ -322,8 +322,9 @@ def _monday_of(ts: pd.Timestamp) -> pd.Timestamp:
 def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[dict]:
     """All active tournaments: auto-discovered from the ATP live-scores hubs,
     with static-registry entries overriding by slug (they carry exact
-    surface/level/start dates). Discovered events get a Monday-snapped start
-    date (tour events run Mon-Sun; Slams' true start comes from the registry).
+    surface/level/start dates). Discovered events take their true start date
+    from the challenger calendar when their id is listed there; otherwise
+    Monday-snapped to the ref week (Slams' true start comes from the registry).
     Cached per run."""
     cache = session_cache if session_cache is not None else {}
     if "atp_active_events" in cache:
@@ -333,15 +334,11 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
     except ImportError:
         from scraping.atp_results_scraper import discover_active_events
     monday = _monday_of(pd.Timestamp(ref_date))
-    events: list[dict] = []
-    try:
-        for ev in discover_active_events():
-            ev = dict(ev)
-            ev["start_date"] = str(monday.date())
-            events.append(ev)
-    except Exception as exc:
-        print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
-    # calendar: catches events Bovada prices before the live hub lists them
+    # calendar first: it carries each event's TRUE start date. A hub event
+    # stamped with the scrape-week's Monday lands in the wrong week whenever a
+    # finished event is still listed (e.g. Sunday finals scraped Monday) —
+    # which corrupts week-based features (days-since-last, weekly form).
+    cal = pd.DataFrame()
     try:
         try:
             from atp_results_scraper import parse_challenger_calendar, _fetch_rendered
@@ -353,6 +350,21 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
                                    "a[href*='/en/scores/']")
             cal_cache["df"] = parse_challenger_calendar(html)
         cal = cal_cache["df"]
+    except Exception as exc:
+        print(f"      ⚠️ calendar discovery unavailable ({exc})")
+    cal_dates = {}
+    if not cal.empty:
+        cal_dates = dict(zip(cal["id"].astype(str), cal["start_date"].astype(str)))
+    events: list[dict] = []
+    try:
+        for ev in discover_active_events():
+            ev = dict(ev)
+            ev["start_date"] = cal_dates.get(str(ev.get("id"))) or str(monday.date())
+            events.append(ev)
+    except Exception as exc:
+        print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
+    # calendar window: catches events Bovada prices before the live hub lists them
+    try:
         if cal.empty:
             raise RuntimeError("challenger calendar parse returned no events")
         ref = pd.Timestamp(ref_date)

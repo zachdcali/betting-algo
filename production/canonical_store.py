@@ -478,7 +478,8 @@ def fill_missing_ranks(conn, source: str = "atp_results") -> int:
 
 
 def ingest_event_results(conn, results_df, event: str, start_date: str,
-                         surface: str, level: str, source: str = "atp_results") -> dict:
+                         surface: str, level: str, source: str = "atp_results",
+                         tourney_id: str | None = None) -> dict:
     """Upsert one tournament's scraped results (atp_results_scraper frame) into the store.
 
     Rows whose players can't be uniquely resolved are skipped and counted —
@@ -515,14 +516,15 @@ def ingest_event_results(conn, results_df, event: str, start_date: str,
             # is the same match regardless of the event string
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
-                                        winner_id, loser_id, score, source)
-                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s
+                                        winner_id, loser_id, score, source, tourney_id)
+                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                    WHERE NOT EXISTS (
                        SELECT 1 FROM matches x
                        WHERE x.match_date=%s AND x.winner_id=%s AND x.loser_id=%s
                          AND x.round IS NOT DISTINCT FROM %s)
                    ON CONFLICT DO NOTHING""",
                 (start_date, event, surface, level, rnd, wid, lid, score or None, source,
+                 str(tourney_id) if tourney_id else None,
                  start_date, wid, lid, rnd),
             )
             inserted += cur.rowcount
@@ -608,7 +610,8 @@ def surface_from_store(event_name: str, cache: dict | None = None) -> str | None
 
 
 def ingest_itf_results(conn, em_df, event: str, start_date: str,
-                       surface: str | None, level: str) -> dict:
+                       surface: str | None, level: str,
+                       tourney_id: str | None = None) -> dict:
     """Upsert one ITF event's completed order-of-play matches into the store.
 
     ITF frames carry (p1, p2, winner, score winner-first, round, completed).
@@ -649,8 +652,8 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
             rnd = str(card.get("round") or "") or None
             cur.execute(
                 """INSERT INTO matches (match_date, event, surface, level, round,
-                                        winner_id, loser_id, score, source)
-                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,'itf_oop'
+                                        winner_id, loser_id, score, source, tourney_id)
+                   SELECT %s,%s,%s,%s,%s,%s,%s,%s,'itf_oop',%s
                    WHERE NOT EXISTS (
                        SELECT 1 FROM matches x
                        WHERE x.match_date=%s AND x.winner_id=%s AND x.loser_id=%s
@@ -658,6 +661,7 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
                    ON CONFLICT DO NOTHING""",
                 (start_date, event, surface, level, rnd, wid, lid,
                  str(card.get("score") or "") or None,
+                 str(tourney_id) if tourney_id else None,
                  start_date, wid, lid, rnd),
             )
             inserted += cur.rowcount

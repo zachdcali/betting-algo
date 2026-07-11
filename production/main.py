@@ -1114,6 +1114,7 @@ class LiveBettingOrchestrator:
                         r = cs.ingest_event_results(
                             conn, df, event=ev["event"], start_date=ev["start_date"],
                             surface=ev.get("surface") or None, level=ev.get("level") or None,
+                            tourney_id=ev.get("id"),
                         )
                     total += r["inserted"]
                 # ITF events fetched this run (rounds/history) carry completed
@@ -1134,6 +1135,7 @@ class LiveBettingOrchestrator:
                                 conn, em, event=str(ev["event"]), start_date=str(ev["start_date"]),
                                 surface=(str(ev.get("surface")) or None),
                                 level="25" if "25" in str(ev.get("category", "")) else "15",
+                                tourney_id=str(ev.get("key") or "") or None,
                             )
                         total += r["inserted"]
                 print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
