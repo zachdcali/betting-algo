@@ -167,12 +167,12 @@ def get_height_cm(player_name: str, cache: Optional[dict] = None) -> Optional[in
         return None
 
     print(f"  ATP height lookup: {player_name}")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        pg = browser.new_page()
-        pg.set_extra_http_headers({"User-Agent": _UA})
+    from browser_session import new_page
+    pg = new_page()
+    try:
         height = _scrape_profile(pg, bio_url)
-        browser.close()
+    finally:
+        pg.close()
 
     cache[key] = height
     if own_cache:
@@ -225,11 +225,9 @@ def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
     if verbose:
         print(f"  ATP height scraper: fetching {len(needs_scraping)} players...")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        pg = browser.new_page()
-        pg.set_extra_http_headers({"User-Agent": _UA})
-
+    from browser_session import new_page
+    pg = new_page()
+    if True:
         for name, bio_url in needs_scraping:
             h = _scrape_profile(pg, bio_url)
             results[name] = h
@@ -238,7 +236,7 @@ def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
                 status = f"{h}cm" if h else "not found"
                 print(f"    {name}: {status}")
 
-        browser.close()
+        pg.close()
 
     _save_cache(cache)
     return results

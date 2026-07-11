@@ -48,11 +48,8 @@ class ItfClient:
     def _ensure(self):
         if self._page is not None:
             return
-        from playwright.sync_api import sync_playwright
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=True)
-        self._page = self._browser.new_page()
-        self._page.set_extra_http_headers({"User-Agent": USER_AGENT})
+        from browser_session import new_page
+        self._page = new_page()
         self._page.goto(f"{BASE}/en/tournament-calendar/", wait_until="domcontentloaded", timeout=60000)
         time.sleep(5)
         try:
@@ -74,11 +71,11 @@ class ItfClient:
         return json.loads(body)
 
     def close(self):
-        for closer in (lambda: self._browser.close(), lambda: self._pw.stop()):
-            try:
-                closer()
-            except Exception:
-                pass
+        try:
+            if self._page is not None:
+                self._page.close()   # page only — the browser is shared
+        except Exception:
+            pass
         self._page = self._browser = self._pw = None
 
 

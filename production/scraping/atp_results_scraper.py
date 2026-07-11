@@ -222,12 +222,10 @@ def parse_player_activity(html: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _fetch_rendered(url: str, ready_selector: str, timeout_ms: int = 60000) -> str:
-    from playwright.sync_api import sync_playwright
+    from browser_session import new_page
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_extra_http_headers({"User-Agent": USER_AGENT})
+    page = new_page()
+    try:
         html = ""
         for attempt in range(2):
             if attempt == 0:
@@ -241,7 +239,8 @@ def _fetch_rendered(url: str, ready_selector: str, timeout_ms: int = 60000) -> s
             html = page.content()
             if len(html) > 50_000:
                 break
-        browser.close()
+    finally:
+        page.close()
     return html
 
 
