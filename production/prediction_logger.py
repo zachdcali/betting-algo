@@ -539,11 +539,13 @@ def log_prediction(
                 # path, so started/settled matches never re-price. The refreshing
                 # prediction must itself be complete — never downgrade.
                 _stored_ver = str(df.at[idx, 'nn_model_version'] or '').strip()
+                _new_ver = str(nn_model_version or '').strip()
+                _real = lambda v: v.lower() not in ('', 'nan', 'none')  # NaN floats stringify truthy
                 regime_refresh = (bool(features_complete) and existing_complete
-                                  and bool(_stored_ver) and bool(nn_model_version)
-                                  and _stored_ver != str(nn_model_version))
+                                  and _real(_stored_ver) and _real(_new_ver)
+                                  and _stored_ver != _new_ver)
                 if regime_refresh:
-                    print(f"  🔁 Regime refresh {_stored_ver} → {nn_model_version}: re-pricing open match {p1} vs {p2}")
+                    print(f"  🔁 Regime refresh {_stored_ver} → {_new_ver}: re-pricing open match {p1} vs {p2}")
                 PRESERVE_IF_SET = set() if (upgrading_to_complete or regime_refresh) else {'model_p1_prob', 'model_p2_prob',
                                    'xgb_p1_prob', 'xgb_p2_prob',
                                    'rf_p1_prob', 'rf_p2_prob',
