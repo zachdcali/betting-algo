@@ -140,3 +140,5 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-11 17:43:52,session_20260710_204630,1063.0,63.0,Settled bet: Ofek Shimanov vs Charlie Robertson (WIN),36.0,0,1
 2026-07-11 18:39:54,session_20260711_183954,1000.0,0.0,Session started,0.0,0,0
 2026-07-11 20:01:44,session_20260711_200144,1000.0,0.0,Session started,0.0,0,0
+2026-07-12 21:36:31,session_20260712_213631,1000.0,0.0,Session started,0.0,0,0
+2026-07-12 21:52:36,session_20260712_213631,1000.0,-180.0,Placed 3 bets,180.0,3,0
