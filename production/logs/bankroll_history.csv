@@ -140,3 +140,10 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-11 17:43:52,session_20260710_204630,1063.0,63.0,Settled bet: Ofek Shimanov vs Charlie Robertson (WIN),36.0,0,1
 2026-07-11 18:39:54,session_20260711_183954,1000.0,0.0,Session started,0.0,0,0
 2026-07-11 20:01:44,session_20260711_200144,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 22:16:00,session_20260713_221600,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 22:18:16,session_20260710_181510,955.0,-45.0,Settled bet: Jannik Sinner vs Alexander Zverev (LOSS),90.0,0,2
+2026-07-13 22:18:39,session_20260710_231820,992.5,37.5,Settled bet: Hoyoung Roh vs Martin Borisiouk (WIN),60.0,1,1
+2026-07-13 22:19:04,session_20260711_025559,996.0017338330832,3.501733833083129,Settled bet: Dominik Recek vs Max Wiskandt (WIN),34.152785852087675,3,1
+2026-07-13 22:19:54,session_20260711_025559,1011.1488097551512,15.147075922068016,Settled bet: Yannik Kelm vs Louis Wessels (WIN),34.152785852087675,2,2
+2026-07-13 22:20:16,session_20260711_025559,1018.0122080679942,6.863398312842932,Settled bet: Juan Estevez vs Joaquin Aguilar Cardozo (WIN),34.152785852087675,1,3
+2026-07-13 22:33:20,session_20260713_221600,1000.0,-180.0,Placed 15 bets,179.99999999999997,15,0
