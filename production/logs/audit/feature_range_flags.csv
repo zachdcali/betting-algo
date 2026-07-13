@@ -12075,3 +12075,10 @@ logged_at,run_id,p1,p2,flag
 2026-07-11T20:25:52+00:00,run_20260711T200144Z,alexis galarneau,jacob fearnley,P2_Rank_Change_90d=MISSING
 2026-07-11T20:25:52+00:00,run_20260711T200144Z,alexis galarneau,jacob fearnley,P2_BigMatch_WinRate=MISSING
 2026-07-11T20:25:52+00:00,run_20260711T200144Z,alexis galarneau,jacob fearnley,P2_Country_FRA=MISSING
+2026-07-13T08:51:04+00:00,run_20260713T083915Z,kilian feldbausch,miomir kecmanovic,P1_Country_SUI=1 (z=8.2)
+2026-07-13T08:51:04+00:00,run_20260713T083915Z,kilian feldbausch,miomir kecmanovic,P2_Country_SRB=1 (z=8.3)
+2026-07-13T08:51:10+00:00,run_20260713T083915Z,dominic stephan stricker,jaume munar,P1_Country_SUI=1 (z=8.2)
+2026-07-13T08:51:12+00:00,run_20260713T083915Z,jaime faria,stan wawrinka,P2_Country_SUI=1 (z=8.2)
+2026-07-13T08:51:12+00:00,run_20260713T083915Z,jerome kym,dylan dietrich,P2_Country_SUI=1 (z=8.2)
+2026-07-13T08:51:12+00:00,run_20260713T083915Z,jerome kym,dylan dietrich,P1_Country_SUI=1 (z=8.2)
+2026-07-13T08:51:22+00:00,run_20260713T083915Z,dusan lajovic,luca van assche,P1_Country_SRB=1 (z=8.3)
