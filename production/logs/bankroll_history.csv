@@ -140,3 +140,6 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-11 17:43:52,session_20260710_204630,1063.0,63.0,Settled bet: Ofek Shimanov vs Charlie Robertson (WIN),36.0,0,1
 2026-07-11 18:39:54,session_20260711_183954,1000.0,0.0,Session started,0.0,0,0
 2026-07-11 20:01:44,session_20260711_200144,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 01:16:34,session_20260713_011634,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 01:18:56,session_20260711_025559,1006.863398312843,6.863398312842932,Settled bet: Juan Estevez vs Joaquin Aguilar Cardozo (WIN),34.152785852087675,3,1
+2026-07-13 01:33:50,session_20260713_011634,1000.0,-179.99999999999997,Placed 32 bets,179.99999999999997,32,0
