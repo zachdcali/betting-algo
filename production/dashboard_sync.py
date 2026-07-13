@@ -62,6 +62,20 @@ def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
                   f"local file may be damaged; backup preserved. "
                   f"Set ALLOW_DASH_SHRINK=1 to override deliberately.")
             return
+        # RECENCY GUARD (predictions): never let an OLDER run's data replace the
+        # mirror's current slate. A stale source (a dev box whose prediction_log
+        # lags, or a cloud run built on a lagged git base) was regressing the
+        # slate to a days-old snapshot. Compare newest run stamps.
+        if table == "dash_predictions" and "latest_run_id" in df.columns:
+            cur.execute('SELECT max(latest_run_id) FROM dash_predictions')
+            mirror_max = cur.fetchone()[0] or ""
+            incoming_max = str(df["latest_run_id"].dropna().max() or "")
+            if mirror_max and incoming_max and incoming_max < mirror_max \
+                    and os.environ.get("ALLOW_DASH_SHRINK") != "1":
+                print(f"   🚨 RECENCY GUARD: refusing to sync dash_predictions — "
+                      f"incoming newest run {incoming_max} is OLDER than the mirror's "
+                      f"{mirror_max}. Stale source; not regressing the slate.")
+                return
     cols = [c.strip().lower().replace(" ", "_") for c in df.columns]
     col_defs = ", ".join(
         f'"{c}" {_pg_type(df[orig].dtype)}' for c, orig in zip(cols, df.columns)
