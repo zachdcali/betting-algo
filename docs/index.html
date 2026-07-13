@@ -770,9 +770,18 @@ function updateFreshness(){
 }
 // remember which tab is active so a background refresh re-renders it, not the slate
 $("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) _activeView=b.dataset.v; });
-// auto-refresh: every 5 min, and immediately when a backgrounded tab is refocused
+// the page fetches fresh DATA on a timer but never its own code — a tab left
+// open runs stale JS forever (that's how duplicate tiles / a frozen slate slip
+// through after a deploy). So: data refresh on the 5-min timer, but a FULL page
+// reload (fresh JS + data) when returning to a tab that's been open a while.
+const PAGE_LOADED_AT = Date.now();
+const STALE_RELOAD_MS = 1800000; // 30 min open -> reload on refocus to pick up fixes
 function scheduleRefresh(){ clearInterval(_refreshTimer); _refreshTimer=setInterval(()=>{updateFreshness(); loadAll();}, 300000); }
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden && D.loadedAt && Date.now()-D.loadedAt>120000) loadAll(); });
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden) return;
+  if(Date.now()-PAGE_LOADED_AT > STALE_RELOAD_MS){ location.reload(); return; }
+  if(D.loadedAt && Date.now()-D.loadedAt>120000) loadAll();
+});
 setInterval(updateFreshness, 30000);
 loadAll().then(scheduleRefresh);
 function tileEl(lbl,val,sub){ const t=el("div","tile");
