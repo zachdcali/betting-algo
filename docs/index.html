@@ -103,6 +103,7 @@ td.hot.shadowtier{background:var(--grass-bg)} td.cold.shadowtier{background:var(
 @media (max-width:700px){ .tile .val{font-size:21px} }
 .be{display:block;font-size:.72em;opacity:.55;letter-spacing:.02em}
 .tier{font-size:.62em;letter-spacing:.06em;text-transform:uppercase;opacity:.75;border:1px solid currentColor;border-radius:3px;padding:1px 6px;vertical-align:middle;margin-left:6px}
+.hu{font-size:.62em;letter-spacing:.03em;text-transform:uppercase;color:var(--warn,#b8860b);border:1px solid currentColor;border-radius:3px;padding:0 4px;margin-left:5px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -353,10 +354,13 @@ function renderMatchBlock(body, r, sh, opts){
   if(r.round && !opts.hideRound) metaBits.push(r.round);
   if(!settled && r.match_start_time) metaBits.push(localTime(r.match_start_time));
   if(!settled && !r.round) metaBits.push("round pending");
+  const _hk=(D.hands||{})[[r.p1,r.p2,(r.match_date||"").slice(0,10)].join("|")]||{};
+  const handBadge=side=>{ const h=side===1?_hk.h1:_hk.h2;
+    return (String(h||"").toUpperCase()==="U"||h==null&&_hk.h1!==undefined)?'<span class="hu" title="handedness unknown — model treats it as a missing-data proxy; edge partly leans on it">hand?</span>':""; };
   const nameCell=(side)=>{
     const name=side===1?r.p1:r.p2;
     const won=w===side;
-    return `<td class="pl">${won?"<b>"+esc(name)+"</b>":esc(name)}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}${side===1?`<span class="rnd">${metaBits.join(" · ")}</span>`:""}</td>`;
+    return `<td class="pl">${won?"<b>"+esc(name)+"</b>":esc(name)}${handBadge(side)}${bett&&side===1?'<span class="badge">BETTABLE</span>':""}${side===1?`<span class="rnd">${metaBits.join(" · ")}</span>`:""}</td>`;
   };
   const setsCell=(side)=>{
     if(!settled) return "";
@@ -719,13 +723,15 @@ $("#tabs").addEventListener("click",e=>{
 (async()=>{
   try{
     const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at,match_start_time,level";
-    [D.preds, D.odds, D.shadow, D.runs, D.bets] = await Promise.all([
+    [D.preds, D.odds, D.shadow, D.runs, D.bets, D._feats] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
       fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
       fetchAll("dash_shadow","p1,p2,match_date,model_version,shadow_p1_prob,logged_at,run_id").catch(()=>[]),
       fetchAll("dash_runs","run_id,started_at,status,odds_rows_candidate,feature_rows_ok,prediction_rows_success,bets_logged,settlement_newly_settled").catch(()=>[]),
       fetchAll("dash_bets","bet_id,timestamp,match,bet_on,odds_decimal,stake,model_prob,market_prob,edge,kelly_fraction,status,outcome,actual_profit").catch(()=>[]),
+      fetchAll("dash_features","p1,p2,match_date,p1_hand,p2_hand").catch(()=>[]),
     ]);
+    D.hands={}; (D._feats||[]).forEach(f=>{ D.hands[[f.p1,f.p2,(f.match_date||"").slice(0,10)].join("|")]={h1:f.p1_hand,h2:f.p2_hand}; });
     D.lastRun = D.preds.map(r=>r.latest_run_id).filter(Boolean).sort().pop();
     const upcoming=D.preds.filter(r=>!r.actual_winner && r.latest_run_id===D.lastRun);
     const bettable=upcoming.filter(r=>isTrue(r.features_complete)&&num(r.model_p1_prob)!=null);

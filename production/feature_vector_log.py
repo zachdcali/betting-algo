@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 import pandas as pd
 
 PATH = os.path.join(os.path.dirname(__file__), "logs", "feature_vectors.csv")
-COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "features_complete", "features_json"]
+COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "features_complete",
+        "p1_hand", "p2_hand", "features_json"]
 
 
 def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
@@ -23,12 +24,20 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
     payload["_defaulted_features"] = features.get("_defaulted_features", "") or ""
     for dbg in ("_build_ref", "_hist_tail_p1", "_hist_tail_p2", "_regime"):
         if features.get(dbg): payload[dbg] = features[dbg]
+    # surface handedness as first-class columns (dashboard slate badges unknown
+    # hand — a missingness proxy the models lean on; see FEATURE_AUDIT.md)
+    def _hand(pref):
+        if float(features.get(f"{pref}_Hand_U", 0) or 0) == 1: return "U"
+        if float(features.get(f"{pref}_Hand_L", 0) or 0) == 1: return "L"
+        if float(features.get(f"{pref}_Hand_R", 0) or 0) == 1: return "R"
+        return ""
     row = {
         "p1": str(p1).strip(), "p2": str(p2).strip(),
         "match_date": str(match_date)[:10],
         "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "run_id": run_id,
         "features_complete": bool(features_complete),
+        "p1_hand": _hand("P1"), "p2_hand": _hand("P2"),
         "features_json": json.dumps(payload, default=str),
     }
     if os.path.exists(PATH):
