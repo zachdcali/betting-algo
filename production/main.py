@@ -74,6 +74,20 @@ def _itf_surface(event_label: str, session_cache: dict):
     except Exception:
         return None
 
+def _hand_of(pred_row: dict, pref: str) -> str:
+    """Handedness one-hot -> 'R'/'L'/'U' for the prediction row (dashboard badge)."""
+    try:
+        if float(pred_row.get(f"{pref}_Hand_U", 0) or 0) == 1:
+            return "U"
+        if float(pred_row.get(f"{pref}_Hand_L", 0) or 0) == 1:
+            return "L"
+        if float(pred_row.get(f"{pref}_Hand_R", 0) or 0) == 1:
+            return "R"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 class LiveBettingOrchestrator:
     """Main orchestrator for live tennis betting system"""
 
@@ -513,6 +527,12 @@ class LiveBettingOrchestrator:
                     if locals().get('surface_is_guess'):
                         _d = features.get('_defaulted_features') or ''
                         features['_defaulted_features'] = (_d + ',' if _d else '') + f'Surface={surface}(guess)'
+                    # A match with no identifiable tournament can't have its
+                    # surface/level verified — never silently bettable (JJ Wolf
+                    # was showing complete with tournament=None).
+                    if not str(row.get('event', '')).strip() and not str(tournament or '').strip():
+                        _d = features.get('_defaulted_features') or ''
+                        features['_defaulted_features'] = (_d + ',' if _d else '') + 'tournament=missing'
                     # features_complete=False if ANY meaningful feature was defaulted
                     # (includes ATP points fallback, round=None, structural defaults)
                     has_defaulted = bool(features.get('_defaulted_features', ''))
@@ -998,6 +1018,10 @@ class LiveBettingOrchestrator:
                     match_start_time=match_time,
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
+                    # data-quality caveats surfaced on the slate (still bettable,
+                    # but visible): handedness and unranked status are honest
+                    # values the model uses, not defaults — the user should see them
+                    p1_hand=_hand_of(pred_row, 'P1'), p2_hand=_hand_of(pred_row, 'P2'),
                 )
                 if action == 'created':
                     stats['created'] += 1
