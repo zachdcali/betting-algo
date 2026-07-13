@@ -24,6 +24,7 @@ TA rows only, never silently on NaN (see AGENTS.md no-silent-fallbacks).
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -627,17 +628,28 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict, players=None) -
 
 def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
     matches_cache = cache.setdefault("itf_event_matches", {})
-    if key not in matches_cache:
+    # only an EMPTY/failed result is retried; a real non-empty frame is cached.
+    # itftennis.com sits behind Incapsula and rejects fetches intermittently —
+    # a single miss used to strand a match's settlement until a lucky hourly
+    # pass (Wiskandt sat 2 days). A fresh-client retry catches most flakes.
+    if isinstance(matches_cache.get(key), pd.DataFrame) and not matches_cache[key].empty:
+        return matches_cache[key]
+    try:
+        from itf_results_scraper import get_event_matches
+    except ImportError:
+        from scraping.itf_results_scraper import get_event_matches
+    result = pd.DataFrame()
+    for attempt in (1, 2):
         try:
-            from itf_results_scraper import get_event_matches
-        except ImportError:
-            from scraping.itf_results_scraper import get_event_matches
-        try:
-            print(f"      🧵 Fetching ITF order-of-play for {key} (shared, cached)")
-            matches_cache[key] = _with_itf_client(lambda c: get_event_matches(c, key))
+            if attempt == 1:
+                print(f"      🧵 Fetching ITF order-of-play for {key} (shared, cached)")
+            result = _with_itf_client(lambda c: get_event_matches(c, key))
+            if result is not None and not result.empty:
+                break
         except Exception as exc:
-            print(f"      ⚠️ ITF event fetch failed (non-fatal): {exc}")
-            matches_cache[key] = pd.DataFrame()
+            print(f"      ⚠️ ITF event fetch attempt {attempt} failed (non-fatal): {exc}")
+            time.sleep(2)
+    matches_cache[key] = result if result is not None else pd.DataFrame()
     return matches_cache[key]
 
 
