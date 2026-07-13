@@ -76,6 +76,22 @@ def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
     for c, orig in zip(cols, df.columns):
         if c not in existing:
             cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{c}" {_pg_type(df[orig].dtype)}')
+
+    # A SETTLEMENT IS PERMANENT. Cloud runs rebuild prediction_log from a git
+    # base that can lag (push races park logs on branches), then TRUNCATE-reload
+    # the mirror — so a run that re-settles fewer matches than a prior run was
+    # silently un-settling the mirror (settled count + cohort visibly regressed).
+    # Snapshot every settled row's outcome, reload, then restore any settlement
+    # the fresh data lacks. The mirror becomes the UNION of all runs' settlements:
+    # monotonic, never regresses. Keyed by match_uid (fallback p1|p2|date).
+    is_pred = table == "dash_predictions" and "actual_winner" in cols
+    if is_pred:
+        cur.execute("""CREATE TEMP TABLE _settled_bak ON COMMIT DROP AS
+            SELECT COALESCE(NULLIF(match_uid,''), lower(p1)||'|'||lower(p2)||'|'||left(match_date,10)) AS k,
+                   actual_winner, score, settled_at, record_status,
+                   model_correct, market_correct, xgb_correct, rf_correct
+            FROM dash_predictions WHERE actual_winner IS NOT NULL AND actual_winner <> ''""")
+
     cur.execute(f'TRUNCATE "{table}"')
     buf = io.StringIO()
     df.to_csv(buf, index=False, header=False)
@@ -86,6 +102,21 @@ def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
     ) as copy:
         while chunk := buf.read(65536):
             copy.write(chunk)
+
+    if is_pred:
+        # restore settlements the fresh reload is missing (never overwrite a
+        # settlement the fresh data already has — that one is at least as new)
+        cur.execute("""UPDATE dash_predictions d SET
+                actual_winner=b.actual_winner, score=b.score, settled_at=b.settled_at,
+                record_status=COALESCE(NULLIF(d.record_status,''), b.record_status),
+                model_correct=b.model_correct, market_correct=b.market_correct,
+                xgb_correct=b.xgb_correct, rf_correct=b.rf_correct
+            FROM _settled_bak b
+            WHERE COALESCE(NULLIF(d.match_uid,''), lower(d.p1)||'|'||lower(d.p2)||'|'||left(d.match_date,10)) = b.k
+              AND (d.actual_winner IS NULL OR d.actual_winner = '')""")
+        restored = cur.rowcount
+        if restored:
+            print(f"   🛟 preserved {restored} settlement(s) the reload was missing (mirror is monotonic)")
 
 
 def _enable_public_read(cur, table: str) -> None:
