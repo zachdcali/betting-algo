@@ -720,7 +720,8 @@ $("#tabs").addEventListener("click",e=>{
   document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
   VIEWS[b.dataset.v]();
 });
-(async()=>{
+let _refreshTimer=null, _activeView="slate";
+async function loadAll(){
   try{
     const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at,match_start_time,level";
     [D.preds, D.odds, D.shadow, D.runs, D.bets, D._feats] = await Promise.all([
@@ -737,7 +738,7 @@ $("#tabs").addEventListener("click",e=>{
     const bettable=upcoming.filter(r=>isTrue(r.features_complete)&&num(r.model_p1_prob)!=null);
     const settled=D.preds.filter(r=>r.actual_winner==1||r.actual_winner==2);
     const runTime = D.lastRun ? D.lastRun.replace("run_","").replace(/T(\d\d)(\d\d)(\d\d)Z/, " $1:$2 UTC") : "–";
-    $("#meta").innerHTML=`<span>latest run <b>${runTime}</b></span><span><b>${upcoming.length}</b> upcoming</span><span><b>${bettable.length}</b> bettable</span><span><b>${settled.length}</b> settled all-time</span><span>next run <b>~:17 each hour</b></span>`;
+    $("#meta").innerHTML=`<span>latest run <b>${runTime}</b></span><span><b>${upcoming.length}</b> upcoming</span><span><b>${bettable.length}</b> bettable</span><span><b>${settled.length}</b> settled all-time</span><span>next run <b>~:17 each hour</b></span><span id="fresh" style="color:var(--muted)">data as of just now</span>`;
     const tiles=$("#tiles");
     const settledC = settled.filter(r=>isTrue(r.features_complete));
     const mktLL = settledC.length? logloss(settledC.map(r=>{const p=num(r.market_p1_prob); return p==null?null:(r.actual_winner==1?p:1-p)}).filter(Boolean)) : null;
@@ -748,11 +749,28 @@ $("#tabs").addEventListener("click",e=>{
       tileEl("Hourly observations", D.odds.length, "odds drift data"),
       tileEl("Shadow rows", D.shadow.length, "10 variants logging"),
     );
-    vSlate();
+    D.loadedAt = Date.now();
+    updateFreshness();
+    (VIEWS[_activeView]||vSlate)();
   }catch(err){
-    $("#view").innerHTML=`<div class="loading">Failed to load: ${err.message}</div>`;
+    if(!D.preds || !D.preds.length) $("#view").innerHTML=`<div class="loading">Failed to load: ${err.message}</div>`;
+    // on a refresh failure keep the last good render; try again next tick
   }
-})();
+}
+function updateFreshness(){
+  const el=document.getElementById("fresh"); if(!el||!D.loadedAt) return;
+  const age=Math.round((Date.now()-D.loadedAt)/1000);
+  const txt = age<90?"just now":age<3600?`${Math.round(age/60)} min ago`:`${Math.round(age/3600)}h ago`;
+  el.textContent=`data as of ${txt}`;
+  el.style.color = age>1200 ? "var(--warn,#b8860b)" : "var(--muted)";
+}
+// remember which tab is active so a background refresh re-renders it, not the slate
+$("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) _activeView=b.dataset.v; });
+// auto-refresh: every 5 min, and immediately when a backgrounded tab is refocused
+function scheduleRefresh(){ clearInterval(_refreshTimer); _refreshTimer=setInterval(()=>{updateFreshness(); loadAll();}, 300000); }
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden && D.loadedAt && Date.now()-D.loadedAt>120000) loadAll(); });
+setInterval(updateFreshness, 30000);
+loadAll().then(scheduleRefresh);
 function tileEl(lbl,val,sub){ const t=el("div","tile");
   t.innerHTML=`<div class="lbl">${lbl}</div><div class="val">${val}</div><div class="sub">${sub}</div>`; return t; }
 </script>
