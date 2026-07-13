@@ -743,7 +743,7 @@ async function loadAll(){
     const settled=D.preds.filter(r=>r.actual_winner==1||r.actual_winner==2);
     const runTime = D.lastRun ? D.lastRun.replace("run_","").replace(/T(\d\d)(\d\d)(\d\d)Z/, " $1:$2 UTC") : "–";
     $("#meta").innerHTML=`<span>latest run <b>${runTime}</b></span><span><b>${upcoming.length}</b> upcoming</span><span><b>${bettable.length}</b> bettable</span><span><b>${settled.length}</b> settled all-time</span><span>next run <b>~:17 each hour</b></span><span id="fresh" style="color:var(--muted)">data as of just now</span>`;
-    const tiles=$("#tiles");
+    const tiles=$("#tiles"); tiles.innerHTML="";  // clear on every (re)load — auto-refresh was appending duplicate tiles
     const settledC = settled.filter(r=>isTrue(r.features_complete));
     const mktLL = settledC.length? logloss(settledC.map(r=>{const p=num(r.market_p1_prob); return p==null?null:(r.actual_winner==1?p:1-p)}).filter(Boolean)) : null;
     tiles.append(
