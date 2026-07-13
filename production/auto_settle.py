@@ -596,7 +596,15 @@ _ATP_FALLBACK_EVENTS = [
     },
 ]
 
-_ATP_FALLBACK_ELIGIBLE = {"opponent_not_found", "ta_match_unfinished", "ta_empty", "outside_window"}
+# Try the official ATP/ITF fallback sources for ANY status TA didn't
+# confidently settle — NOT just a hand-picked few. The fallback sources carry
+# their own conservative both-name identity + round corroboration, so an
+# authoritative official-page result should never be withheld because TA was
+# ambiguous/low-confidence/errored (the exact cases where you MOST want a
+# second source). Only a clean TA settlement ('matched_and_settled') skips them.
+# (Bug: 'low_confidence_match'/'ambiguous_match'/'parse_error' were silently
+# non-eligible, stranding matches whose result sat ready on the ITF page.)
+_TA_SETTLED_STATUS = "matched_and_settled"
 _ATP_SETTLEMENT_CONFIDENCE = 90  # both full names matched on the official ATP results page
 
 
@@ -979,7 +987,7 @@ def run(
         # Secondary source: when TA has no result yet, try the official ATP
         # results pages of every active event (source=atp_results). Both-name
         # identity + round corroboration keep this conservative.
-        if result.get('status') in _ATP_FALLBACK_ELIGIBLE:
+        if result.get('status') != _TA_SETTLED_STATUS:
             for ev in _active_atp_events(atp_results_cache):
                 atp_df = _fetch_atp_results_cached(ev["url"], atp_results_cache)
                 if atp_df is None or atp_df.empty:
@@ -993,7 +1001,7 @@ def run(
 
         # Tertiary source: ITF order-of-play (itftennis.com API) for ITF-tier
         # matches — the ATP pages never carry these. Same conservative matching.
-        if result.get('status') in _ATP_FALLBACK_ELIGIBLE and "itf" in str(row.get('tournament', '')).lower():
+        if result.get('status') != _TA_SETTLED_STATUS and "itf" in str(row.get('tournament', '')).lower():
             try:
                 from features.history_stitch import _itf_event_for, _itf_event_matches, _names_loosely_match
                 ev = _itf_event_for(str(row.get('tournament', '')), match_date, atp_results_cache)
