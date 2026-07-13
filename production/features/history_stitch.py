@@ -626,7 +626,17 @@ def _itf_event_for(tournament_label: str, ref_date, cache: dict, players=None) -
     return hit.iloc[0].to_dict() if len(hit) >= 1 else None
 
 
+# Run-level ITF circuit breaker: once Incapsula starts systematically blocking
+# this process's IP (a whole run of "Expecting value" block pages, common from
+# datacenter IPs), further fetches are futile — stop hammering and stop wasting
+# the retry budget, which was dragging runs toward the timeout. A fresh runner
+# next hour gets a fresh IP. Reset per process.
+_ITF_CONSEC_FAILS = 0
+_ITF_BREAKER_TRIP = 6
+
+
 def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
+    global _ITF_CONSEC_FAILS
     matches_cache = cache.setdefault("itf_event_matches", {})
     # only an EMPTY/failed result is retried; a real non-empty frame is cached.
     # itftennis.com sits behind Incapsula and rejects fetches intermittently —
@@ -634,12 +644,17 @@ def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
     # pass (Wiskandt sat 2 days). A fresh-client retry catches most flakes.
     if isinstance(matches_cache.get(key), pd.DataFrame) and not matches_cache[key].empty:
         return matches_cache[key]
+    if _ITF_CONSEC_FAILS >= _ITF_BREAKER_TRIP:
+        matches_cache[key] = pd.DataFrame()  # breaker open: skip, don't hammer
+        return matches_cache[key]
     try:
         from itf_results_scraper import get_event_matches
     except ImportError:
         from scraping.itf_results_scraper import get_event_matches
     result = pd.DataFrame()
-    for attempt in (1, 2):
+    # a run that's clearly blocked (breaker near tripping) skips the 2nd attempt
+    attempts = (1,) if _ITF_CONSEC_FAILS >= _ITF_BREAKER_TRIP - 2 else (1, 2)
+    for attempt in attempts:
         try:
             if attempt == 1:
                 print(f"      🧵 Fetching ITF order-of-play for {key} (shared, cached)")
@@ -649,6 +664,13 @@ def _itf_event_matches(key: str, cache: dict) -> pd.DataFrame:
         except Exception as exc:
             print(f"      ⚠️ ITF event fetch attempt {attempt} failed (non-fatal): {exc}")
             time.sleep(2)
+    if result is not None and not result.empty:
+        _ITF_CONSEC_FAILS = 0
+    else:
+        _ITF_CONSEC_FAILS += 1
+        if _ITF_CONSEC_FAILS == _ITF_BREAKER_TRIP:
+            print(f"      🛑 ITF circuit breaker tripped ({_ITF_BREAKER_TRIP} consecutive "
+                  f"failures — IP likely blocked this run); skipping ITF for the rest of the run")
     matches_cache[key] = result if result is not None else pd.DataFrame()
     return matches_cache[key]
 
