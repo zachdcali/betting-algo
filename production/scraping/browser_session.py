@@ -1,58 +1,73 @@
-"""Process-wide shared Playwright browser.
+"""Thread-local shared Playwright browsers.
 
-Every page fetch used to launch its own Chromium (~4-5s overhead each, dozens
-of times per run) and two concurrent sync_playwright() owners in one thread
-crash ('Sync API inside the asyncio loop'). One lazily-started browser, pages
-handed out per fetch, torn down at exit, fixes both.
+One browser PER THREAD, created lazily: the sync API forbids two owners in one
+thread (the collision class this module killed), but separate threads with
+separate playwright instances are safe — which unlocks parallel event-page
+prefetch (a Sunday run discovers ~15 fresh tournaments; sequential fetches of
+calendar+draw+schedule+results pages were the 40-minute runs).
+
+Callers are unchanged: new_page()/new_context() hand out pages on the calling
+thread's browser; close the page/context, never the browser.
 """
 from __future__ import annotations
 
 import atexit
+import threading
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-_pw = None
-_browser = None
+_tls = threading.local()
+_instances: list = []          # (pw, browser) pairs across all threads
+_instances_lock = threading.Lock()
+_atexit_registered = False
 
 
 def _ensure_browser():
-    global _pw, _browser
-    if _browser is not None:
+    global _atexit_registered
+    browser = getattr(_tls, "browser", None)
+    if browser is not None:
         try:
-            if _browser.is_connected():
-                return _browser
+            if browser.is_connected():
+                return browser
         except Exception:
             pass
-        _browser = None
-    if _pw is None:
+        _tls.browser = None
+    if getattr(_tls, "pw", None) is None:
         from playwright.sync_api import sync_playwright
-        _pw = sync_playwright().start()
-        atexit.register(shutdown)
-    _browser = _pw.chromium.launch(headless=True)
-    return _browser
+        _tls.pw = sync_playwright().start()
+        with _instances_lock:
+            if not _atexit_registered:
+                atexit.register(shutdown)
+                _atexit_registered = True
+    _tls.browser = _tls.pw.chromium.launch(headless=True)
+    with _instances_lock:
+        _instances.append((_tls.pw, _tls.browser))
+    return _tls.browser
 
 
 def new_page():
-    """A fresh page on the shared browser. Caller closes the page (not the browser)."""
+    """A fresh page on this thread's shared browser. Caller closes the page."""
     page = _ensure_browser().new_page()
     page.set_extra_http_headers({"User-Agent": USER_AGENT})
     return page
 
 
 def new_context(**kwargs):
-    """A fresh context on the shared browser for callers that need their own
-    viewport/UA/locale (e.g. Bovada). Caller closes the context (not the browser)."""
+    """A fresh context on this thread's shared browser for callers that need
+    their own viewport/UA/locale (e.g. Bovada). Caller closes the context."""
     return _ensure_browser().new_context(**kwargs)
 
 
 def shutdown():
-    global _pw, _browser
-    for closer in (lambda: _browser.close(), lambda: _pw.stop()):
-        try:
-            closer()
-        except Exception:
-            pass
-    _pw = _browser = None
+    with _instances_lock:
+        pairs = list(_instances)
+        _instances.clear()
+    for pw, browser in pairs:
+        for closer in (browser.close, pw.stop):
+            try:
+                closer()
+            except Exception:
+                pass

@@ -1246,6 +1246,15 @@ class LiveBettingOrchestrator:
                 print("⚠️  Odds fetch failed once — settlement work persisted; will alert if it repeats")
                 return True
             
+            # Step 1.5: warm event-page caches in parallel (thread-local
+            # browsers) — week-boundary runs discover ~15 fresh tournaments and
+            # sequential first-touch fetches were the 40-minute Sundays
+            try:
+                from prefetch import prefetch_event_pages
+                prefetch_event_pages(self._session_cache)
+            except Exception as _pf_exc:
+                print(f"  ⚠️ prefetch skipped (non-fatal): {_pf_exc}")
+
             # Step 2: Extract features
             features_df = self.extract_features(odds_df)
             if features_df.empty:
