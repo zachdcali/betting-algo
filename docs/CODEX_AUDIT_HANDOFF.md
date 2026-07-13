@@ -45,8 +45,19 @@ babysitting it or a maintainer patching a new failure every hour.**
 5. **Audit and (if you think best) redesign the dashboard and the logging
    semantics** — they are confusing and not clean (see §6). You reportedly have
    strong UI judgment; use it.
-6. **Be aware of the deferred research directions** (see §7) so your
+6. **Verify feature integrity and training parity** (see §5b) — arguably as
+   important as §2, and *dependent* on it. If the live features don't match how
+   the models were trained, every probability is suspect regardless of how
+   robust the plumbing is.
+7. **Be aware of the deferred research directions** (see §7) so your
    architecture doesn't foreclose them — but do NOT build them now.
+8. **Surface what we're NOT seeing.** The problems enumerated here are the ones
+   we *found*, usually the hard way. The owner explicitly wants you to
+   reason from first principles and **call out issues, risks, and improvements
+   nobody has mentioned** — silent correctness bugs, leakage vectors, dependency
+   fragilities, statistical mistakes in how performance is judged, operational
+   blind spots, security/cost concerns, better designs. Treat this list as a
+   floor, not a ceiling. If something here is wrong or misdiagnosed, say so.
 
 You have latitude to change anything: the cloud platform (GitHub Actions may be
 the wrong tool), the persistence design, the dashboard framework, the repo
@@ -209,6 +220,68 @@ semver, pipeline-only bumps documented; the clean-feature regime is `v1.2.3`
 cautiously.
 
 ---
+
+## 5b. Feature integrity & training parity (depends on §2 — do not skip)
+
+The models are only as good as the 141 features they're fed, and those features
+must be computed **identically to how they were computed at training time**, or
+the model sees a distribution it never learned on. This has been a **persistent,
+recurring source of silent bugs** — and, critically, it is **downstream of the
+data-layer problems in §2**. A running list of feature bugs found and fixed
+*this month alone* (each was silently wrong before it was caught, usually by the
+owner noticing an implausible value on the dashboard):
+
+- **Surface resolution** — matches scored on the wrong surface (fallback-to-Hard,
+  or a fuzzy tournament match picking the wrong venue/surface). ~158 predictions
+  / 35 paper bets were affected before it was caught.
+- **Days_Since_Last week-boundary bug** — a reference timestamp carrying a
+  clock time made the *current* week count as a "previous tournament," collapsing
+  days-since to ~5 for anyone active that week — a value that appears **zero
+  times** in 400k training rows. The owner caught it from an impossible "5 days"
+  on a player who'd just played.
+- **Form-window double-counting** — the same tournament ingested under two event
+  names ("Bogota" vs "Bogota, Colombia Kia Open") double-counted a player's
+  recent matches, inflating form/win-rate windows (513 duplicate rows).
+- **Wrong-week event dating** — finished events still on the live hub were
+  stamped with the scrape-week's Monday, landing rows in the wrong week and
+  corrupting week-based features.
+- **Rank / points conventions** — unranked must be rank 999 / 0 points to match
+  training; a flat "500 points" default for a missing rank was a top-110
+  player's points. Rank-curve interpolation now used instead.
+- **Handedness / height missingness** — unknown-hand acts as a missing-data
+  proxy the model leans on; live `Hand_U` ran ~4× the training incidence at
+  challenger level until the ATP bio fetch was extended to capture it.
+- **Laplace-smoothed form rates**, **round-offset date heuristics**, and
+  **P1/P2 orientation** all had to be pinned to training conventions (there are
+  now symmetry + window-math pytests, and a per-build audit gate that flags
+  |z|>8 features against the training scaler's mean/std).
+
+**The owner's key insight, and the reason this is a §2 dependency:** live
+features are computed from the canonical store's match history. **If settlement
+and ingestion aren't keeping the store current and complete — which is exactly
+the failure mode in §2 — then every history-derived feature is computed on
+missing data.** Days-since-last, matches-in-last-14/30-days, current streak,
+recent win rate, surface form, H2H — all of them silently wrong when the most
+recent matches haven't been ingested or a result wasn't logged. **You cannot
+trust the features until the data layer is provably current and complete.** The
+two problems are one problem.
+
+**What to reason about / build:**
+- A **feature-parity harness**: compute features live for a set of matches and
+  compare, field by field, against what the training pipeline produces (and/or a
+  golden hand-verified set). Gate on parity. Today there is a partial
+  `feature_audit.py` (per-build |z|>8 / one-hot / presence checks) and a
+  `FEATURE_AUDIT.md` living doc, but no end-to-end train-vs-live equivalence test.
+- Fix the **training-reproduction harness** (see §5) — it's currently misaligned
+  (49.7% acc feeding the raw ml-ready CSV), which *also* blocks the NN
+  investigation. Getting this right is a prerequisite for measuring parity at all.
+- A **data-completeness precondition**: before computing features, verify the
+  store actually contains the recent matches it should (is it current? are there
+  gaps?), and fail loudly / stitch rather than compute on stale history.
+- **Leakage review**: the temporal features are the whole edge and the whole
+  risk. There's a documented history of leakage bugs (a `.values` positional
+  scramble of inferred match timestamps was a past root cause). An independent
+  leakage audit of the current feature build is warranted.
 
 ## 6. Dashboard & logging semantics are confusing
 
