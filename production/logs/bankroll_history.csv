@@ -140,3 +140,7 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-11 17:43:52,session_20260710_204630,1063.0,63.0,Settled bet: Ofek Shimanov vs Charlie Robertson (WIN),36.0,0,1
 2026-07-11 18:39:54,session_20260711_183954,1000.0,0.0,Session started,0.0,0,0
 2026-07-11 20:01:44,session_20260711_200144,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 05:20:46,session_20260713_052046,1000.0,0.0,Session started,0.0,0,0
+2026-07-13 05:22:37,session_20260710_181510,955.0,-45.0,Settled bet: Jannik Sinner vs Alexander Zverev (LOSS),90.0,0,2
+2026-07-13 05:22:55,session_20260710_231820,992.5,37.5,Settled bet: Hoyoung Roh vs Martin Borisiouk (WIN),60.0,1,1
+2026-07-13 05:36:36,session_20260713_052046,1000.0,-180.0,Placed 24 bets,180.0,24,0
