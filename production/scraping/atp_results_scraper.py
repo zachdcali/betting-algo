@@ -353,6 +353,83 @@ def fetch_event_draw(url: str) -> pd.DataFrame:
     return parse_event_draw(html)
 
 
+_SCHED_ROUND = re.compile(
+    r"\b(Q\d|R128|R64|R32|R16|QF|SF|F)\b(?:\s+\1)?\s+(.*?)\s+[Vv]s\.?\s+(.*?)(?=\s*(?:–|—|H2H|$))")
+_PAREN = re.compile(r"\([^)]*\)")
+
+
+def parse_daily_schedule(html: str) -> pd.DataFrame:
+    """(round, p1, p2) for every singles match on an event's daily-schedule page.
+
+    The page labels each match with its exact round code (Q2, R32, ...) — the
+    only official source that covers QUALIFYING matches, which draw sheets
+    omit until the main draw. Never infer quali rounds from the weekday: a
+    rain-shifted Q2 on Sunday would silently mislabel every feature.
+    """
+    from bs4 import BeautifulSoup as _BS
+    text = _BS(html, "lxml").get_text(" ", strip=True)
+    rows = []
+    for m in _SCHED_ROUND.finditer(text):
+        rnd, a, b = m.group(1), m.group(2), m.group(3)
+        a = " ".join(_PAREN.sub(" ", a).split())
+        b = " ".join(_PAREN.sub(" ", b).split())
+        if not a or not b or "/" in a or "/" in b:   # doubles pairs
+            continue
+        # tour pages render doubles without a slash ("Q. Halys P. Herbert") —
+        # two initialed tokens on one side = a team, never a singles player
+        if len(re.findall(r"\b[A-Z]\.", a)) >= 2 or len(re.findall(r"\b[A-Z]\.", b)) >= 2:
+            continue
+        # a trailing scheduling phrase can prefix the name capture; keep the
+        # tail tokens closest to 'Vs' (names are short: initial + surname(s))
+        a = " ".join(a.split()[-4:])
+        b = " ".join(b.split()[:4])
+        rows.append({"round": rnd, "p1": a, "p2": b})
+    return pd.DataFrame(rows)
+
+
+def fetch_daily_schedule(url: str) -> pd.DataFrame:
+    """Daily schedule for an event (accepts the event's results URL)."""
+    if url.endswith("/results"):
+        url = url[: -len("/results")] + "/daily-schedule"
+    html = _fetch_rendered(url, "body")
+    return parse_daily_schedule(html)
+
+
+def parse_tour_calendar(html: str) -> pd.DataFrame:
+    """Season calendar from atptour.com/en/tournaments: event, slug, id, url,
+    start_date. Tour-level twin of parse_challenger_calendar — the live hub
+    only lists in-progress events, so Sunday's next-week tour matches (which
+    Bovada already prices) need the calendar to be discoverable."""
+    from bs4 import BeautifulSoup as _BS
+    soup = _BS(html, "lxml")
+    out, seen = [], set()
+    for a in soup.select("a[href*='/en/tournaments/']"):
+        m = re.match(r"^/en/tournaments/([a-z0-9-]+)/(\d+)/", a.get("href", ""))
+        if not m or m.group(2) in seen:
+            continue
+        card = a
+        for _ in range(6):
+            if card.parent is None:
+                break
+            card = card.parent
+            txt = card.get_text(" ", strip=True)
+            start = _parse_start_date(txt)
+            if start:
+                break
+        else:
+            continue
+        if not start:
+            continue
+        seen.add(m.group(2))
+        name = m.group(1).replace("-", " ").title()
+        surf_m = re.search(r"\b(Clay|Grass|Hard|Carpet)\b", txt, re.I)
+        out.append({"event": name, "slug": m.group(1), "id": m.group(2),
+                    "url": f"https://www.atptour.com/en/scores/current/{m.group(1)}/{m.group(2)}/results",
+                    "start_date": start,
+                    "surface": (surf_m.group(1).title() if surf_m else "")})
+    return pd.DataFrame(out)
+
+
 _MONTHS = {m: i for i, m in enumerate(
     ["January", "February", "March", "April", "May", "June", "July",
      "August", "September", "October", "November", "December"], start=1)}

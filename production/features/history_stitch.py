@@ -379,6 +379,35 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
                            "start_date": r["start_date"]})
     except Exception as exc:
         print(f"      ⚠️ calendar discovery unavailable ({exc})")
+    # tour calendar: the live hub only lists in-progress events, so Sunday's
+    # next-week ATP 250 matches (already priced by Bovada) come from here
+    try:
+        try:
+            from atp_results_scraper import parse_tour_calendar
+        except ImportError:
+            from scraping.atp_results_scraper import parse_tour_calendar
+        tcal_cache = cache.setdefault("atp_tour_calendar", {})
+        if "df" not in tcal_cache:
+            html = _fetch_rendered("https://www.atptour.com/en/tournaments",
+                                   "a[href*='/en/tournaments/']")
+            tcal_cache["df"] = parse_tour_calendar(html)
+        tcal = tcal_cache["df"]
+        if tcal is not None and not tcal.empty:
+            ref = pd.Timestamp(ref_date)
+            seen_ids = {e.get("id") for e in events}
+            win = tcal[(pd.to_datetime(tcal["start_date"]) <= ref + pd.Timedelta(days=5))
+                       & (pd.to_datetime(tcal["start_date"]) >= ref - pd.Timedelta(days=8))]
+            for _, r in win.iterrows():
+                if r["id"] in seen_ids:
+                    continue
+                ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
+                      "url": r["url"], "level": "A", "surface": r.get("surface", ""),
+                      "start_date": r["start_date"]}
+                if "davis cup" in str(r["event"]).lower():
+                    ev["level"] = "D"
+                events.append(ev)
+    except Exception as exc:
+        print(f"      ⚠️ tour calendar discovery unavailable ({exc})")
     static_slugs = set()
     for sev in CURRENT_EVENT_REGISTRY:
         lo, hi = pd.Timestamp(sev["window"][0]), pd.Timestamp(sev["window"][1])
@@ -420,6 +449,31 @@ def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] =
             a, b = str(row["p1"]), str(row["p2"])
             if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
                (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
+                return str(row["round"])
+    # draw sheets omit qualifying and TBD-qualifier slots; the daily-schedule
+    # page labels every match of the day with its exact round (Q2, R32, ...)
+    try:
+        from atp_results_scraper import fetch_daily_schedule
+    except ImportError:
+        from scraping.atp_results_scraper import fetch_daily_schedule
+    sched_cache = cache.setdefault("atp_event_schedules", {})
+    for ev in get_active_events(ref_date, cache):
+        url = ev["url"]
+        if url not in sched_cache:
+            try:
+                print(f"      🧵 Fetching daily schedule for {ev['event']} (shared, cached)")
+                sched_cache[url] = fetch_daily_schedule(url)
+            except Exception as exc:
+                print(f"      ⚠️ schedule fetch failed (non-fatal): {exc}")
+                sched_cache[url] = pd.DataFrame()
+        sched = sched_cache[url]
+        if sched is None or sched.empty:
+            continue
+        for _, row in sched.iterrows():
+            a, b = str(row["p1"]), str(row["p2"])
+            if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
+               (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
+                print(f"      📋 Round from daily schedule: {row['round']}")
                 return str(row["round"])
     return None
 
