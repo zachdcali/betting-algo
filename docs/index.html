@@ -102,6 +102,7 @@ th.shfirst,td.shfirst{border-left:2px solid var(--line-strong)}
 td.hot.shadowtier{background:var(--grass-bg)} td.cold.shadowtier{background:var(--aub-bg)}
 @media (max-width:700px){ .tile .val{font-size:21px} }
 .be{display:block;font-size:.72em;opacity:.55;letter-spacing:.02em}
+.tier{font-size:.62em;letter-spacing:.06em;text-transform:uppercase;opacity:.75;border:1px solid currentColor;border-radius:3px;padding:1px 6px;vertical-align:middle;margin-left:6px}
 </style>
 </head>
 <body>
@@ -168,6 +169,13 @@ const pct = v => v==null||isNaN(v) ? "–" : Math.round(v*100)+"%";
 const usd = v => (v<0?"−$":"$")+Math.abs(v).toFixed(2);
 const num = v => { const f=parseFloat(v); return isNaN(f)?null:f; };
 const isTrue = v => v===true || v==="True" || v==="1" || v==="1.0" || v===1;
+// tournament tier from the Sackmann level code — ordering + labeling for the slate
+const TIERS = {G:[0,"Grand Slam"], M:[1,"Masters 1000"], A:[2,"ATP 250/500"], D:[2,"Davis Cup"],
+               C:[3,"Challenger"], "25":[4,"ITF M25"], "15":[5,"ITF M15"]};
+const tierOf = rows => {
+  for(const r of rows){ const t=TIERS[String(r.level||"").trim()]; if(t) return t; }
+  return [9,""];
+};
 // The de-vig % is the market's fair opinion; the BE (break-even) % is the raw
 // implied probability of the price — the hurdle a model must beat for +EV.
 function beCell(dec){
@@ -381,11 +389,15 @@ function vSlate(){
   D.shadow.forEach(x=>{ const k=matchKey(x);
     (shadowByKey[k]=shadowByKey[k]||{})[x.model_version]={p:num(x.shadow_p1_prob)}; });
   const NCOLS=3+LIVE_MODELS.length+Object.keys(SHADOW_LABELS).length;
-  const names=["Wimbledon",...Object.keys(byTour).filter(t=>t!=="Wimbledon").sort()];
+  const names=Object.keys(byTour).sort((a,b)=>{
+    const ta=tierOf(byTour[a])[0], tb=tierOf(byTour[b])[0];
+    return ta-tb || a.localeCompare(b);
+  });
   names.forEach(t=>{
     const ms=byTour[t]; if(!ms) return;
     ms.sort((a,b)=> (isTrue(b.features_complete)-isTrue(a.features_complete)) || a.p1.localeCompare(b.p1));
-    v.appendChild(el("h2",null,`${esc(t)} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
+    const tierLabel=tierOf(ms)[1];
+    v.appendChild(el("h2",null,`${esc(t)} ${tierLabel?`<span class="tier">${tierLabel}</span>`:""} <span class="n">${ms.length} match${ms.length>1?"es":""}</span>`));
     const wrapEl=el("div","tablewrap"), tb=el("table");
     tb.innerHTML=matchTableHead(false);
     const body=el("tbody");
@@ -706,7 +718,7 @@ $("#tabs").addEventListener("click",e=>{
 });
 (async()=>{
   try{
-    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at,match_start_time";
+    const PCOLS="match_uid,run_id,latest_run_id,logged_at,match_date,tournament,round,surface,p1,p2,p1_odds_decimal,p2_odds_decimal,market_p1_prob,model_p1_prob,xgb_p1_prob,rf_p1_prob,features_complete,defaulted_features,actual_winner,score,settled_at,match_start_time,level";
     [D.preds, D.odds, D.shadow, D.runs, D.bets] = await Promise.all([
       fetchAll("dash_predictions", PCOLS),
       fetchAll("dash_odds_history","match_uid,p1,p2,tournament,match_date,market_p1_prob,odds_scraped_at,logged_at").catch(()=>[]),
