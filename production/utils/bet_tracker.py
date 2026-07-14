@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import json
 
 from logging_utils import ensure_csv_columns, normalize_name
+from operations.operational_lock import locked_operational_csv
 
 
 BETS_COLUMNS = [
@@ -51,12 +52,14 @@ class BetTracker:
         # Initialize files if they don't exist
         self._initialize_files()
     
+    @locked_operational_csv
     def _initialize_files(self):
         """Initialize tracking files with headers"""
         ensure_csv_columns(self.bets_file, BETS_COLUMNS).to_csv(self.bets_file, index=False)
         ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS).to_csv(self.bankroll_file, index=False)
         ensure_csv_columns(self.session_file, SESSION_COLUMNS).to_csv(self.session_file, index=False)
     
+    @locked_operational_csv
     def start_session(self, initial_bankroll: float, kelly_multiplier: float, notes: str = "") -> str:
         """Start a new betting session"""
         session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
@@ -93,6 +96,7 @@ class BetTracker:
         
         return session_id
 
+    @locked_operational_csv
     def discard_empty_session(self, session_id: str) -> bool:
         """Remove a just-created session when dedupe produced zero new bets.
 
@@ -122,6 +126,7 @@ class BetTracker:
         print(f"🧹 Removed empty betting session: {session_id}")
         return True
     
+    @locked_operational_csv
     def log_bets(self, bet_slips_df: pd.DataFrame, session_id: str, current_bankroll: float):
         """Log new bets from bet slips"""
         if bet_slips_df.empty:
@@ -245,6 +250,7 @@ class BetTracker:
         print(f"   Total stakes: ${total_staked:.2f}")
         return len(bet_records)
     
+    @locked_operational_csv
     def settle_bet(self, bet_id: str, won: bool, notes: str = "") -> float:
         """Settle a specific bet and return profit/loss"""
         all_bets_df = pd.read_csv(self.bets_file)
@@ -303,6 +309,7 @@ class BetTracker:
         
         return actual_profit
     
+    @locked_operational_csv
     def settle_bets_batch(self, results: List[Dict]) -> float:
         """
         Settle multiple bets at once
@@ -315,6 +322,7 @@ class BetTracker:
         
         return total_profit
     
+    @locked_operational_csv
     def log_bankroll_change(self, session_id: str, new_bankroll: float, change_amount: float, reason: str):
         """Log a bankroll change"""
         bankroll_df = pd.read_csv(self.bankroll_file)
@@ -349,6 +357,7 @@ class BetTracker:
         bankroll_df = pd.concat([bankroll_df, pd.DataFrame([bankroll_record])], ignore_index=True)
         bankroll_df.to_csv(self.bankroll_file, index=False)
     
+    @locked_operational_csv
     def get_current_bankroll(self) -> float:
         """Return account equity from initial capital plus settled net P&L."""
         bets = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
@@ -360,21 +369,25 @@ class BetTracker:
         ).fillna(0).sum()
         return self.initial_bankroll + float(settled_profit)
 
+    @locked_operational_csv
     def get_pending_exposure(self) -> float:
         pending = self.get_pending_bets()
         if pending.empty:
             return 0.0
         return float(pd.to_numeric(pending['stake'], errors='coerce').fillna(0).sum())
 
+    @locked_operational_csv
     def get_available_bankroll(self) -> float:
         return max(0.0, self.get_current_bankroll() - self.get_pending_exposure())
     
+    @locked_operational_csv
     def get_pending_bets(self) -> pd.DataFrame:
         """Get all pending bets"""
         all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
         status = all_bets_df['status'].fillna('').astype(str).str.strip().str.lower()
         return all_bets_df[status == 'pending']
     
+    @locked_operational_csv
     def get_session_summary(self, session_id: str) -> Dict:
         """Get summary statistics for a session"""
         all_bets_df = pd.read_csv(self.bets_file)
@@ -405,6 +418,7 @@ class BetTracker:
         
         return summary
 
+    @locked_operational_csv
     def _refresh_session_record(self, session_id: str):
         """Synchronize cached session summary columns with the underlying bets file."""
         summary = self.get_session_summary(session_id)
@@ -432,6 +446,7 @@ class BetTracker:
 
         sessions_df.to_csv(self.session_file, index=False)
 
+    @locked_operational_csv
     def settle_pending_bets_for_match(
         self,
         match_uid: str = None,
@@ -498,6 +513,7 @@ class BetTracker:
 
         return settled
     
+    @locked_operational_csv
     def end_session(self, session_id: str) -> Dict:
         """End a betting session and update summary"""
         self._refresh_session_record(session_id)

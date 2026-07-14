@@ -116,6 +116,9 @@ results/professional_tennis/experiments/
 production/prediction_log.csv
 production/match_features_export.csv
 production/search_error_*.png
+production/logs/.operational_csv.lock
+production/logs/.pending_reconciliation_transaction/
+production/.private/
 
 # HTML debug files
 *.html

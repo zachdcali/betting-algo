@@ -53,6 +53,7 @@ jobs:
           tests/test_operational_runtime.py
           tests/test_live_records.py
           tests/test_pending_reconciliation.py
+          tests/test_pending_reconciliation_apply.py
 
       - name: Verify artifact, replay, lineage, and dashboard boundaries
         run: >-

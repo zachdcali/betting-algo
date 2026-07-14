@@ -36,6 +36,10 @@ There are now two logging layers:
   Append-only audit log for matches skipped from live prediction lineage, including reason codes.
 - `logs/audit/settlement_audit.csv`
   Append-only audit log for every settlement attempt and why it did or did not settle.
+- `.private/pending_reconciliation_apply_audit.csv`
+  The canonical private file for manual digest-gated backlog settlement events.
+  It is independently derivable for crash recovery, never mixed into
+  source-evidence settlement audit, and is not written by the normal pipeline.
 
 Supporting run artifacts:
 
@@ -113,6 +117,10 @@ tennis_env/bin/streamlit run dashboard/app.py
   bet side, so rerunning a slate should not double-log open recommendations.
 - `python main.py --dry-run` does not start a betting session or write
   `logs/all_bets.csv`, although it still exercises odds/features/predictions.
+- `python -m operations.pending_reconciliation` is read-only by default. The
+  optional phase-one writer requires an explicit plan output, dedicated apply
+  audit at its canonical private path, canonical shared lock/recovery paths,
+  reviewed plan file, and exact plan digest; it is manual only.
 - `main.py` now skips feature generation both when a match is already at/inside a small pre-start buffer and when the matchup already appears to have completed in Tennis Abstract history, so a late run does not accidentally score a post-start match as if it were still upcoming.
 - `auto_settle.py` now defaults to a safe backlog pace: 18-hour settlement
   grace period, 75 eligible rows per run, 8 seconds between TA requests, and
