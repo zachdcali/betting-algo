@@ -10,6 +10,28 @@ updates:
     open-pull-requests-limit: 5
     groups:
       safe-python-updates:
+        patterns:
+          - "*"
+        # These packages can change inference, deserialization, numerical and
+        # dataframe semantics, live scraping, database I/O, or service runtime
+        # behavior. Keep each update standalone so its required parity or
+        # integration gate is visible.
+        exclude-patterns:
+          - torch
+          - scikit-learn
+          - xgboost
+          - catboost
+          - lightgbm
+          - numpy
+          - pandas
+          - playwright
+          - "psycopg*"
+          - requests
+          - beautifulsoup4
+          - lxml
+          - flask
+          - gunicorn
+          - google-cloud-storage
         update-types:
           - patch
           - minor
