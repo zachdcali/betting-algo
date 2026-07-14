@@ -19,6 +19,9 @@ Start here:
 - [Pending Paper-Bet Reconciliation](/Users/zachdodson/Documents/betting-algo/docs/production/PENDING_BET_RECONCILIATION.md)
   Read-only classification plus manual digest-gated plan/apply for the narrow
   exact, nonduplicate pending-account subset
+- [Pending Identity Remediation](/Users/zachdodson/Documents/betting-algo/docs/production/PENDING_IDENTITY_REMEDIATION.md)
+  Evidence-bound orphan-UID and duplicate-intent review with an immutable
+  decision registry; candidate joins never authorize a remap
 - [Operational Database](/Users/zachdodson/Documents/betting-algo/docs/production/OPERATIONAL_DATABASE.md)
   Additive Supabase/Postgres schema, import proof, and controlled cutover gates
 - [Cutover Status — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/CUTOVER_STATUS_2026-07-14.md)
@@ -82,6 +85,9 @@ Current production principles:
   canonical lock shared with BetTracker/hydration, and journals bets, bankroll,
   sessions, and the canonical private apply-audit file with durable crash recovery.
   Reconciliation itself is not wired into automatic runs.
+- Pending identity remediation is a separate registry-only workflow. It binds
+  reviewer decisions to retained source artifacts, URIs, timestamps, and
+  hashes, and never mutates the canonical bet log or performs settlement.
 - `docs/index.html` is the public operations surface and reads one
   manifest-pinned Supabase generation. `dashboard/app.py` is the local,
   CSV-backed forensic surface. Model metrics on either surface must come from

@@ -173,8 +173,10 @@ bound input changes, even if the candidate row itself appears unchanged.
 ## Safe operating sequence
 
 1. Save the JSON/CSV outputs in a private review location.
-2. Resolve duplicate identities first: decide whether repeated rows represent
-   one paper decision or intentionally separate exposure.
+2. Resolve duplicate identities and orphan UID aliases through the separate
+   [Pending Identity Remediation](PENDING_IDENTITY_REMEDIATION.md) contract.
+   Candidate name/date or feature joins are not authority, and registry apply
+   does not itself alter the bet log.
 3. Review exact UID outcomes and the proposed win/loss math row by row.
 4. Investigate orphan and ambiguous UIDs against source evidence. Preserve
    void/cancellation semantics.
