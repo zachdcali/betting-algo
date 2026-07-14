@@ -187,6 +187,20 @@ test("pipeline health distinguishes failure, degraded no-odds, and stale state",
   assert.equal(stale.state, "stale");
 });
 
+test("terminal run freshness uses completion time while active runs use start time", () => {
+  const completed = {
+    run_id: "run_20260713T170000Z",
+    run_kind: "prediction_pipeline",
+    status: "partial",
+    started_at: "2026-07-13T17:00:00Z",
+    completed_at: "2026-07-13T17:58:00Z",
+  };
+  const running = { ...completed, status: "running" };
+
+  assert.equal(Logic.runTimestamp(completed), Date.parse(completed.completed_at));
+  assert.equal(Logic.runTimestamp(running), Date.parse(running.started_at));
+});
+
 test("next cadence calculation advances across :17 and :47", () => {
   assert.equal(Logic.nextScheduledRun("2026-07-13T18:16:30Z").toISOString(), "2026-07-13T18:17:00.000Z");
   assert.equal(Logic.nextScheduledRun("2026-07-13T18:17:00Z").toISOString(), "2026-07-13T18:47:00.000Z");

@@ -1,7 +1,7 @@
 # Operational Cutover Status — 2026-07-14
 
 This is the dated truth surface for the CSV-to-Postgres migration. It keeps
-branch-local implementation, the current live Supabase project, and future
+repository implementation, the current live Supabase project, and future
 production authority separate.
 
 ## Executive status
@@ -13,7 +13,8 @@ production authority separate.
 - Its `dash_*` tables remain the accepted cloud-run recovery/dashboard bridge.
 - CSV remains the application-facing operational write contract.
 - Postgres contract `1.1.0`, importer normalizer `1.0.0`, replay tooling, and
-  guarded runtime components are branch-local and locally tested only.
+  guarded runtime components are repository-ready and tested, but not wired
+  into the live orchestrator.
 - No `raw`, `ops`, `ml`, or `api` migration has been applied to live Supabase.
 - Retraining and model promotion remain blocked by canonical-history cleanup
   and shared train/serve feature parity, independent of database progress.
@@ -27,59 +28,70 @@ Read-only catalog/API inspection on 2026-07-14 found:
 | Canonical players | 68,770 |
 | Canonical matches | 972,759 |
 | Canonical match stats | 260,035 |
-| `dash_predictions` | 2,675 |
-| `dash_snapshots` | 1,487 |
-| `dash_shadow` | 13,740 |
-| `dash_runs` | 72 |
-| `dash_bets` | 188 |
-| `dash_sync_manifest` | absent |
+| `dash_predictions` | 2,730 |
+| `dash_snapshots` | 1,627 |
+| `dash_odds_history` | 1,624 |
+| `dash_shadow` | 14,920 |
+| `dash_runs` | 74 |
+| `dash_bets` | 190 |
+| `dash_features` | 1,890 |
+| `dash_settlement_audit` | 5,727 |
+| `dash_skipped_live_matches` | 125 |
+| `dash_bankroll` | 158 |
+| `dash_sessions` | 65 |
+| `dash_model_metrics` | 36 |
 
-The latest GitHub Actions job completed successfully, generated predictions,
-and reported a dashboard sync. However, live `dash_runs` retained that run as
-`running`, and the public API has no `dash_sync_manifest`. This is a code/runtime
-version mismatch:
+The accepted generation is
+`sync_20260714T083207Z_d9d77850`. Every one of its 12 table counts matches the
+rows carrying that exact `sync_id`; there is no mixed-generation dashboard
+state. Both `latest_attempt_run_id` and `accepted_prediction_run_id` are
+`run_20260714T080338Z`, whose lifecycle row is terminal `partial`, not stale
+`running`.
 
-- production `main` still has the old publish-before-terminal-flush ordering;
-- the audit branch fixes that order and adds transactional manifest publication;
-- the new dashboard is correctly withholding unpinned rows until that writer is
-  deployed and produces its first accepted generation.
-
-Do not describe the current blank dashboard as "no data." It is intentionally
-reporting that the available data has no accepted generation contract.
+That run fetched 104/104 odds rows, produced 84/104 predictions, persisted 20
+skipped/error rows, and published the terminal manifest successfully. It placed
+no new paper bets because the global pending-exposure gate correctly reported
+zero available capital. The public dashboard therefore reports a current but
+degraded signal rather than hiding the accepted data or claiming the portfolio
+can allocate.
 
 ## Local normalized-import plan
 
-The current read-only real-data plan contains 38,675 rows including its import
-batch control row:
+The current read-only real-data plan is batch
+`1a211ee3-68b7-566a-a0b9-20756fd8e9b0` and contains 42,269 rows including its
+import batch control row:
 
 | Target | Rows |
 | --- | ---: |
-| Feature snapshots | 6,185 |
-| Prediction observations | 21,354 |
-| Odds observations | 1,409 |
-| Settlement attempts | 5,588 |
-| Settlement events | 2,053 |
-| Bet recommendations | 153 |
-| Bet state events | 153 |
+| Feature snapshots | 6,413 |
+| Prediction observations | 23,750 |
+| Odds observations | 1,624 |
+| Settlement attempts | 5,727 |
+| Settlement events | 2,078 |
+| Bet recommendations | 190 |
+| Bet state events | 190 |
 | Account ledger evidence | 158 |
+| Pipeline runs | 74 |
+| Skip events | 131 |
 | Model releases | 18 |
 | Model release status events | 18 |
 | Model registry generations | 1 |
-| Quarantined conflicts | 438 |
+| Quarantined conflicts | 808 |
 
-The 438 quarantined candidates are not accepted operational facts: 432 are
-contradictory reused external prediction IDs, four are ambiguous settlement
-identity candidates, and two are contradictory feature snapshot candidates.
+The 808 quarantined candidates are not accepted operational facts: 600 are
+contradictory reused external prediction IDs and 208 are contradictory feature
+snapshot candidates.
 They require explicit reviewed resolution; the importer never selects a first
 row merely because it appeared first.
 
-The exact plan was applied to fresh disposable PostgreSQL 16 as batch
-`8120d931-0953-570a-88c4-f4aff29ba4d1`. All 38,675 target rows and 38,674 fact
-memberships matched by key and semantic SHA-256. An identical full retry kept
-the same counts and passed both target and membership parity. The PostgreSQL
-integration suite also passed twice consecutively and proves a second changed
-manifest preserves the first membership ledger while globally deduplicating
-unchanged facts.
+A prior 38,675-row snapshot was applied to fresh disposable PostgreSQL 16 as
+batch `8120d931-0953-570a-88c4-f4aff29ba4d1`. All target rows and 38,674 fact
+memberships matched by key and semantic SHA-256, and an identical retry was a
+parity-preserving no-op. That remains valid mechanism evidence, but it is not a
+claim that the newer 42,269-row plan has been staged. The current plan must be
+applied and replayed in a fresh staging database before cutover. The PostgreSQL
+16 integration suite passes against disposable databases and proves changed
+manifests preserve prior memberships while deduplicating unchanged facts.
 
 Terminal lifecycle retries now compare the stored semantic hash before they
 can report success: an exact retry is a no-op and contradictory content aborts
@@ -87,20 +99,20 @@ the transaction. Model promotion is anchored to the globally latest registry
 generation, so a release omitted by a newer generation cannot remain current;
 Postgres also permits at most one promoted release per family and generation.
 
-The imported paper projection reproduces the current evidence exactly:
-starting capital $1,000; realized P&L -$427.0770624607107915; equity
-$572.9229375392892085; pending stake $1,878.034773660351415; available capital
-$0; 93 pending bets. This is parity evidence, not approval to make the
-provisional account journal authoritative.
+The current paper state reports starting capital $1,000; realized P&L
+-$389.5770624607107; equity $610.4229375392893; pending stake
+$2,028.0347736603512; available capital $0; and 129 pending bets. This is
+read-only plan/accounting evidence, not approval to make the provisional
+account journal authoritative.
 
 ## Historical evidence recovered
 
-The replay manifest classifies 2,600 historical matches:
+The replay manifest classifies 2,710 historical matches:
 
 | Replay tier | Matches | Meaning |
 | --- | ---: | --- |
-| `GOLD_REPLAY` | 551 | exact, complete, pre-start vector and outcome/odds evidence |
-| `EXACT_INCOMPLETE` | 1,060 | exact ID exists but one or more GOLD gates fail |
+| `GOLD_REPLAY` | 566 | exact, complete, pre-start vector and outcome/odds evidence |
+| `EXACT_INCOMPLETE` | 1,155 | exact ID exists but one or more GOLD gates fail |
 | `LEGACY_MATCHED` | 327 | one unambiguous same-orientation legacy vector; context only |
 | `NO_VECTOR` | 662 | no safe vector or ambiguous vector evidence |
 
@@ -111,41 +123,45 @@ set for tuning.
 
 | Promoted family | GOLD log loss | GOLD Brier | GOLD AUC | GOLD accuracy |
 | --- | ---: | ---: | ---: | ---: |
-| XGBoost | 0.624153 | 0.217367 | 0.707619 | 0.646098 |
-| Random Forest | 0.640081 | 0.224212 | 0.689132 | 0.637024 |
-| Neural Network | 0.690992 | 0.233829 | 0.671002 | 0.633394 |
+| XGBoost | 0.622756 | 0.216884 | 0.708408 | 0.644876 |
+| Random Forest | 0.638720 | 0.223689 | 0.689923 | 0.636042 |
+| Neural Network | 0.688160 | 0.233085 | 0.672237 | 0.632509 |
 
 ## Paper-account backlog
 
-Read-only reconciliation currently finds 93 pending recommendations reserving
-$1,878.034773660351415:
+Read-only reconciliation currently finds 129 pending recommendations reserving
+$2,028.0347736603512:
 
 | Classification | Rows | Stake |
 | --- | ---: | ---: |
-| Exact authoritative winner available | 26 | $520.716261098644975 |
-| Orphan UID absent from prediction log | 63 | $1,258.739264670652775 |
-| Unresolved or ambiguous | 4 | $98.579247891053665 |
+| Exact authoritative winner available | 27 | $529.295509 |
+| Orphan UID absent from prediction log | 63 | $1,258.739265 |
+| Unresolved or ambiguous | 39 | $240.000000 |
 
 Fifty-one rows across 22 deterministic match/side/date identities are labeled
 duplicate exposure. This is a review label, not authorization to delete or
-settle rows. The 26 exact rows have review-only candidate P&L; no automatic
+settle rows. The 27 exact rows have review-only candidate P&L; no automatic
 mutation path was added.
 
 ## Next safe production sequence
 
-1. Merge and deploy the audit writer/dashboard changes; require one new
-   manifest-pinned `dash_*` generation and confirm the stale `running` symptom
-   is gone.
-2. Provision a separate Supabase staging project and provide its URL only as
+1. Preserve the completed checkpoint: the audit writer/dashboard is deployed,
+   a terminal manifest-pinned generation is live, and all 12 counts reconcile.
+2. Merge the normalized contract/tooling while leaving its runtime sink off and
+   applying no `raw`, `ops`, `ml`, or `api` DDL to live Supabase.
+3. Provision a separate Supabase staging project and provide its URL only as
    `OPERATIONAL_STAGING_DATABASE_URL` / `OPERATIONAL_DATABASE_URL`.
-3. Apply Postgres contracts `1.0.0` then `1.1.0`, import the exact reviewed
+4. Apply Postgres contracts `1.0.0` then `1.1.0`, import the exact reviewed
    manifest, repeat it, apply a changed second manifest, and time a restore.
-4. Wire the normalized sink in `shadow` mode only after exact logger timestamps,
+5. Finish and independently review deterministic pending-bet plan/apply tooling;
+   do not production-apply it until crash recovery, replay, shared locking, and
+   ledger/session integrity gates are proven.
+6. Wire the normalized sink in `shadow` mode only after exact logger timestamps,
    source IDs/provenance, bet/settlement records, and account journal semantics
    are available. Keep the accepted CSV plus `dash_*` writer required.
-5. Prove run-by-run parity, least-privilege roles, recovery drills, and seven
+7. Prove run-by-run parity, least-privilege roles, recovery drills, and seven
    clean staging days before any operational read or write authority cutover.
-6. Separately remediate canonical 2025/2026 identity/date conflicts and move
+8. Separately remediate canonical 2025/2026 identity/date conflicts and move
    training/live feature formulas into shared pure code with chronological
    golden-fixture parity before retraining.
 

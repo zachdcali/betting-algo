@@ -67,6 +67,15 @@ test("operations UI exposes accepted generation, capital gate, and settlement ba
   assert.match(html, /Capital \/ exposure/);
 });
 
+test("slate wording separates valid decision inputs from available capital", () => {
+  assert.match(html, /Data-valid now/);
+  assert.match(html, /Decision inputs valid/);
+  assert.doesNotMatch(html, /Eligible for paper decision/);
+  assert.match(client, /data valid · capital blocked/);
+  assert.match(client, /function statusChip\(status, extraClass, displayLabel\)/);
+  assert.match(client, /statusChip\(state, state, stateLabel\)/);
+});
+
 test("manifest counts cover every published operational projection", () => {
   for (const table of [
     "dash_predictions", "dash_odds_history", "dash_shadow", "dash_runs", "dash_bets",

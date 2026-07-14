@@ -99,8 +99,13 @@ class TennisPredictor:
         """Load the current NN model, optionally using registry-enabled calibration."""
         try:
             entry = _registry_model_entry("nn", MODEL_VERSION)
-            model_path = self.model_dir / entry.get("model_file", "neural_network_model_SURFACE_FIX.pth")
-            scaler_path = self.model_dir / entry.get("scaler_file", "scaler_SURFACE_FIX.pkl")
+            model_file = entry.get("model_file")
+            scaler_file = entry.get("scaler_file")
+            if entry.get("artifact_available") is False or not model_file or not scaler_file:
+                print("❌ Promoted NN registry entry is unavailable or incomplete")
+                return False
+            model_path = self.model_dir / model_file
+            scaler_path = self.model_dir / scaler_file
             calibrated_path = self.model_dir / entry.get("calibrated_model_file", "neural_network_calibrated_SURFACE_FIX.pkl")
             probability_mode = entry.get("probability_mode", "raw")
 
@@ -251,7 +256,11 @@ class XGBoostPredictor:
         try:
             import xgboost as xgb
             entry = _registry_model_entry("xgboost", XGB_MODEL_VERSION)
-            model_path = self.model_dir / entry.get("model_file", "xgboost_model_SURFACE_FIX.json")
+            model_file = entry.get("model_file")
+            if entry.get("artifact_available") is False or not model_file:
+                print("❌ Promoted XGBoost registry entry is unavailable or incomplete")
+                return False
+            model_path = self.model_dir / model_file
             if not model_path.exists():
                 print(f"❌ XGBoost model not found: {model_path}")
                 return False
@@ -292,7 +301,11 @@ class RandomForestPredictor:
     def load_model(self) -> bool:
         try:
             entry = _registry_model_entry("random_forest", RF_MODEL_VERSION)
-            model_path = self.model_dir / entry.get("model_file", "random_forest_model_SURFACE_FIX.pkl")
+            model_file = entry.get("model_file")
+            if entry.get("artifact_available") is False or not model_file:
+                print("❌ Promoted Random Forest registry entry is unavailable or incomplete")
+                return False
+            model_path = self.model_dir / model_file
             if not model_path.exists():
                 print(f"❌ Random Forest model not found: {model_path}")
                 return False

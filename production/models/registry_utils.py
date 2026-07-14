@@ -174,6 +174,18 @@ def validate_registry(
         if not current_version:
             continue
         entry = block.get("models", {}).get(current_version, {})
+        if entry.get("artifact_available") is False:
+            issues["invalid"].append(
+                f"{family}:{current_version} promoted artifact cannot be unavailable"
+            )
+        required_artifact_fields = ["model_file", "model_sha256"]
+        if family == "nn":
+            required_artifact_fields.extend(("scaler_file", "scaler_sha256"))
+        for field in required_artifact_fields:
+            if not str(entry.get(field) or "").strip():
+                issues["invalid"].append(
+                    f"{family}:{current_version} missing promoted {field}"
+                )
         expected_features = int(entry.get("features") or 0)
         required_contract_fields = (
             "feature_schema_id",
@@ -213,11 +225,17 @@ def validate_registry(
         model_path = resolve_artifact_path(
             family, "model_file", version=current_version, registry=registry
         )
-        if entry.get("artifact_available", True) and model_path and model_path.exists():
+        if model_path is None:
+            issues["missing"].append(
+                f"{family}:{current_version} promoted model path is unresolved"
+            )
+        elif not model_path.exists():
+            issues["missing"].append(
+                f"{family}:{current_version} missing promoted model file {model_path}"
+            )
+        else:
             expected_hash = str(entry.get("model_sha256") or "").lower()
-            if not expected_hash:
-                issues["invalid"].append(f"{family}:{current_version} missing model_sha256")
-            else:
+            if expected_hash:
                 actual_hash = _sha256_file(model_path)
                 if actual_hash != expected_hash:
                     issues["invalid"].append(
@@ -252,11 +270,17 @@ def validate_registry(
         scaler_path = resolve_artifact_path(
             family, "scaler_file", version=current_version, registry=registry
         )
-        if scaler_path and scaler_path.exists():
+        if family == "nn" and scaler_path is None:
+            issues["missing"].append(
+                f"{family}:{current_version} promoted scaler path is unresolved"
+            )
+        elif family == "nn" and not scaler_path.exists():
+            issues["missing"].append(
+                f"{family}:{current_version} missing promoted scaler file {scaler_path}"
+            )
+        elif scaler_path and scaler_path.exists():
             expected_hash = str(entry.get("scaler_sha256") or "").lower()
-            if not expected_hash:
-                issues["invalid"].append(f"{family}:{current_version} missing scaler_sha256")
-            else:
+            if expected_hash:
                 actual_hash = _sha256_file(scaler_path)
                 if actual_hash != expected_hash:
                     issues["invalid"].append(

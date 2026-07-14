@@ -55,9 +55,18 @@
 
   function runTimestamp(run) {
     if (!run) return null;
+    const status = clean(run.status).toLowerCase();
+    const isActive = !status || ["running", "started"].includes(status);
+    if (isActive) {
+      return (
+        parseTimestamp(run.started_at) ||
+        parseTimestamp(run.completed_at) ||
+        parseRunId(run.run_id)
+      );
+    }
     return (
-      parseTimestamp(run.started_at) ||
       parseTimestamp(run.completed_at) ||
+      parseTimestamp(run.started_at) ||
       parseRunId(run.run_id)
     );
   }

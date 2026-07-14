@@ -33,7 +33,11 @@ jobs:
           cache: pip
 
       - name: Install focused contract dependencies
-        run: python -m pip install pytest "psycopg[binary]" pandas numpy
+        run: >-
+          python -m pip install pytest "psycopg[binary]"
+          pandas==2.3.1 numpy==2.3.2 torch==2.7.1
+          scikit-learn==1.7.1 xgboost==3.0.3
+          streamlit==1.56.0 plotly==6.7.0 pyarrow==24.0.0
 
       - name: Verify migration, import, reconciliation, and live records
         env:
@@ -48,6 +52,22 @@ jobs:
           tests/test_operational_runtime.py
           tests/test_live_records.py
           tests/test_pending_reconciliation.py
+
+      - name: Verify artifact, replay, lineage, and dashboard boundaries
+        run: >-
+          python -m pytest -q
+          tests/test_registry_validation_scope.py
+          tests/test_inference_registry_fail_closed.py
+          tests/test_versioning_contract.py
+          tests/test_replay_manifest.py
+          tests/test_replay_models.py
+          tests/test_feature_vector_log.py
+          tests/test_dashboard_sync.py
+          tests/test_dashboard_data.py
+          tests/test_dashboard_smoke.py
+          tests/test_operational_state.py
+          tests/test_evaluation_cohorts.py
+          tests/test_evaluation_roi.py
 
       - name: Verify static dashboard contracts
         run: |
