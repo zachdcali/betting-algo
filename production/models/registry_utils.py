@@ -88,7 +88,20 @@ def resolve_artifact_path(
     return RESULTS_ROOT / FAMILY_DIRS[family] / rel_path
 
 
-def validate_registry(registry: Optional[Dict] = None) -> Dict[str, list[str]]:
+def validate_registry(
+    registry: Optional[Dict] = None,
+    *,
+    artifact_scope: str = "promoted",
+) -> Dict[str, list[str]]:
+    """Validate registry structure and the requested artifact inventory.
+
+    Cloud inference packages only the promoted artifacts, so its fail-closed
+    check uses ``artifact_scope="promoted"``.  Maintainers can request
+    ``artifact_scope="all"`` when auditing the complete local archive and
+    candidate inventory.
+    """
+    if artifact_scope not in {"promoted", "all"}:
+        raise ValueError(f"unknown artifact scope: {artifact_scope!r}")
     registry = registry or load_registry()
     issues: Dict[str, list[str]] = {"missing": [], "invalid": []}
 
@@ -107,6 +120,12 @@ def validate_registry(registry: Optional[Dict] = None) -> Dict[str, list[str]]:
 
         for bucket_name in ("models", "candidates"):
             for version, entry in block.get(bucket_name, {}).items():
+                should_require_artifact = (
+                    artifact_scope == "all"
+                    or (bucket_name == "models" and version == current_version)
+                )
+                if not should_require_artifact:
+                    continue
                 model_path = resolve_artifact_path(
                     family,
                     "model_file",
