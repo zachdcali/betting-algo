@@ -1,0 +1,407 @@
+(function (root, factory) {
+  "use strict";
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) root.DashboardLogic = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const SUCCESS_STATUSES = new Set(["success", "completed", "complete", "ok"]);
+  const FAILURE_STATUSES = new Set([
+    "failed",
+    "failure",
+    "error",
+    "odds_fetch_error",
+    "timed_out",
+    "timeout",
+    "cancelled",
+    "canceled",
+    "no_features",
+    "no_predictions",
+  ]);
+  const DEGRADED_STATUSES = new Set(["no_odds", "degraded", "partial"]);
+
+  function clean(value) {
+    if (value === null || value === undefined) return "";
+    const text = String(value).trim();
+    return /^(nan|none|null)$/i.test(text) ? "" : text;
+  }
+
+  function numberOrNull(value) {
+    if (value === null || value === undefined || clean(value) === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function isTrue(value) {
+    if (value === true || value === 1) return true;
+    return ["true", "1", "1.0", "t", "yes"].includes(clean(value).toLowerCase());
+  }
+
+  function parseRunId(runId) {
+    const match = clean(runId).match(/(?:run|settle)_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/i);
+    if (!match) return null;
+    const [, year, month, day, hour, minute, second] = match;
+    const time = Date.UTC(+year, +month - 1, +day, +hour, +minute, +second);
+    return Number.isFinite(time) ? time : null;
+  }
+
+  function parseTimestamp(value) {
+    const text = clean(value);
+    if (!text) return null;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : parseRunId(text);
+  }
+
+  function runTimestamp(run) {
+    if (!run) return null;
+    return (
+      parseTimestamp(run.started_at) ||
+      parseTimestamp(run.completed_at) ||
+      parseRunId(run.run_id)
+    );
+  }
+
+  function isPipelineRun(run) {
+    const kind = clean(run && run.run_kind).toLowerCase();
+    const id = clean(run && run.run_id).toLowerCase();
+    return !kind || kind === "prediction_pipeline" || id.startsWith("run_");
+  }
+
+  function latestRunAttempt(runs) {
+    return (runs || [])
+      .filter(isPipelineRun)
+      .map((run) => ({ run, at: runTimestamp(run) }))
+      .filter((entry) => entry.at !== null)
+      .sort((a, b) => b.at - a.at)[0] || null;
+  }
+
+  function predictionRunId(row) {
+    return clean(row && (row.latest_run_id || row.run_id));
+  }
+
+  function latestSuccessfulPredictionRun(predictions, runs, acceptedRunId = "") {
+    const runMap = new Map((runs || []).map((run) => [clean(run.run_id), run]));
+    const groups = new Map();
+
+    (predictions || []).forEach((row) => {
+      const id = predictionRunId(row);
+      if (!id) return;
+      const timestamp =
+        parseTimestamp(row.latest_logged_at) ||
+        parseTimestamp(row.logged_at) ||
+        parseRunId(id);
+      const previous = groups.get(id) || { id, at: timestamp, rowCount: 0 };
+      previous.rowCount += 1;
+      if (timestamp !== null && (previous.at === null || timestamp > previous.at)) previous.at = timestamp;
+      groups.set(id, previous);
+    });
+
+    const preferredId = clean(acceptedRunId);
+    if (preferredId) {
+      const selected = groups.get(preferredId);
+      const run = runMap.get(preferredId) || null;
+      const acceptedStatus = clean(run && run.status).toLowerCase();
+      if (!selected || (run && !SUCCESS_STATUSES.has(acceptedStatus) && acceptedStatus !== "partial")) return null;
+      return { ...selected, run };
+    }
+
+    const candidates = [...groups.values()]
+      .filter((entry) => {
+        const run = runMap.get(entry.id);
+        if (!run) return true;
+        return SUCCESS_STATUSES.has(clean(run.status).toLowerCase());
+      })
+      .sort((a, b) => {
+        if (a.at !== null && b.at !== null && a.at !== b.at) return b.at - a.at;
+        return b.id.localeCompare(a.id);
+      });
+
+    const selected = candidates[0] || [...groups.values()].sort((a, b) => b.id.localeCompare(a.id))[0];
+    if (!selected) return null;
+    return { ...selected, run: runMap.get(selected.id) || null };
+  }
+
+  function ageMinutes(timestamp, now) {
+    if (timestamp === null || timestamp === undefined) return null;
+    return Math.max(0, (now - timestamp) / 60000);
+  }
+
+  function computeHealth({ runs = [], predictions = [], errors = {}, latestAttemptRunId = "", acceptedPredictionRunId = "", now = Date.now() } = {}) {
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    const pinnedAttemptId = clean(latestAttemptRunId);
+    const pinnedAttemptRun = pinnedAttemptId ? runs.find((run) => clean(run.run_id) === pinnedAttemptId) : null;
+    const pinnedAttemptAt = runTimestamp(pinnedAttemptRun);
+    const attempt = pinnedAttemptId
+      ? (pinnedAttemptRun && pinnedAttemptAt !== null ? { run: pinnedAttemptRun, at: pinnedAttemptAt } : null)
+      : latestRunAttempt(runs);
+    const predictionRun = latestSuccessfulPredictionRun(predictions, runs, acceptedPredictionRunId);
+    const attemptAgeMinutes = attempt ? ageMinutes(attempt.at, nowMs) : null;
+    const predictionAgeMinutes = predictionRun ? ageMinutes(predictionRun.at, nowMs) : null;
+    const loadErrors = Object.entries(errors || {}).filter(([, value]) => Boolean(value));
+    const reasons = [];
+    const attemptStatus = clean(attempt && attempt.run.status).toLowerCase();
+
+    if (!attempt) reasons.push("No pipeline attempt is visible in run history.");
+    if (!predictionRun) reasons.push("No successful prediction-bearing run is visible.");
+    if (attempt && FAILURE_STATUSES.has(attemptStatus)) {
+      reasons.push(`Latest pipeline attempt ended ${attemptStatus.replaceAll("_", " ")}.`);
+    } else if (attempt && DEGRADED_STATUSES.has(attemptStatus)) {
+      reasons.push(`Latest pipeline attempt ended ${attemptStatus.replaceAll("_", " ")}.`);
+    } else if (attemptStatus === "running") {
+      reasons.push("Latest pipeline attempt is still running.");
+    }
+    if (attemptAgeMinutes !== null && attemptAgeMinutes > 90) {
+      reasons.push(`No pipeline attempt has appeared for ${Math.round(attemptAgeMinutes)} minutes.`);
+    }
+    if (predictionAgeMinutes !== null && predictionAgeMinutes > 90) {
+      reasons.push(`Last successful prediction run is ${Math.round(predictionAgeMinutes)} minutes old.`);
+    }
+    if (loadErrors.length) {
+      reasons.push(`Partial dashboard load: ${loadErrors.map(([name]) => name).join(", ")}.`);
+    }
+    if (attempt) {
+      [
+        ["Auto-settlement", "auto_settle_status", "auto_settle_error"],
+        ["Canonical ingest", "canonical_ingest_status", "canonical_ingest_error"],
+        ["Reconciliation", "reconcile_status", "reconcile_error"],
+      ].forEach(([label, statusField, errorField]) => {
+        const stageStatus = clean(attempt.run[statusField]).toLowerCase();
+        const stageError = clean(attempt.run[errorField]);
+        if (stageError || FAILURE_STATUSES.has(stageStatus) || stageStatus === "partial") {
+          const detail = stageError ? `: ${stageError.slice(0, 180)}` : "";
+          reasons.push(`${label} ${stageStatus.replaceAll("_", " ") || "failed"}${detail}.`);
+        }
+      });
+      const exposureGate = clean(attempt.run.exposure_gate_status).toLowerCase();
+      if (exposureGate.startsWith("blocked")) {
+        reasons.push(`Portfolio exposure gate is ${exposureGate.replaceAll("_", " ")}.`);
+      }
+    }
+    if (
+      attempt &&
+      predictionRun &&
+      SUCCESS_STATUSES.has(attemptStatus) &&
+      numberOrNull(attempt.run.prediction_rows_success) > 0 &&
+      clean(attempt.run.run_id) !== predictionRun.id
+    ) {
+      reasons.push("Latest successful run is newer than the accepted prediction mirror.");
+    }
+
+    let state = "healthy";
+    if (
+      !attempt ||
+      !predictionRun ||
+      FAILURE_STATUSES.has(attemptStatus) ||
+      (predictionAgeMinutes !== null && predictionAgeMinutes > 180)
+    ) {
+      state = "failed";
+    } else if (
+      (attemptAgeMinutes !== null && attemptAgeMinutes > 90) ||
+      (predictionAgeMinutes !== null && predictionAgeMinutes > 90)
+    ) {
+      state = "stale";
+    } else if (reasons.length) {
+      state = "degraded";
+    }
+
+    return {
+      state,
+      reasons,
+      latestAttempt: attempt,
+      predictionRun,
+      attemptAgeMinutes,
+      predictionAgeMinutes,
+      loadErrors,
+    };
+  }
+
+  function parseMatchStart(row) {
+    if (!row) return null;
+    for (const field of ["match_start_at_utc", "scheduled_start_at", "match_start_time_utc"]) {
+      const parsed = parseTimestamp(row[field]);
+      if (parsed !== null) return parsed;
+    }
+
+    const raw = clean(row.match_start_time);
+    if (!raw) return null;
+    // Bovada's legacy display value is Eastern-local with no offset. Never
+    // guess its timezone in the browser. A zoned ISO value remains safe.
+    if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) return null;
+    return parseTimestamp(raw);
+  }
+
+  function validWinner(value) {
+    const winner = numberOrNull(value);
+    return winner === 1 || winner === 2;
+  }
+
+  function exactFeatureId(row) {
+    return clean(row && (row.feature_snapshot_id || row.latest_feature_snapshot_id));
+  }
+
+  function featureReferenceStatus(row, featureIds, referenceLoaded = false, seenFeatureIds = null) {
+    const featureId = exactFeatureId(row);
+    if (!featureId) return "missing_id";
+    if (!referenceLoaded) return "unverified";
+    if (featureIds instanceof Set && featureIds.has(featureId)) return "verified";
+    if (seenFeatureIds instanceof Set && seenFeatureIds.has(featureId)) return "invalid";
+    return "not_found";
+  }
+
+  function blockedReasons(row) {
+    const reasons = [];
+    const defaults = clean(row.defaulted_features);
+    if (!clean(row.match_uid)) reasons.push("Immutable match ID missing");
+    if (!clean(row.prediction_uid)) reasons.push("Immutable prediction snapshot ID missing");
+    if (!clean(row.tournament)) reasons.push("Tournament unresolved");
+    if (!clean(row.surface)) reasons.push("Surface unresolved");
+    if (!clean(row.level)) reasons.push("Level unresolved");
+    if (!clean(row.round)) reasons.push("Round unresolved");
+    if (!isTrue(row.features_complete)) reasons.push(defaults ? `Incomplete features: ${defaults}` : "Features incomplete");
+    if (!exactFeatureId(row)) reasons.push("Exact feature snapshot missing");
+    if (numberOrNull(row.model_p1_prob) === null) reasons.push("NN prediction unavailable");
+    if (numberOrNull(row.market_p1_prob) === null) reasons.push("Market probability unavailable");
+    if (numberOrNull(row.p1_odds_decimal) === null || numberOrNull(row.p2_odds_decimal) === null) {
+      reasons.push("Two-sided price unavailable");
+    }
+    if (parseMatchStart(row) === null) reasons.push("UTC start time unavailable");
+    return reasons;
+  }
+
+  function classifySlateRow(row, now = Date.now()) {
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    if (validWinner(row && row.actual_winner)) return { state: "settled", reasons: [], startAt: parseMatchStart(row) };
+
+    const status = clean(row && row.record_status).toLowerCase();
+    const startAt = parseMatchStart(row);
+    const explicitExpired = status.includes("expired") || status.includes("stale") || status === "cancelled" || status === "canceled";
+    if (explicitExpired || (startAt !== null && startAt <= nowMs)) {
+      const reason = explicitExpired ? `Record status: ${status.replaceAll("_", " ")}` : "Scheduled start has passed";
+      return { state: "expired", reasons: [reason], startAt };
+    }
+
+    const reasons = blockedReasons(row || {});
+    if (reasons.length) return { state: "blocked", reasons, startAt };
+    return { state: "eligible", reasons: [], startAt };
+  }
+
+  function classifySkippedRow(row, now = Date.now()) {
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    // Skip audit historically stored a timezone-naive Bovada-local string.
+    // Only use an explicit UTC field for expiry math; the skip reason remains
+    // visible when that migration has not landed yet.
+    const startAt = parseTimestamp(row && row.match_start_at_utc);
+    const code = clean(row && row.skip_reason_code).toLowerCase();
+    const detail = clean(row && row.skip_reason_detail);
+    const stage = clean(row && row.stage).replaceAll("_", " ") || "pipeline";
+    const reasons = [`Skipped at ${stage}: ${(code || "reason unavailable").replaceAll("_", " ")}`];
+    if (detail && detail.toLowerCase() !== code) reasons.push(detail);
+    const explicitlyExpired = ["scheduled_start_passed", "match_already_completed"].includes(code);
+    if (explicitlyExpired || (startAt !== null && startAt <= nowMs)) {
+      reasons.unshift(explicitlyExpired ? "Skip audit marks this match as already started" : "Scheduled start has passed");
+      return { state: "expired", reasons, startAt };
+    }
+    return { state: "blocked", reasons, startAt };
+  }
+
+  function normalizeBetOutcome(bet) {
+    const outcome = clean(bet && bet.outcome).toLowerCase();
+    const status = clean(bet && bet.status).toLowerCase();
+    if (["win", "won"].includes(outcome)) return "win";
+    if (["loss", "lost"].includes(outcome)) return "loss";
+    if (["void", "push", "pushed", "refund", "refunded"].includes(outcome)) return "void";
+    if (["cancelled", "canceled"].includes(outcome) || ["cancelled", "canceled"].includes(status)) return "cancelled";
+    if (status === "pending" || !status) return "pending";
+    if (status === "settled") return "settled_unknown";
+    return status || "unknown";
+  }
+
+  function pendingBetSlaStatus(bet, prediction, now = Date.now(), settlementHours = 18, unzonedHours = 72) {
+    if (normalizeBetOutcome(bet) !== "pending") return { state: "not_pending", deadline: null, basis: "not pending" };
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    const startAt = parseMatchStart(prediction) ?? parseMatchStart(bet);
+    if (startAt !== null) {
+      const deadline = startAt + settlementHours * 3600000;
+      return { state: nowMs > deadline ? "overdue" : "active", deadline, basis: "exact UTC start" };
+    }
+
+    const matchDate = clean((bet && bet.match_date) || (prediction && prediction.match_date));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(matchDate)) {
+      const dateStart = Date.parse(`${matchDate}T00:00:00Z`);
+      if (Number.isFinite(dateStart)) {
+        const deadline = dateStart + unzonedHours * 3600000;
+        return { state: nowMs > deadline ? "overdue" : "active", deadline, basis: "conservative unzoned match date" };
+      }
+    }
+
+    const placedAt = parseTimestamp(bet && bet.timestamp);
+    if (placedAt !== null) {
+      const deadline = placedAt + unzonedHours * 3600000;
+      return { state: nowMs > deadline ? "overdue" : "active", deadline, basis: "conservative placement age" };
+    }
+    return { state: "unverified", deadline: null, basis: "missing match and placement time" };
+  }
+
+  function nextScheduledRun(now = Date.now()) {
+    const nowDate = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+    const candidates = [];
+    for (const offsetHours of [0, 1]) {
+      for (const minute of [17, 47]) {
+        const candidate = new Date(nowDate.getTime());
+        candidate.setSeconds(0, 0);
+        candidate.setMinutes(minute);
+        candidate.setHours(nowDate.getHours() + offsetHours);
+        if (candidate.getTime() > nowDate.getTime()) candidates.push(candidate);
+      }
+    }
+    return candidates.sort((a, b) => a - b)[0] || null;
+  }
+
+  function compareManifestCounts(expected, actual) {
+    const expectedCounts = expected && typeof expected === "object" && !Array.isArray(expected) ? expected : {};
+    const actualCounts = actual && typeof actual === "object" && !Array.isArray(actual) ? actual : {};
+    const issues = [];
+    Object.entries(actualCounts).forEach(([table, count]) => {
+      if (!Object.prototype.hasOwnProperty.call(expectedCounts, table)) {
+        issues.push(`manifest omits ${table}`);
+        return;
+      }
+      const expectedCount = numberOrNull(expectedCounts[table]);
+      const actualCount = numberOrNull(count);
+      if (expectedCount === null) issues.push(`${table} manifest count is invalid`);
+      else if (actualCount === null) issues.push(`${table} count is unverified`);
+      else if (actualCount !== expectedCount) issues.push(`${table} expected ${expectedCount}, loaded ${actualCount}`);
+    });
+    Object.keys(expectedCounts).forEach((table) => {
+      if (!Object.prototype.hasOwnProperty.call(actualCounts, table)) issues.push(`${table} has no client count verifier`);
+    });
+    return { ok: issues.length === 0, issues };
+  }
+
+  return {
+    SUCCESS_STATUSES,
+    FAILURE_STATUSES,
+    DEGRADED_STATUSES,
+    clean,
+    numberOrNull,
+    isTrue,
+    parseRunId,
+    parseTimestamp,
+    runTimestamp,
+    latestRunAttempt,
+    latestSuccessfulPredictionRun,
+    computeHealth,
+    parseMatchStart,
+    validWinner,
+    exactFeatureId,
+    featureReferenceStatus,
+    blockedReasons,
+    classifySlateRow,
+    classifySkippedRow,
+    normalizeBetOutcome,
+    pendingBetSlaStatus,
+    nextScheduledRun,
+    compareManifestCounts,
+  };
+});

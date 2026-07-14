@@ -340,7 +340,10 @@ def calculate_betting_edges(predictions_df: pd.DataFrame, odds_df: pd.DataFrame)
         'player2_implied_prob',
         'event',
         'match_time',
-    ]].rename(columns={'event': 'odds_event'})
+    ]].rename(columns={
+        'event': 'odds_event',
+        'match_time': 'odds_match_time',
+    })
 
     merged_df = predictions_df.merge(
         odds_for_merge,
@@ -351,6 +354,19 @@ def calculate_betting_edges(predictions_df: pd.DataFrame, odds_df: pd.DataFrame)
         merged_df['event'] = merged_df.get('odds_event', '')
     else:
         merged_df['event'] = merged_df['event'].fillna(merged_df.get('odds_event', ''))
+    # Both feature rows and odds rows carry the scheduled start.  Keeping the
+    # same column name on both sides of the merge used to turn it into
+    # match_time_x/match_time_y, so stake grouping and the persisted bet slip
+    # saw no match_time at all. Prefer the prediction's source value and use
+    # the joined odds value only as a fallback.
+    odds_match_time = merged_df.get(
+        'odds_match_time', pd.Series('', index=merged_df.index, dtype=object)
+    )
+    if 'match_time' not in merged_df.columns:
+        merged_df['match_time'] = odds_match_time
+    else:
+        missing_match_time = merged_df['match_time'].isna() | merged_df['match_time'].astype(str).str.strip().eq('')
+        merged_df.loc[missing_match_time, 'match_time'] = odds_match_time.loc[missing_match_time]
     
     # Calculate edges
     merged_df['edge_player1'] = merged_df['player1_win_prob'] - merged_df['player1_implied_prob']

@@ -6,6 +6,8 @@ migration swaps the ``load_*`` helpers and leaves the rest of the package intact
 from __future__ import annotations
 
 import os
+from glob import glob
+import json
 
 import numpy as np
 import pandas as pd
@@ -20,8 +22,121 @@ MODEL_PROB_COLS = {
 SHADOW_FAMILIES = ["xgboost", "catboost", "lightgbm", "nn"]
 
 
+def verify_feature_frame(frame: pd.DataFrame) -> tuple[dict[str, str], set[str]]:
+    """Validate exact-vector evidence and return id->content hash plus bad IDs."""
+    from feature_vector_log import feature_fingerprint
+    from models.inference import EXACT_141_FEATURES
+
+    hashes: dict[str, set[str]] = {}
+    invalid: set[str] = set()
+    if frame.empty or "feature_snapshot_id" not in frame.columns:
+        return {}, invalid
+
+    aggregate_format = "features_json" in frame.columns
+    for _, row in frame.iterrows():
+        snapshot_id = str(row.get("feature_snapshot_id", "") or "").strip()
+        if not snapshot_id:
+            continue
+        try:
+            if aggregate_format:
+                status = str(row.get("build_status", "") or "").strip().lower()
+                complete = str(row.get("features_complete", "")).strip().lower()
+                if status != "ok" or complete not in {"true", "1", "1.0", "t", "yes"}:
+                    invalid.add(snapshot_id)
+                    continue
+                payload = json.loads(str(row.get("features_json", "") or ""))
+                if not isinstance(payload, dict):
+                    raise ValueError("features_json is not an object")
+            else:
+                status = str(row.get("status", "") or "").strip().lower()
+                if status != "ok":
+                    invalid.add(snapshot_id)
+                    continue
+                if any(name not in frame.columns for name in EXACT_141_FEATURES):
+                    invalid.add(snapshot_id)
+                    continue
+                payload = {name: row.get(name) for name in EXACT_141_FEATURES}
+
+            schema_hash, vector_hash, feature_count = feature_fingerprint(payload)
+            if not vector_hash or feature_count != len(EXACT_141_FEATURES):
+                invalid.add(snapshot_id)
+                continue
+            stored_schema = str(row.get("feature_schema_sha256", "") or "").strip()
+            stored_vector = str(row.get("feature_vector_sha256", "") or "").strip()
+            if ((stored_schema and stored_schema != schema_hash)
+                    or (stored_vector and stored_vector != vector_hash)):
+                invalid.add(snapshot_id)
+                continue
+            hashes.setdefault(snapshot_id, set()).add(vector_hash)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            invalid.add(snapshot_id)
+
+    for snapshot_id, values in hashes.items():
+        if len(values) != 1:
+            invalid.add(snapshot_id)
+    return {
+        snapshot_id: next(iter(values))
+        for snapshot_id, values in hashes.items()
+        if snapshot_id not in invalid and len(values) == 1
+    }, invalid
+
+
 def load_prediction_log(prod_dir: str) -> pd.DataFrame:
-    return pd.read_csv(os.path.join(prod_dir, "prediction_log.csv"), low_memory=False)
+    frame = pd.read_csv(os.path.join(prod_dir, "prediction_log.csv"), low_memory=False)
+    evidence: dict[str, str] = {}
+    invalid_ids: set[str] = set()
+    scanned_paths: list[str] = []
+    legacy_paths: list[str] = []
+    paths = [
+        *glob(os.path.join(prod_dir, "logs", "features_*.csv")),
+        os.path.join(prod_dir, "logs", "feature_vectors.csv"),
+    ]
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            header = pd.read_csv(path, nrows=0)
+        except Exception as exc:
+            raise RuntimeError(f"feature snapshot verification could not read {path}: {exc}") from exc
+        if "feature_snapshot_id" not in header.columns:
+            legacy_paths.append(path)
+            continue
+        try:
+            feature_frame = pd.read_csv(path, low_memory=False, keep_default_na=False)
+            file_evidence, file_invalid = verify_feature_frame(feature_frame)
+        except Exception as exc:
+            raise RuntimeError(f"feature snapshot verification failed while scanning {path}: {exc}") from exc
+        scanned_paths.append(path)
+        invalid_ids.update(file_invalid)
+        for snapshot_id, vector_hash in file_evidence.items():
+            existing = evidence.get(snapshot_id)
+            if existing and existing != vector_hash:
+                invalid_ids.add(snapshot_id)
+            else:
+                evidence[snapshot_id] = vector_hash
+    for snapshot_id in invalid_ids:
+        evidence.pop(snapshot_id, None)
+    ids = frame.get("feature_snapshot_id", pd.Series("", index=frame.index)).fillna("").astype(str)
+    # Referential verification is fail-closed. If no compatible lineage file
+    # exists, no row can claim GOLD merely because it carries an ID-shaped
+    # string. Publication also fails loudly on partially unreadable inputs.
+    expected_hash = frame.get(
+        "feature_vector_sha256", pd.Series("", index=frame.index)
+    ).fillna("").astype(str).str.strip()
+    matched_hash = pd.Series(
+        [evidence.get(snapshot_id, "") for snapshot_id in ids], index=frame.index
+    )
+    frame["feature_snapshot_verified"] = (
+        ids.ne("") & matched_hash.ne("")
+        & (expected_hash.eq("") | expected_hash.eq(matched_hash))
+    )
+    frame.attrs["feature_snapshot_verification"] = {
+        "scanned_paths": scanned_paths,
+        "legacy_paths_without_ids": legacy_paths,
+        "verified_id_count": len(evidence),
+        "invalid_id_count": len(invalid_ids),
+    }
+    return frame
 
 
 def load_shadow_log(prod_dir: str) -> pd.DataFrame | None:
@@ -31,8 +146,11 @@ def load_shadow_log(prod_dir: str) -> pd.DataFrame | None:
 
 def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
     """Authoritative match_uid -> y1 (1 if player1 won). Conflict-free, deduped."""
-    s = pred_log[pred_log["actual_winner"].notna()].copy()
-    s["y1"] = (s["actual_winner"].astype(float) == 1).astype(int)
+    winner = pd.to_numeric(pred_log["actual_winner"], errors="coerce")
+    # Only explicit player 1/2 outcomes are ground truth. Historical void
+    # sentinels such as -1 must never become an implicit player-two win.
+    s = pred_log[winner.isin([1, 2])].copy()
+    s["y1"] = (pd.to_numeric(s["actual_winner"], errors="coerce") == 1).astype(int)
     nunique = s.groupby("match_uid")["y1"].nunique()
     consistent = nunique[nunique == 1].index
     # keep="last" = the most recently logged row, matching the operational
@@ -60,7 +178,15 @@ def _tier_flags(pred_log: pd.DataFrame) -> pd.DataFrame:
         f["is_complete"] = False
     lq = f["logging_quality"] if "logging_quality" in f.columns else pd.Series(index=f.index, dtype=object)
     rq = f["rescore_quality"] if "rescore_quality" in f.columns else pd.Series(index=f.index, dtype=object)
-    f["is_gold"] = f["is_complete"] & (lq == "snapshot_v2") & (rq == "exact_feature_snapshot")
+    verified = (
+        _coerce_bool(f["feature_snapshot_verified"])
+        if "feature_snapshot_verified" in f.columns
+        else pd.Series(False, index=f.index, dtype=bool)
+    )
+    f["is_gold"] = (
+        f["is_complete"] & verified
+        & (lq == "snapshot_v2") & (rq == "exact_feature_snapshot")
+    )
     return f[["match_uid", "is_complete", "is_gold"]].drop_duplicates("match_uid")
 
 
@@ -72,6 +198,10 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
         pred_log[pred_log["match_uid"].isin(gt.index)]
         .drop_duplicates("match_uid", keep="last")
         .set_index("match_uid")
+    )
+    operational_feature_ids = (
+        settled.get("feature_snapshot_id", pd.Series("", index=settled.index))
+        .fillna("").astype(str)
     )
     rows = []
     for model, col in MODEL_PROB_COLS.items():
@@ -87,10 +217,27 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 "y1": int(gt.loc[uid]),
                 "is_gold": bool(tiers.loc[uid, "is_gold"]),
                 "is_complete": bool(tiers.loc[uid, "is_complete"]),
+                "prediction_time": r.get("logged_at", r.get("odds_scraped_at")),
             })
 
     if shadow_log is not None and "model_family" in shadow_log.columns:
-        sh = shadow_log[shadow_log["match_uid"].isin(gt.index)]
+        sh = shadow_log[shadow_log["match_uid"].isin(gt.index)].copy()
+        version = sh.get("model_version", sh["model_family"]).fillna("").astype(str).str.strip()
+        sh["_model_label"] = version.where(version.ne(""), sh["model_family"].astype(str))
+        if "feature_snapshot_id" in sh.columns:
+            opening = operational_feature_ids.rename("_operational_feature_snapshot_id")
+            sh = sh.merge(opening, left_on="match_uid", right_index=True, how="left")
+            opening_id = sh["_operational_feature_snapshot_id"].fillna("").astype(str)
+            shadow_id = sh["feature_snapshot_id"].fillna("").astype(str)
+            sh = sh[opening_id.eq("") | shadow_id.eq(opening_id)].copy()
+        if "logged_at" in sh.columns:
+            sh["_logged_sort"] = pd.to_datetime(
+                sh["logged_at"], errors="coerce", utc=True, format="mixed"
+            )
+            sh = sh.sort_values(["_logged_sort"], kind="stable", na_position="last")
+        # One deterministic opening observation per match/model variant. Hourly
+        # repeats are correlated evidence, not independent samples.
+        sh = sh.drop_duplicates(["match_uid", "_model_label"], keep="first")
         for _, r in sh.iterrows():
             if pd.isna(r.get("shadow_p1_prob")):
                 continue
@@ -99,8 +246,7 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
             # Key by model_version so multiple variants of the same family (e.g.
             # several XGB recency/depth configs) stay distinct in the ledger.
             # Fall back to family when version is absent (older rows / fixtures).
-            ver = r.get("model_version")
-            label = str(ver).strip() if pd.notna(ver) and str(ver).strip() else str(r["model_family"])
+            label = str(r["_model_label"])
             rows.append({
                 "match_uid": uid,
                 "model": f"shadow_{label}",
@@ -111,6 +257,9 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 "y1": int(gt.loc[uid]),
                 "is_gold": bool(tiers.loc[uid, "is_gold"]) if in_tiers else False,
                 "is_complete": bool(tiers.loc[uid, "is_complete"]) if in_tiers else False,
+                "prediction_time": settled.loc[uid].get(
+                    "logged_at", settled.loc[uid].get("odds_scraped_at")
+                ),
             })
 
     return pd.DataFrame(rows)

@@ -81,6 +81,8 @@
       "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
       "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
       "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
+      "model_sha256": "28de8674374d8ac09ab9059b184938a48613548414705310216f1c8ccbdd4c11",
+      "scaler_sha256": "084ada96791a4469c7768ed8dc1e3046f3062adbb79de3330dc3e6c20df37a17",
       "pipeline_only": true,
       "weights_identical_to": "v1.2.1"
     },
@@ -98,6 +100,8 @@
       "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
       "model_file": "releases/neural_network_model_SURFACE_FIX_v1.2.1.pth",
       "scaler_file": "releases/scaler_SURFACE_FIX_v1.2.1.pkl",
+      "model_sha256": "28de8674374d8ac09ab9059b184938a48613548414705310216f1c8ccbdd4c11",
+      "scaler_sha256": "084ada96791a4469c7768ed8dc1e3046f3062adbb79de3330dc3e6c20df37a17",
       "pipeline_only": true,
       "weights_identical_to": "v1.2.1"
     }
@@ -164,6 +168,7 @@
         "test_log_loss": 0.6064,
         "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
         "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
+        "model_sha256": "f497c559903c05a59a11afca469f980f3b85d7ae6f650c791b7c25ca4292cdbf",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"
       },
@@ -176,6 +181,7 @@
         "test_log_loss": 0.6064,
         "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
         "model_file": "releases/xgboost_model_SURFACE_FIX_v1.2.0.json",
+        "model_sha256": "f497c559903c05a59a11afca469f980f3b85d7ae6f650c791b7c25ca4292cdbf",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"
       }
@@ -224,6 +230,7 @@
         "test_log_loss": 0.6105,
         "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v2 (2026-07-09): live-first surface resolution (ATP calendar + ITF API surfaceDesc > store history > registry, ambiguous flagged not-bettable), Bovada title needle fix, frozen-complete rows can never downgrade, unranked = rank 999/0 pts (training parity), per-player store->TA profile fallback. Rows with this version = clean-feature regime; prior rows may carry surface-suspect features.",
         "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
+        "model_sha256": "e6d52781abd0dfb6b814dddcd206b5ae335f1452c4a7f2e756daa8f08a0ddfc0",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"
       },
@@ -236,6 +243,7 @@
         "test_log_loss": 0.6105,
         "notes": "PIPELINE-ONLY bump \u2014 weights identical to previous version. Feature-pipeline regime v3 (2026-07-11): days-since week-boundary fix (_monday_of normalized \u2014 refs carrying a clock time made current-week rows count as a previous tournament, collapsing Days_Since_Last to ~5 for anyone playing this week); store ingest integrity (label-blind duplicate guard, per-event transactions, wrong-week event dates repaired from calendar truth, read-time history dedupe); ITF store current via hourly ingest + June backfill. Rows with this version = week-correct days-since + dedup-clean form windows.",
         "model_file": "releases/random_forest_model_SURFACE_FIX_v1.2.0.pkl",
+        "model_sha256": "e6d52781abd0dfb6b814dddcd206b5ae335f1452c4a7f2e756daa8f08a0ddfc0",
         "pipeline_only": true,
         "weights_identical_to": "v1.2.0"
       }

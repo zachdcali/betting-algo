@@ -130,6 +130,11 @@ def is_correct_pick(pick: str, actual_winner, p1: str = "", p2: str = "") -> boo
         return normalize_name(pick) == normalize_name(p1)
     if actual_text in {"2", "2.0"}:
         return normalize_name(pick) == normalize_name(p2)
+    try:
+        float(actual_text)
+        return None
+    except ValueError:
+        pass
     return normalize_name(pick) == normalize_name(actual_winner)
 
 

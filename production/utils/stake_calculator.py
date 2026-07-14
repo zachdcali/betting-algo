@@ -37,7 +37,15 @@ class KellyStakeCalculator:
     
     def kelly_fraction(self, win_prob: float, decimal_odds: float) -> float:
         """Calculate optimal Kelly fraction for a single bet"""
-        if win_prob <= 0 or decimal_odds <= 1.01:
+        try:
+            win_prob = float(win_prob)
+            decimal_odds = float(decimal_odds)
+        except (TypeError, ValueError):
+            return 0.0
+        # Fail closed on malformed model/price inputs. A probability outside
+        # [0, 1] is not a strong signal; it is an invalid inference value.
+        if (not math.isfinite(win_prob) or not math.isfinite(decimal_odds)
+                or win_prob <= 0 or win_prob > 1 or decimal_odds <= 1.01):
             return 0.0
         
         b = decimal_odds - 1.0  # Net odds (profit per dollar)
@@ -65,6 +73,7 @@ class KellyStakeCalculator:
     def allocate_block_stakes(self, 
                             matches_df: pd.DataFrame, 
                             bankroll: float,
+                            available_bankroll: float = None,
                             grouping: str = 'day') -> pd.DataFrame:
         """
         Allocate stakes across a block of simultaneous matches
@@ -96,47 +105,46 @@ class KellyStakeCalculator:
             matches_df['group_key'] = 'all'
         
         stake_results = []
+        available_bankroll = bankroll if available_bankroll is None else max(
+            0.0, min(float(available_bankroll), float(bankroll))
+        )
+        # One run-wide exposure budget, shared across every date/event group.
+        block_budget = min(self.kelly_multiplier * bankroll, available_bankroll)
+        remaining_run_budget = block_budget
         
         for group_key, group_matches in matches_df.groupby('group_key'):
+            if remaining_run_budget < self.min_stake_dollars:
+                print("   🛑 No unreserved portfolio capacity remains for this run")
+                break
             print(f"\n💰 Calculating stakes for group: {group_key} ({len(group_matches)} matches)")
-            
-            # Calculate block budget (Kelly multiplier * bankroll)
-            block_budget = self.kelly_multiplier * bankroll
-            
-            # Calculate individual Kelly fractions
-            kelly_fractions = []
+
+            # Actual per-bet target = fractional Kelly, capped against equity.
+            # Do not normalize weights upward to spend the full block budget.
+            full_kelly_fractions = []
+            target_fractions = []
             for _, match in group_matches.iterrows():
-                kelly_frac = self.kelly_fraction(match['bet_prob'], match['bet_odds'])
-                # Apply max fraction cap
-                kelly_frac = min(kelly_frac, self.max_stake_fraction)
-                kelly_fractions.append(kelly_frac)
+                full_kelly = self.kelly_fraction(match['bet_prob'], match['bet_odds'])
+                full_kelly_fractions.append(full_kelly)
+                target_fractions.append(
+                    min(self.kelly_multiplier * full_kelly, self.max_stake_fraction)
+                )
+
+            total_target = sum(target_fractions)
             
-            # Calculate proportional stakes
-            total_kelly = sum(kelly_fractions)
-            
-            if total_kelly <= 0:
+            if total_target <= 0:
                 print("   ⚠️  No positive Kelly fractions in this group")
                 continue
-            
-            individual_stakes = []
-            for i, (_, match) in enumerate(group_matches.iterrows()):
-                if kelly_fractions[i] > 0:
-                    # Proportional allocation based on Kelly fraction
-                    proportional_stake = block_budget * (kelly_fractions[i] / total_kelly)
-                else:
-                    proportional_stake = 0.0
-                
-                individual_stakes.append(proportional_stake)
-            
-            # Check if total stakes exceed bankroll
+
+            individual_stakes = [fraction * bankroll for fraction in target_fractions]
             total_stakes = sum(individual_stakes)
-            
-            if total_stakes > bankroll and not self.allow_leverage:
-                # Scale down all stakes proportionally
-                scale_factor = bankroll / total_stakes
+
+            if total_stakes > remaining_run_budget:
+                scale_factor = remaining_run_budget / total_stakes
                 individual_stakes = [stake * scale_factor for stake in individual_stakes]
                 total_stakes = sum(individual_stakes)
-                print(f"   📉 Scaled down stakes by {scale_factor:.3f} (total: ${total_stakes:.2f})")
+                print(f"   📉 Scaled to remaining run/exposure budget by {scale_factor:.3f} "
+                      f"(total: ${total_stakes:.2f})")
+            remaining_run_budget -= total_stakes
             
             # Apply minimum stake filter and build results
             for i, (_, match) in enumerate(group_matches.iterrows()):
@@ -148,7 +156,7 @@ class KellyStakeCalculator:
                 
                 stake_info = {
                     **match.to_dict(),
-                    'kelly_fraction': kelly_fractions[i],
+                    'kelly_fraction': full_kelly_fractions[i],
                     'proportional_stake': individual_stakes[i],
                     'final_stake': stake,
                     'stake_dollars': stake,  # Explicit dollar amount

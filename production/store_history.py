@@ -34,7 +34,7 @@ CASE m.round
 
 _HISTORY_SQL = f"""
 WITH sides AS (
-    SELECT m.match_id, m.match_date, m.event, m.surface, m.level, m.round,
+    SELECT m.match_id, m.match_date, m.event, m.surface, m.level, m.round, m.source AS match_source,
            {_ROUND_ORDER_SQL} AS round_ord,
            'W' AS result, m.score,
            m.winner_rank AS rank, m.winner_rank_points AS rank_points,
@@ -51,7 +51,7 @@ WITH sides AS (
     FROM matches m LEFT JOIN match_stats st USING (match_id)
     WHERE m.winner_id = %(pid)s
     UNION ALL
-    SELECT m.match_id, m.match_date, m.event, m.surface, m.level, m.round,
+    SELECT m.match_id, m.match_date, m.event, m.surface, m.level, m.round, m.source AS match_source,
            {_ROUND_ORDER_SQL},
            'L', m.score,
            m.loser_rank, m.loser_rank_points,
@@ -68,6 +68,67 @@ SELECT s.*, p.name AS opp_name, p.hand AS opp_hand, p.country AS opp_country
 FROM sides s LEFT JOIN players p ON p.player_id = s.opp_id
 ORDER BY s.match_date DESC, s.round_ord DESC
 """
+
+
+def quarantine_shifted_duplicates(df: pd.DataFrame, max_shift_days: int = 14) -> pd.DataFrame:
+    """Drop later copies of an exact result that was shifted into a newer week.
+
+    ATP event discovery has occasionally re-ingested a finished tournament with
+    the scrape week's Monday as ``match_date``.  The runtime identity uses the
+    source, the event label before its first comma, and the player-perspective
+    equivalent of winner/loser/round/score: opponent, result, round, and score.
+    Keeping the earliest row is correct for this failure mode and prevents the
+    later copy from inflating recent-form windows.
+
+    The 14-day bound covers the observed +7 and +14 day shifts while avoiding
+    broad, unbounded deduplication of genuine rematches.
+    """
+    if df is None or df.empty:
+        return df
+
+    required = {"date", "event", "match_source", "opp_id", "result", "round", "score"}
+    if not required.issubset(df.columns):
+        return df
+
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    # The observed aliases differ only after the first comma (for example
+    # ``Braunschweig`` vs ``Braunschweig, Germany BRAWO OPEN``).  Every one of
+    # the 595 audited shifted pairs shares this canonical event key and source;
+    # requiring both avoids collapsing a rare identical-score rematch at a
+    # different tournament.
+    out["_event_key"] = out["event"].fillna("").astype(str).map(
+        lambda value: " ".join(value.split(",", 1)[0].casefold().split())
+    )
+    eligible = (
+        out["date"].notna()
+        & out["_event_key"].ne("")
+        & out["match_source"].fillna("").astype(str).str.strip().ne("")
+        & out["opp_id"].notna()
+        & out["result"].astype(str).str.upper().isin(["W", "L"])
+        & out["round"].fillna("").astype(str).str.strip().ne("")
+        & out["score"].fillna("").astype(str).str.strip().ne("")
+    )
+
+    drop_indices: list[int] = []
+    signature = ["match_source", "_event_key", "opp_id", "result", "round", "score"]
+    candidates = out.loc[eligible].sort_values(signature + ["date"], kind="stable")
+    for _, group in candidates.groupby(signature, sort=False, dropna=False):
+        last_kept_date = None
+        for idx, row in group.iterrows():
+            row_date = row["date"]
+            if last_kept_date is not None:
+                shift_days = int((row_date - last_kept_date).days)
+                if 0 < shift_days <= int(max_shift_days):
+                    drop_indices.append(idx)
+                    continue
+            last_kept_date = row_date
+
+    if drop_indices:
+        out = out.drop(index=drop_indices)
+    out = out.drop(columns=["_event_key"])
+    out.attrs["shifted_duplicate_rows_quarantined"] = len(drop_indices)
+    return out
 
 
 def find_player_id(conn, name: str) -> Optional[int]:
@@ -87,10 +148,14 @@ def get_history_frame(conn, player_id: int) -> pd.DataFrame:
     for col in ("event", "round", "level", "opp_name", "opp_hand", "opp_country", "score"):
         df[col] = df[col].fillna("")
     df["source"] = "store"
+    # Quarantine the known wrong-week ingestion failure before any rolling
+    # feature sees it.  Exact-date label duplicates are handled separately
+    # below; this pass catches the +7/+14 day copies that otherwise survive.
+    df = quarantine_shifted_duplicates(df)
     # same real match can exist under two event labels (hub vs calendar
     # discovery) — one row per (date, opponent, round) or form windows double-count
     df = df.drop_duplicates(subset=["date", "opp_id", "round"], keep="first")
-    return df.drop(columns=["round_ord", "opp_id", "match_id"])
+    return df.drop(columns=["round_ord", "opp_id", "match_id", "match_source"])
 
 
 def get_profile(conn, name: str) -> Optional[dict]:

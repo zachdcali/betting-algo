@@ -39,6 +39,7 @@ def _fetch_atp_bundle(ev: dict) -> tuple[str, dict]:
                                      fetch_daily_schedule)
     url = ev["url"]
     out: dict = {}
+    errors: list[str] = []
     for key, fn in (("results", fetch_tournament_results),
                     ("draw", fetch_event_draw),
                     ("schedule", fetch_daily_schedule)):
@@ -46,7 +47,8 @@ def _fetch_atp_bundle(ev: dict) -> tuple[str, dict]:
             out[key] = fn(url)
         except Exception as exc:
             print(f"      ⚠️ prefetch {key} failed for {ev.get('event','?')} (non-fatal): {exc}")
-            out[key] = pd.DataFrame()
+            errors.append(key)
+    out["_errors"] = errors
     return url, out
 
 
@@ -74,14 +76,13 @@ def _fetch_itf_event(key: str) -> tuple[str, pd.DataFrame]:
 def prefetch_event_pages(session_cache: dict, ref_date=None) -> dict:
     """Discover active events, then warm results/draw/schedule/OOP caches in
     parallel. Returns a small stats dict for the run log."""
-    from history_stitch import get_active_events
+    from history_stitch import cache_event_ingest_metadata, get_active_events
 
     ref = pd.Timestamp(ref_date) if ref_date is not None else pd.Timestamp.today()
     t0 = time.time()
     events = get_active_events(ref, session_cache)  # sequential: 3 calendar pages
 
     results_cache = session_cache.setdefault("atp_event_results", {})
-    meta_cache = session_cache.setdefault("atp_event_meta", {})
     draws_cache = session_cache.setdefault("atp_event_draws", {})
     sched_cache = session_cache.setdefault("atp_event_schedules", {})
 
@@ -99,10 +100,21 @@ def prefetch_event_pages(session_cache: dict, ref_date=None) -> dict:
                     print(f"      ⚠️ prefetch bundle failed for {ev.get('event','?')}: {exc}")
                     stats["errors"] += 1
                     continue
-                results_cache.setdefault(url, bundle["results"])
-                meta_cache.setdefault(url, ev)
-                draws_cache.setdefault(url, bundle["draw"])
-                sched_cache.setdefault(url, bundle["schedule"])
+                # Only warm validated, non-empty responses. An exception or
+                # parse-empty result must leave the key absent so the existing
+                # lazy path gets one real fallback attempt.
+                for key, cache in (
+                    ("results", results_cache),
+                    ("draw", draws_cache),
+                    ("schedule", sched_cache),
+                ):
+                    value = bundle.get(key)
+                    if isinstance(value, pd.DataFrame) and not value.empty:
+                        cache.setdefault(url, value)
+                    else:
+                        stats["errors"] += 1
+                if url in results_cache:
+                    cache_event_ingest_metadata(session_cache, ev)
 
     # ITF: the calendar is already in cache via get_active_events'
     # history-stitch helpers only when an ITF label was seen; warm it here

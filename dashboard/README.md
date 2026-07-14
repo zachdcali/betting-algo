@@ -2,9 +2,16 @@
 
 This folder contains the live operations dashboard for the tennis betting pipeline.
 
-## Why Streamlit
+## Two dashboard surfaces
 
-We are using Streamlit for the first in-repo dashboard because it keeps the entire stack in Python, reads the existing CSV logs directly, and is easy to iterate on locally while the logging layer is still evolving.
+The public operations dashboard is `docs/index.html`. It is a static,
+GitHub-Pages-compatible client that reads one accepted Supabase
+`dash_sync_manifest` generation. Every table request is pinned to that
+generation so the page cannot mix two publications.
+
+The Streamlit app remains the local forensic surface. It keeps analysis in
+Python, reads production CSV logs directly, and supports deeper drill-down while
+the write path is still migrating.
 
 The dashboard is built around the current production truth sources:
 
@@ -18,6 +25,13 @@ The dashboard is built around the current production truth sources:
 
 ```bash
 tennis_env/bin/streamlit run dashboard/app.py
+```
+
+Public static dashboard:
+
+```bash
+python3 -m http.server 8765
+# open http://127.0.0.1:8765/docs/index.html
 ```
 
 ## Current scope
@@ -37,4 +51,8 @@ The first version includes:
 
 ## Important interpretation rule
 
-Use the `Decision-grade only` filter when you want the cleanest cohort for evaluating current operational performance. That filter keeps only `snapshot_v2` rows with `exact_feature_snapshot` lineage.
+Use the `Decision-grade only` filter when you want the cleanest cohort for
+evaluating current operational performance. GOLD requires settled
+`snapshot_v2`, `exact_feature_snapshot`, complete features, and a feature
+snapshot ID verified against persisted lineage. Browser metrics are published
+from `production/evaluation/`; the static client does not recalculate them.

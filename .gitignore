@@ -8,6 +8,7 @@ data-files/
 *.csv
 *.xlsx
 *.json
+!docs/dashboard_version.json
 results/*/predictions.csv
 results/*/raw_data/
 

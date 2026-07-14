@@ -376,6 +376,28 @@ def _resolve_player_id(cur, name: str) -> int | None:
     return None
 
 
+def _exact_or_normalized_player_candidates(cur, name: str) -> list[int]:
+    """Return existing identities that make auto-creation unsafe.
+
+    ``_resolve_player_id`` intentionally returns ``None`` for both a missing
+    name and an ambiguous name.  Creation callers must distinguish those two
+    states or every retry of an ambiguous ITF player creates another identity.
+    Exact matches are checked first; when there are none, use the same
+    accent/punctuation-insensitive normalization as the resolver.
+    """
+    cur.execute("SELECT player_id FROM players WHERE lower(name) = lower(%s)", (name,))
+    exact = sorted({int(row[0]) for row in cur.fetchall()})
+    if exact:
+        return exact
+    cur.execute(
+        """SELECT player_id FROM players
+           WHERE regexp_replace(lower(unaccent(name)), '[^a-z]', '', 'g')
+               = regexp_replace(lower(unaccent(%s)), '[^a-z]', '', 'g')""",
+        (name,),
+    )
+    return sorted({int(row[0]) for row in cur.fetchall()})
+
+
 ALIAS_SQL = """
 CREATE TABLE IF NOT EXISTS player_aliases (
     alias_norm TEXT PRIMARY KEY,
@@ -646,6 +668,7 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
     only accumulate if their first professional rows are storable.
     """
     inserted = skipped = created = 0
+    ambiguous: dict[str, list[int]] = {}
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO ingest_runs (source, started_at, notes) VALUES ('itf_oop', now(), %s) RETURNING run_id",
@@ -656,10 +679,15 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
         def resolve_or_create(name: str):
             nonlocal created
             pid = _resolve_player_id(cur, name)
-            if pid is None and len(str(name).strip()) >= 5:
+            clean_name = str(name).strip()
+            if pid is None and len(clean_name) >= 5:
+                candidates = _exact_or_normalized_player_candidates(cur, clean_name)
+                if candidates:
+                    ambiguous[clean_name] = candidates
+                    return None
                 cur.execute(
                     "INSERT INTO players (name, updated_at) VALUES (%s, now()) RETURNING player_id",
-                    (str(name).strip(),),
+                    (clean_name,),
                 )
                 pid = cur.fetchone()[0]
                 created += 1
@@ -691,9 +719,23 @@ def ingest_itf_results(conn, em_df, event: str, start_date: str,
                  start_date, wid, lid, rnd),
             )
             inserted += cur.rowcount
+        ambiguous_note = ""
+        if ambiguous:
+            details = ", ".join(
+                f"{name}[{'|'.join(str(pid) for pid in ids[:8])}]"
+                for name, ids in sorted(ambiguous.items())[:12]
+            )
+            ambiguous_note = f"; ambiguous_identity={details}"
         cur.execute(
-            "UPDATE ingest_runs SET finished_at=now(), rows_inserted=%s, rows_skipped=%s WHERE run_id=%s",
-            (inserted, skipped, run_id),
+            """UPDATE ingest_runs
+               SET finished_at=now(), rows_inserted=%s, rows_skipped=%s,
+                   notes=coalesce(notes, '') || %s
+               WHERE run_id=%s""",
+            (inserted, skipped, ambiguous_note, run_id),
         )
+    if ambiguous:
+        print(f"  ⚠️ ambiguous ITF identities skipped ({len(ambiguous)}): "
+              + ", ".join(sorted(ambiguous)[:8]))
     print(f"  itf ingest [{event}]: inserted={inserted} skipped={skipped} players_created={created}")
-    return {"inserted": inserted, "skipped": skipped, "created": created}
+    return {"inserted": inserted, "skipped": skipped, "created": created,
+            "ambiguous": len(ambiguous)}

@@ -38,6 +38,8 @@ CURRENT_EVENT_REGISTRY = [
         "event": "Wimbledon",
         "url": "https://www.atptour.com/en/scores/current/wimbledon/540/results",
         "start_date": "2026-06-29",
+        "date_verified": True,
+        "date_source": "static_registry",
         "surface": "Grass",
         "level": "G",
         "window": ("2026-06-29", "2026-07-13"),
@@ -320,6 +322,55 @@ def _monday_of(ts: pd.Timestamp) -> pd.Timestamp:
     return (ts - pd.Timedelta(days=int(ts.weekday()))).normalize()
 
 
+def _set_event_date(ev: dict, start_date, *, source: str, verified: bool) -> dict:
+    """Attach an event date plus the provenance needed for safe persistence.
+
+    A Monday derived from the prediction/reference week is useful for temporary
+    round/history resolution, but it is not an official tournament date and
+    must never be promoted into the canonical match store.
+    """
+    ev["start_date"] = str(start_date)
+    ev["date_verified"] = bool(verified)
+    ev["date_source"] = str(source)
+    return ev
+
+
+def event_date_is_verified(ev: dict) -> bool:
+    """Whether an event carries a source-backed tournament start date."""
+    return bool(ev.get("start_date")) and ev.get("date_verified") is True
+
+
+def cache_event_ingest_metadata(session_cache: dict, ev: dict) -> bool:
+    """Expose only source-verified event metadata to canonical-store ingest.
+
+    Results remain in ``atp_event_results`` for in-run feature/round work. The
+    orchestrator ingests only events present in ``atp_event_meta``, so guessed
+    dates are held in a separate quarantine cache rather than silently becoming
+    durable match history.
+    """
+    url = str(ev.get("url") or "")
+    if not url:
+        return False
+
+    verified = session_cache.setdefault("atp_event_meta", {})
+    quarantine = session_cache.setdefault("atp_event_meta_quarantine", {})
+    if event_date_is_verified(ev):
+        verified[url] = dict(ev)
+        quarantine.pop(url, None)
+        return True
+
+    # Never let a later guessed copy downgrade verified metadata for the same
+    # official results URL.
+    if url in verified and event_date_is_verified(verified[url]):
+        return True
+    if url not in quarantine:
+        quarantine[url] = dict(ev)
+        print(f"      ⚠️ canonical ingest quarantined for {ev.get('event', '?')}: "
+              f"unverified start_date={ev.get('start_date', '')} "
+              f"({ev.get('date_source', 'unknown')})")
+    return False
+
+
 def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[dict]:
     """All active tournaments: auto-discovered from the ATP live-scores hubs,
     with static-registry entries overriding by slug (they carry exact
@@ -360,7 +411,16 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
     try:
         for ev in discover_active_events():
             ev = dict(ev)
-            ev["start_date"] = cal_dates.get(str(ev.get("id"))) or str(monday.date())
+            official_date = cal_dates.get(str(ev.get("id")))
+            if official_date:
+                _set_event_date(ev, official_date, source="challenger_calendar", verified=True)
+            else:
+                _set_event_date(
+                    ev,
+                    monday.date(),
+                    source="ref_week_monday_guess",
+                    verified=False,
+                )
             events.append(ev)
     except Exception as exc:
         print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
@@ -375,9 +435,11 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
         for _, r in window.iterrows():
             if r["id"] in seen_ids:
                 continue
-            events.append({"event": r["event"], "slug": r["slug"], "id": r["id"],
-                           "url": r["url"], "level": "C", "surface": "",
-                           "start_date": r["start_date"]})
+            ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
+                  "url": r["url"], "level": "C", "surface": ""}
+            events.append(_set_event_date(
+                ev, r["start_date"], source="challenger_calendar", verified=True,
+            ))
     except Exception as exc:
         print(f"      ⚠️ calendar discovery unavailable ({exc})")
     # tour calendar: the live hub only lists in-progress events, so Sunday's
@@ -399,13 +461,21 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             win = tcal[(pd.to_datetime(tcal["start_date"]) <= ref + pd.Timedelta(days=5))
                        & (pd.to_datetime(tcal["start_date"]) >= ref - pd.Timedelta(days=8))]
             for _, r in win.iterrows():
-                if r["id"] in seen_ids:
-                    continue
                 ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
                       "url": r["url"], "level": "A", "surface": r.get("surface", ""),
-                      "start_date": r["start_date"]}
+                      }
+                _set_event_date(ev, r["start_date"], source="tour_calendar", verified=True)
                 if "davis cup" in str(r["event"]).lower():
                     ev["level"] = "D"
+                if r["id"] in seen_ids:
+                    # Hub discovery happens before the tour calendar. Upgrade a
+                    # Monday guess in place once the official calendar supplies
+                    # the date instead of skipping the authoritative metadata.
+                    for existing in events:
+                        if existing.get("id") == r["id"] and not event_date_is_verified(existing):
+                            existing.update(ev)
+                            break
+                    continue
                 events.append(ev)
     except Exception as exc:
         print(f"      ⚠️ tour calendar discovery unavailable ({exc})")
@@ -416,7 +486,10 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             static_slugs.add(sev["event"].lower())
             events = [e for e in events if sev["event"].lower() not in e["event"].lower()
                       and e.get("slug", "") != sev["event"].lower()]
-            events.append(sev)
+            registry_event = dict(sev)
+            registry_event.setdefault("date_verified", True)
+            registry_event.setdefault("date_source", "static_registry")
+            events.append(registry_event)
     cache["atp_active_events"] = events
     return events
 
@@ -760,16 +833,15 @@ def gather_atp_rows(display_name: str, ref_date, rankings_df: Optional[pd.DataFr
     except ImportError:
         from scraping.atp_results_scraper import fetch_tournament_results
     results_cache = cache.setdefault("atp_event_results", {})
-    meta_cache = cache.setdefault("atp_event_meta", {})
     for ev in get_active_events(ref_date, cache):
         if ev["url"] not in results_cache:
             try:
                 print(f"      🧵 Fetching ATP results page for {ev['event']} (shared, cached)")
                 results_cache[ev["url"]] = fetch_tournament_results(ev["url"])
-                meta_cache[ev["url"]] = ev
             except Exception as exc:
                 print(f"      ⚠️ ATP event results fetch failed (non-fatal): {exc}")
                 results_cache[ev["url"]] = pd.DataFrame()
+        cache_event_ingest_metadata(cache, ev)
         ev_rows = event_results_to_ta_schema(results_cache[ev["url"]], display_name, ev)
         if ev_rows.empty:
             continue

@@ -474,6 +474,11 @@ def _correct_from_actual(pick: str, actual_winner, p1: str, p2: str):
         return int(normalize_name(pick) == normalize_name(p1))
     if actual_text in {"2", "2.0"}:
         return int(normalize_name(pick) == normalize_name(p2))
+    try:
+        float(actual_text)
+        return ""
+    except ValueError:
+        pass
     return int(normalize_name(pick) == normalize_name(actual_text))
 
 
