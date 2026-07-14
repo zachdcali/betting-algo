@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import groupby
 import math
 import re
 from statistics import pstdev
@@ -31,6 +32,10 @@ UNSCORED_MATCH_SET_ESTIMATE = 2.5
 FIRST_HISTORY_DAYS_SINCE_DEFAULT = 60
 
 
+class CanonicalDateError(ValueError):
+    """Raised when a clock-bearing timestamp is used as an event-local date."""
+
+
 @dataclass(frozen=True)
 class MatchObservation:
     """A source-neutral, player-perspective historical match."""
@@ -41,7 +46,11 @@ class MatchObservation:
     score: Optional[str] = None
     rank: Optional[float] = None
     opponent: Any = None
-    order: float = 0.0
+    # ``order`` is populated only from explicit chronological evidence.  A
+    # DataFrame row position or a source-local ``match_num`` is not proof.
+    order: Optional[float] = None
+    order_scope: str = ""
+    source_key: str = ""
 
 
 def _present(value: Any) -> bool:
@@ -63,7 +72,11 @@ def _timestamp(value: Any) -> Optional[pd.Timestamp]:
     if pd.isna(stamp):
         return None
     if stamp.tzinfo is not None:
-        stamp = stamp.tz_convert("UTC").tz_localize(None)
+        raise CanonicalDateError(
+            "base_141_shared requires a timezone-naive canonical event-local "
+            "date; keep timezone-aware kickoff values in match_start_at_utc "
+            "lineage and pass canonical_match_date separately"
+        )
     # Sackmann history is date-granular.  The candidate therefore compares
     # both adapters at calendar-day granularity and never lets a same-day row
     # become evidence merely because the live kickoff carries a clock time.
@@ -163,8 +176,60 @@ def feature_default(feature_name: str) -> float:
     return 0.0
 
 
-def _order(value: Any) -> float:
-    return _finite(value, 0.0)
+def _order(value: Any) -> Optional[float]:
+    if not _present(value):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _explicit_order(row: Mapping[str, Any]) -> tuple[Optional[float], str]:
+    """Return source chronology plus the scope where values are comparable."""
+
+    order = _order(row.get("chronological_order"))
+    if order is not None:
+        scope = row.get("chronological_order_scope", "__global__")
+        return order, str(scope or "__global__")
+    round_order = _order(row.get("round_ord"))
+    event_scope = row.get("order_scope", row.get("tourney_id", row.get("event")))
+    if round_order is not None and _present(event_scope):
+        return round_order, f"round:{str(event_scope).strip().casefold()}"
+    chronology_flag = row.get("order_is_chronological", False)
+    if isinstance(chronology_flag, str):
+        chronology_is_proven = chronology_flag.strip().casefold() in {
+            "1", "true", "yes", "y",
+        }
+    else:
+        chronology_is_proven = _present(chronology_flag) and bool(chronology_flag)
+    if chronology_is_proven:
+        for name in ("order", "match_order", "match_num"):
+            order = _order(row.get(name))
+            if order is not None:
+                scope = row.get("chronological_order_scope", "__global__")
+                return order, str(scope or "__global__")
+    return None, ""
+
+
+def _source_key(row: Mapping[str, Any]) -> str:
+    """Stable identity for deterministic storage, never chronological proof."""
+
+    for name in ("source_key", "match_id"):
+        value = row.get(name)
+        if _present(value):
+            return str(value).strip()
+    fields = (
+        row.get("event"),
+        row.get("opponent", row.get("opp_id", row.get("opp_name"))),
+        row.get("result", row.get("won")),
+        row.get("surface"),
+        row.get("round"),
+        row.get("score"),
+        row.get("rank"),
+    )
+    return "\x1f".join("" if not _present(value) else str(value) for value in fields)
 
 
 def observations_from_records(
@@ -175,7 +240,8 @@ def observations_from_records(
     Supported aliases intentionally match the two existing adapters:
     ``result``/``won`` and ``opp_id``/``opponent``/``opp_name``.
     Invalid dates remain absent from the returned history rather than becoming
-    maximally recent evidence.
+    maximally recent evidence. Timezone-aware dates fail closed because a
+    kickoff instant cannot establish the canonical event-local calendar day.
     """
 
     if records is None:
@@ -198,6 +264,7 @@ def observations_from_records(
             opponent = row.get("opp_name")
         surface = row.get("surface")
         score = row.get("score")
+        order, order_scope = _explicit_order(row)
         normalized.append(
             MatchObservation(
                 date=date,
@@ -206,12 +273,85 @@ def observations_from_records(
                 score=str(score).strip() if _present(score) else None,
                 rank=_rank(row.get("rank")),
                 opponent=opponent if _present(opponent) else None,
-                order=_order(
-                    row.get("order", row.get("match_order", row.get("match_num")))
-                ),
+                order=order,
+                order_scope=order_scope,
+                source_key=_source_key(row),
             )
         )
     return tuple(normalized)
+
+
+def _observation_sort_key(row: MatchObservation) -> tuple[Any, ...]:
+    """Stable storage order; it does not invent chronology for tied dates."""
+
+    return (
+        row.date,
+        row.order is not None,
+        row.order if row.order is not None else 0.0,
+        row.order_scope,
+        row.source_key,
+        "" if row.opponent is None else str(row.opponent),
+        "" if row.surface is None else row.surface,
+        "" if row.score is None else row.score,
+        "" if row.won is None else str(int(row.won)),
+        float("-inf") if row.rank is None else row.rank,
+    )
+
+
+def _day_groups(
+    history: Sequence[MatchObservation],
+) -> tuple[tuple[MatchObservation, ...], ...]:
+    """Newest-first calendar-day groups in deterministic storage order."""
+
+    ordered = sorted(history, key=_observation_sort_key, reverse=True)
+    return tuple(
+        tuple(rows)
+        for _, rows in groupby(ordered, key=lambda row: row.date)
+    )
+
+
+def _proven_day_order(
+    rows: Sequence[MatchObservation],
+) -> Optional[tuple[MatchObservation, ...]]:
+    """Newest-first rows only when every tie has unique order evidence."""
+
+    if len(rows) <= 1:
+        return tuple(rows)
+    orders = [row.order for row in rows]
+    scopes = {row.order_scope for row in rows}
+    if (
+        any(order is None for order in orders)
+        or len(set(orders)) != len(orders)
+        or len(scopes) != 1
+    ):
+        return None
+    return tuple(sorted(rows, key=lambda row: float(row.order), reverse=True))
+
+
+def _recent_complete_day_rows(
+    history: Sequence[MatchObservation],
+    limit: int,
+) -> tuple[MatchObservation, ...]:
+    """Take recent evidence without selecting an arbitrary part of a tied day.
+
+    An explicitly ordered day can be truncated at ``limit``.  An ambiguous
+    date-only group is included only when the whole group fits; otherwise the
+    capped sample stops before that day.
+    """
+
+    selected: list[MatchObservation] = []
+    for group in _day_groups(history):
+        remaining = limit - len(selected)
+        if remaining <= 0:
+            break
+        proven = _proven_day_order(group)
+        if proven is not None:
+            selected.extend(proven[:remaining])
+            continue
+        if len(group) > remaining:
+            break
+        selected.extend(group)
+    return tuple(selected)
 
 
 def history_before(
@@ -225,7 +365,7 @@ def history_before(
     return tuple(
         sorted(
             (row for row in history if row.date < ref),
-            key=lambda row: (row.date, row.order),
+            key=_observation_sort_key,
             reverse=True,
         )
     )
@@ -297,24 +437,33 @@ def recent_win_rate(
     max_days: int = 120,
 ) -> float:
     rows = [row for row in _window(history, as_of, max_days) if row.won is not None]
-    rows = rows[:max_matches]
+    rows = list(_recent_complete_day_rows(rows, max_matches))
     return laplace(sum(row.won is True for row in rows), len(rows))
 
 
 def current_streak(history: Sequence[MatchObservation]) -> int:
-    rows = sorted(
-        (row for row in history if row.won is not None),
-        key=lambda row: (row.date, row.order),
-        reverse=True,
-    )
-    if not rows:
-        return 0
-    first = rows[0].won
+    rows = [row for row in history if row.won is not None]
+    first: Optional[bool] = None
     length = 0
-    for row in rows:
-        if row.won is not first:
-            break
-        length += 1
+    for group in _day_groups(rows):
+        proven = _proven_day_order(group)
+        if proven is None:
+            outcomes = {row.won for row in group}
+            # A mixed date-only day has no knowable final result.  It cannot
+            # start or extend a streak without inventing a clock.
+            if len(outcomes) != 1:
+                break
+            sequence = group
+        else:
+            sequence = proven
+        for row in sequence:
+            if first is None:
+                first = row.won
+            if row.won is not first:
+                return length if first else -length
+            length += 1
+    if first is None:
+        return 0
     return length if first else -length
 
 
@@ -405,6 +554,24 @@ def days_since_last_tournament(
     return int((ref - max(previous_weeks)).days)
 
 
+def _unambiguous_latest_rank(
+    rows: Sequence[MatchObservation],
+) -> tuple[Optional[float], Optional[pd.Timestamp]]:
+    ranked = [row for row in rows if row.rank is not None]
+    groups = _day_groups(ranked)
+    if not groups:
+        return None, None
+    latest = groups[0]
+    proven = _proven_day_order(latest)
+    if proven is not None:
+        return proven[0].rank, proven[0].date
+    ranks = {float(row.rank) for row in latest}
+    if len(ranks) == 1:
+        return ranks.pop(), latest[0].date
+    # Conflicting ranks on a date-only tie have no source-neutral anchor.
+    return None, latest[0].date
+
+
 def rank_change(
     history: Sequence[MatchObservation],
     as_of: datetime | pd.Timestamp,
@@ -424,17 +591,19 @@ def rank_change(
     current = _rank(rank_as_of)
     ranked = [row for row in history_before(history, ref) if row.rank is not None]
     if current is None:
-        current = ranked[0].rank if ranked else None
+        current, _ = _unambiguous_latest_rank(ranked)
     if current is None:
         return 0.0
     cutoff = ref - pd.Timedelta(days=days)
     anchors = [row for row in ranked if row.date <= cutoff]
     if not anchors:
         return 0.0
-    anchor = max(anchors, key=lambda row: (row.date, row.order))
-    if (cutoff - anchor.date).total_seconds() > (days / 2.0) * 86_400.0:
+    anchor_rank, anchor_date = _unambiguous_latest_rank(anchors)
+    if anchor_rank is None or anchor_date is None:
         return 0.0
-    return float(anchor.rank) - float(current)
+    if (cutoff - anchor_date).total_seconds() > (days / 2.0) * 86_400.0:
+        return 0.0
+    return float(anchor_rank) - float(current)
 
 
 def rank_volatility(
@@ -451,9 +620,20 @@ def rank_volatility(
 def last_surface(
     history: Sequence[MatchObservation], as_of: datetime | pd.Timestamp
 ) -> Optional[str]:
-    for row in history_before(history, as_of):
-        if row.surface:
-            return row.surface
+    for group in _day_groups(history_before(history, as_of)):
+        with_surface = tuple(row for row in group if row.surface)
+        if not with_surface:
+            continue
+        proven = _proven_day_order(group)
+        if proven is not None:
+            for row in proven:
+                if row.surface:
+                    return row.surface
+        normalized = {str(row.surface).casefold(): row.surface for row in with_surface}
+        if len(normalized) == 1:
+            return next(iter(normalized.values()))
+        # Multiple surfaces on an unordered day have no knowable "last" one.
+        return None
     return None
 
 
@@ -540,10 +720,11 @@ def h2h_features_from_history(
         row for row in history_before(history, as_of)
         if row.opponent == opponent and row.won is not None
     ]
+    recent = _recent_complete_day_rows(rows, 3)
     return h2h_features_from_counts(
         total=len(rows),
         p1_wins=sum(row.won is True for row in rows),
-        recent_p1_results=[bool(row.won) for row in rows[:3]],
+        recent_p1_results=[bool(row.won) for row in recent],
     )
 
 
@@ -554,8 +735,9 @@ def h2h_features_from_frame(
     """H2H summary for a frame already filtered to P1-perspective meetings."""
 
     rows = [row for row in history_before(observations_from_records(frame), as_of) if row.won is not None]
+    recent = _recent_complete_day_rows(rows, 3)
     return h2h_features_from_counts(
         total=len(rows),
         p1_wins=sum(row.won is True for row in rows),
-        recent_p1_results=[bool(row.won) for row in rows[:3]],
+        recent_p1_results=[bool(row.won) for row in recent],
     )

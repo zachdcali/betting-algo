@@ -24,7 +24,7 @@ from base_141_shared import (
     SEMANTICS_ID as SHARED_SEMANTICS_ID,
     as_of_day,
     feature_default as shared_feature_default,
-    h2h_features_from_counts,
+    h2h_features_from_history,
     normalize_player_snapshot,
     observations_from_records,
     player_temporal_features,
@@ -119,14 +119,10 @@ def calculate_temporal_features(
         'surface_career_count': defaultdict(int),  # Unbounded career match count per surface (fixes deque(maxlen=20) cap bug)
         'level_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
         'round_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
-        # Frozen one-direction legacy tracker plus a candidate tracker updated
-        # from both player perspectives.  Keeping these separate prevents the
-        # opt-in parity work from changing promoted historical semantics.
+        # Frozen one-direction legacy tracker. Shared H2H is derived from the
+        # source-neutral match history so tied-day ambiguity uses the kernel's
+        # exact same policy as live serving.
         'h2h_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
-        'shared_h2h_stats': (
-            defaultdict(lambda: {'total': 0, 'wins': 0, 'recent': deque(maxlen=3)})
-            if use_shared_semantics else None
-        ),
     })
     
     # Initialize new feature columns
@@ -234,7 +230,15 @@ def calculate_temporal_features(
             }
             if use_shared_semantics:
                 match_info['score'] = update['score']
-                match_info['order'] = update['match_order']
+                match_info['source_key'] = update['source_key']
+                if update['chronological_order'] is not None:
+                    match_info['chronological_order'] = update['chronological_order']
+                    match_info['chronological_order_scope'] = (
+                        update['chronological_order_scope'] or '__global__'
+                    )
+                elif update['round_ord'] is not None:
+                    match_info['round_ord'] = update['round_ord']
+                    match_info['order_scope'] = update['tourney_id']
             stats['match_history'].append(match_info)
             stats['rank_history'].append(current_rank)
             stats['last_match_date'] = update['match_date']
@@ -255,12 +259,6 @@ def calculate_temporal_features(
                 legacy_h2h = stats['h2h_stats'][opponent_id]
                 legacy_h2h['total'] += 1
                 legacy_h2h['wins'] += int(won)
-
-            if use_shared_semantics:
-                shared_h2h = stats['shared_h2h_stats'][opponent_id]
-                shared_h2h['total'] += 1
-                shared_h2h['wins'] += int(won)
-                shared_h2h['recent'].append(bool(won))
 
     def _flush_pending_shared_updates():
         nonlocal pending_shared_updates
@@ -467,11 +465,10 @@ def calculate_temporal_features(
         
         # === PHASE 2: HEAD-TO-HEAD ===
         if use_shared_semantics:
-            h2h_state = player_stats[p1_id]['shared_h2h_stats'][p2_id]
-            h2h = h2h_features_from_counts(
-                total=h2h_state['total'],
-                p1_wins=h2h_state['wins'],
-                recent_p1_results=list(reversed(h2h_state['recent'])),
+            h2h = h2h_features_from_history(
+                observations_from_records(player_stats[p1_id]['match_history']),
+                p2_id,
+                match_date,
             )
             for feature_name, value in h2h.items():
                 df_sorted.loc[row.name, feature_name] = value
@@ -545,6 +542,25 @@ def calculate_temporal_features(
             'round_name': round_name,
             'match_result': row['Player1_Wins'],
             'score': row.get('score'),
+            'source_key': (
+                str(row.get('match_id'))
+                if pd.notna(row.get('match_id')) and str(row.get('match_id')).strip()
+                else (
+                    f"{row.get('tourney_id', '')}:{p1_id}:{p2_id}:"
+                    f"{row.get('Player1_Wins')}:{row.get('score', '')}"
+                )
+            ),
+            'chronological_order': (
+                row.get('chronological_order')
+                if pd.notna(row.get('chronological_order')) else None
+            ),
+            'chronological_order_scope': (
+                row.get('chronological_order_scope')
+                if pd.notna(row.get('chronological_order_scope')) else None
+            ),
+            'round_ord': (
+                row.get('round_ord') if pd.notna(row.get('round_ord')) else None
+            ),
         }
         if use_shared_semantics:
             pending_shared_updates.append(update)

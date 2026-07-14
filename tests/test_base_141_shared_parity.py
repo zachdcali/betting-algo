@@ -8,12 +8,13 @@ sources to prove it cannot alter any of the 141 ordered fields.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 import math
 import os
 from pathlib import Path
 import sys
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -33,12 +34,17 @@ for path in (
 
 from feature_contract import normalize_feature_vector, vector_sha256  # noqa: E402
 from features.base_141_shared import (  # noqa: E402
+    CanonicalDateError,
     SEMANTICS_ID as SHARED_SEMANTICS_ID,
     count_matches,
+    current_streak,
     form_trend,
     h2h_features_from_counts,
+    h2h_features_from_frame,
+    last_surface,
     observations_from_records,
     player_temporal_features,
+    rank_change,
     rank_volatility,
     sets_played,
     surface_transition_flag,
@@ -246,7 +252,12 @@ class FixtureScraper:
         return None
 
 
-def _live_vector(*, include_future: bool = False) -> dict[str, float]:
+def _live_vector(
+    *,
+    include_future: bool = False,
+    match_date=AS_OF,
+    canonical_match_date=None,
+) -> dict[str, float]:
     players = FIXTURE["players"]
     calc = TAFeatureCalculator(
         FixtureScraper(include_future=include_future),
@@ -264,7 +275,8 @@ def _live_vector(*, include_future: bool = False) -> dict[str, float]:
     features = calc.build_141_features_from_slugs(
         slug1=players["alpha"]["slug"],
         slug2=players["beta"]["slug"],
-        match_date=AS_OF,
+        match_date=match_date,
+        canonical_match_date=canonical_match_date,
         surface=FIXTURE["context"]["surface"],
         tournament_level=FIXTURE["context"]["tournament_level"],
         draw_size=FIXTURE["context"]["draw_size"],
@@ -455,6 +467,171 @@ def test_full_missing_profile_preprocessing_is_finite_and_live_equivalent(
     live = {name: float(live_features[name]) for name in EXACT_141_FEATURES}
     _assert_structurally_valid(live)
     assert historical == live
+
+
+def test_ranked_missing_points_and_duplicate_name_use_shared_500_not_legacy_curve(
+    tmp_path, monkeypatch
+):
+    raw = pd.DataFrame([{
+        "data_source": "missing_points_fixture",
+        "tourney_id": "missing-points-1",
+        "tourney_name": "Missing Points Cup",
+        "tourney_date": 20260720,
+        "surface": "Hard",
+        "draw_size": 32,
+        "tourney_level": "A",
+        "match_num": 1,
+        "round": "R32",
+        "score": "",
+        "best_of": 3,
+        "winner_id": 11,
+        "winner_name": "Known Alpha",
+        "winner_hand": "U",
+        "winner_ht": 180,
+        "winner_ioc": np.nan,
+        "winner_age": 25,
+        "winner_seed": np.nan,
+        "winner_entry": np.nan,
+        "winner_rank": 250,
+        "winner_rank_points": np.nan,
+        "loser_id": 22,
+        "loser_name": "Known Beta",
+        "loser_hand": "U",
+        "loser_ht": 180,
+        "loser_ioc": np.nan,
+        "loser_age": 25,
+        "loser_seed": np.nan,
+        "loser_entry": np.nan,
+        "loser_rank": 250,
+        "loser_rank_points": np.nan,
+    }])
+    with monkeypatch.context() as local_patch:
+        local_patch.setattr(
+            preprocess_module.pd,
+            "read_csv",
+            lambda *_args, **_kwargs: raw.copy(),
+        )
+        historical_frame, feature_names = preprocess_jeffsackmann_data_for_ml(
+            output_path=tmp_path / "base_141_shared_missing_points.csv",
+            feature_semantics_id=SHARED_SEMANTICS_ID,
+        )
+    assert feature_names == EXACT_141_FEATURES
+    historical = {
+        name: float(historical_frame.iloc[0][name])
+        for name in EXACT_141_FEATURES
+    }
+    assert historical["Player1_Rank"] == 250.0
+    assert historical["Player2_Rank"] == 250.0
+    assert historical["Player1_Rank_Points"] == 500.0
+    assert historical["Player2_Rank_Points"] == 500.0
+
+    class KnownRankScraper:
+        @staticmethod
+        def get_player_profile(slug, **_kwargs):
+            return {
+                "name": "Known Alpha" if slug == "known-alpha" else "Known Beta",
+                "slug": slug,
+                "hand": "U",
+                "height_cm": 180,
+                "country": None,
+                "birthdate": None,
+                "age": 25,
+                "current_rank": 250,
+                "player_id": 11 if slug == "known-alpha" else 22,
+            }
+
+        @staticmethod
+        def get_player_matches(*_args, **_kwargs):
+            return pd.DataFrame()
+
+        @staticmethod
+        def get_upcoming_match(*_args, **_kwargs):
+            return None
+
+    curve = pd.DataFrame({
+        "player_name": [f"Unrelated Player {idx}" for idx in range(1, 61)],
+        "rank": list(range(1, 61)),
+        "points": [2000 - idx * 10 for idx in range(1, 61)],
+    })
+    ambiguous_curve = pd.concat([
+        curve,
+        pd.DataFrame([
+            {"player_name": "Known Alpha", "rank": 250, "points": 777},
+            {"player_name": "Known Alpha", "rank": 250, "points": 777},
+        ]),
+    ], ignore_index=True)
+    monkeypatch.setattr(ta_feature_module, "needs_stitching", lambda *_args: False)
+    monkeypatch.setattr(
+        ta_feature_module, "batch_get_profiles", lambda *_args, **_kwargs: {}
+    )
+
+    def _build(semantics_id, rankings=curve):
+        calc = TAFeatureCalculator(
+            KnownRankScraper(), feature_semantics_id=semantics_id
+        )
+        calc.use_store = False
+        calc._atp_rankings = rankings.copy()
+        return calc.build_141_features_from_slugs(
+            slug1="known-alpha",
+            slug2="known-beta",
+            match_date=datetime(2026, 7, 20, 12),
+            surface="Hard",
+            tournament_level="A",
+            draw_size=32,
+            round_code="R32",
+            force_refresh=False,
+            persist=False,
+            session_cache={},
+            match_date_is_explicit=True,
+        )
+
+    live_candidate_features = _build(
+        SHARED_SEMANTICS_ID,
+        rankings=ambiguous_curve,
+    )
+    live_candidate = {
+        name: float(live_candidate_features[name]) for name in EXACT_141_FEATURES
+    }
+    _assert_structurally_valid(historical)
+    _assert_structurally_valid(live_candidate)
+    assert live_candidate == historical
+
+    duplicate_one_null = pd.concat([
+        curve,
+        pd.DataFrame([
+            {"player_name": "Known Alpha", "rank": 250, "points": 777},
+            {"player_name": "Known Alpha", "rank": 250, "points": np.nan},
+        ]),
+    ], ignore_index=True)
+    live_duplicate_one_null = _build(
+        SHARED_SEMANTICS_ID,
+        rankings=duplicate_one_null,
+    )
+    assert float(live_duplicate_one_null["Player1_Rank_Points"]) == 500.0
+
+    stable_id_rankings = pd.DataFrame([
+        {"player_id": 11, "player_name": "Known Alpha", "rank": 250, "points": 777},
+        {"player_id": 99, "player_name": "Known Alpha", "rank": 250, "points": 888},
+        {"player_id": 22, "player_name": "Known Beta", "rank": 250, "points": 555},
+    ])
+    live_stable_ids = _build(
+        SHARED_SEMANTICS_ID,
+        rankings=stable_id_rankings,
+    )
+    assert float(live_stable_ids["Player1_Rank_Points"]) == 777.0
+    assert float(live_stable_ids["Player2_Rank_Points"]) == 555.0
+
+    legacy = _build(LIVE_SEMANTICS_ID)
+    expected_curve_edge = float(curve.sort_values("rank").iloc[-1]["points"])
+    assert expected_curve_edge != 500.0
+    assert float(legacy["Player1_Rank_Points"]) == expected_curve_edge
+    assert float(legacy["Player2_Rank_Points"]) == expected_curve_edge
+
+    legacy_duplicate_name = _build(
+        LIVE_SEMANTICS_ID,
+        rankings=ambiguous_curve,
+    )
+    assert float(legacy_duplicate_name["Player1_Rank_Points"]) == 777.0
 
 
 def test_chronological_golden_is_field_exact_across_all_141_features():
@@ -668,6 +845,104 @@ def test_candidate_windows_are_calendar_day_granular_across_adapter_clocks():
     assert live_kickoff["sets_14d"] == 4.0
 
 
+def test_aware_kickoff_cannot_infer_event_date_without_explicit_canonical_date():
+    naive_eastern_date = datetime(2026, 7, 20, 23, 30)
+    aware_eastern = naive_eastern_date.replace(
+        tzinfo=ZoneInfo("America/New_York")
+    )
+    aware_utc = aware_eastern.astimezone(ZoneInfo("UTC"))
+    assert aware_utc.date() == date(2026, 7, 21)
+
+    # The kernel accepts the canonical event-local day but rejects both clock
+    # representations; converting either clock would silently choose a date.
+    player_temporal_features((), naive_eastern_date, "Clay", rank_as_of=40)
+    for clock in (aware_eastern, aware_utc):
+        with pytest.raises(CanonicalDateError, match="canonical event-local date"):
+            player_temporal_features((), clock, "Clay", rank_as_of=40)
+        aware_historical = _target_row(0)
+        aware_historical["inferred_match_date"] = clock
+        with pytest.raises(ValueError, match="match_start_at_utc"):
+            calculate_temporal_features(
+                pd.DataFrame([aware_historical]),
+                feature_semantics_id=SHARED_SEMANTICS_ID,
+            )
+        with pytest.raises(ValueError, match="match_start_at_utc"):
+            _live_vector(match_date=clock)
+
+    canonical = date(2026, 7, 20)
+    expected = _live_vector(match_date=naive_eastern_date)
+    assert _live_vector(
+        match_date=aware_eastern,
+        canonical_match_date=canonical,
+    ) == expected
+    assert _live_vector(
+        match_date=aware_utc,
+        canonical_match_date=canonical,
+    ) == expected
+
+
+def test_pure_kernel_tied_day_policy_is_neutral_unless_order_is_proven():
+    tied = pd.DataFrame([
+        {
+            "date": "2026-07-10",
+            "event": f"Tie {idx}",
+            "opp_name": "Beta Two",
+            "result": result,
+            "surface": surface,
+            "rank": rank,
+            "score": score,
+        }
+        for idx, (result, surface, rank, score) in enumerate((
+            ("W", "Clay", 10, "6-1 6-1"),
+            ("W", "Hard", 20, "6-2 6-2"),
+            ("W", "Clay", 10, "6-3 6-3"),
+            ("L", "Hard", 20, "3-6 3-6"),
+        ))
+    ])
+    forward = observations_from_records(tied)
+    reverse = observations_from_records(tied.iloc[::-1].reset_index(drop=True))
+    for history in (forward, reverse):
+        assert current_streak(history) == 0
+        assert last_surface(history, datetime(2026, 7, 11)) is None
+    assert h2h_features_from_frame(tied, datetime(2026, 7, 11)) == (
+        h2h_features_from_frame(tied.iloc[::-1], datetime(2026, 7, 11))
+    )
+    assert h2h_features_from_frame(
+        tied, datetime(2026, 7, 11)
+    )["H2H_Recent_P1_Advantage"] == 0.0
+    assert rank_change(forward, datetime(2026, 8, 9), 30, 5) == 0.0
+    assert rank_change(reverse, datetime(2026, 8, 9), 30, 5) == 0.0
+
+    explicitly_ordered = tied.iloc[:2].copy()
+    explicitly_ordered.loc[explicitly_ordered.index[0], "result"] = "L"
+    explicitly_ordered["event"] = "One Ordered Event"
+    explicitly_ordered["round_ord"] = [1, 2]
+    ordered_forward = observations_from_records(explicitly_ordered)
+    ordered_reverse = observations_from_records(explicitly_ordered.iloc[::-1])
+    for history in (ordered_forward, ordered_reverse):
+        assert current_streak(history) == 1
+        assert last_surface(history, datetime(2026, 7, 11)) == "Hard"
+        assert rank_change(history, datetime(2026, 8, 9), 30, 5) == 15.0
+
+    different_events = explicitly_ordered.copy()
+    different_events["event"] = ["Event A", "Event B"]
+    different_scope_history = observations_from_records(different_events)
+    assert current_streak(different_scope_history) == 0
+    assert last_surface(different_scope_history, datetime(2026, 7, 11)) is None
+    assert rank_change(
+        different_scope_history, datetime(2026, 8, 9), 30, 5
+    ) == 0.0
+
+    misleading_order = explicitly_ordered.drop(columns=["round_ord"]).copy()
+    misleading_order["order"] = [1, 2]
+    misleading_forward = observations_from_records(misleading_order)
+    misleading_reverse = observations_from_records(misleading_order.iloc[::-1])
+    for history in (misleading_forward, misleading_reverse):
+        assert current_streak(history) == 0
+        assert last_surface(history, datetime(2026, 7, 11)) is None
+        assert rank_change(history, datetime(2026, 8, 9), 30, 5) == 0.0
+
+
 def test_equal_day_historical_rows_share_one_snapshot_and_are_permutation_invariant():
     prior = {
         "id": "prior",
@@ -761,6 +1036,154 @@ def test_equal_day_historical_rows_share_one_snapshot_and_are_permutation_invari
     # The next day sees both results exactly once, after the atomic day flush.
     assert forward.loc["next-day", "P1_Level_Matches_Career"] == 3
     assert forward.loc["next-day", "H2H_Total_Matches"] == 2
+
+
+def test_live_tied_day_forward_reverse_equals_historical_next_day(monkeypatch):
+    prior = {
+        "id": "prior-live",
+        "date": "2026-06-29",
+        "player1": "alpha",
+        "player2": "gamma",
+        "player1_wins": 1,
+        "p1_rank": 45,
+        "p2_rank": 190,
+        "surface": "Clay",
+        "score": "6-4 6-4",
+    }
+    tied = [
+        {
+            "id": f"live-tie-{idx}",
+            "date": "2026-07-06",
+            "player1": "alpha",
+            "player2": "beta",
+            "player1_wins": result,
+            "p1_rank": 42,
+            "p2_rank": 115,
+            "surface": surface,
+            "score": score,
+        }
+        for idx, (result, surface, score) in enumerate((
+            (1, "Clay", "6-1 6-1"),
+            (1, "Hard", "6-2 6-2"),
+            (1, "Clay", "6-3 6-3"),
+            (0, "Hard", "3-6 3-6"),
+        ))
+    ]
+    target = {
+        "id": "live-next-day",
+        "date": "2026-07-07",
+        "player1": "alpha",
+        "player2": "beta",
+        "player1_wins": 0,
+        "p1_rank": 40,
+        "p2_rank": 110,
+        "surface": "Clay",
+        "score": "",
+    }
+    historical_rows = [_historical_row(prior, 0)]
+    historical_rows.extend(_historical_row(match, 1) for match in tied)
+    historical_rows.append(_historical_row(target, 2))
+    historical_frame = calculate_temporal_features(
+        pd.DataFrame(historical_rows),
+        feature_semantics_id=SHARED_SEMANTICS_ID,
+    )
+    historical_row = historical_frame.loc[
+        historical_frame["tourney_id"] == target["id"]
+    ].iloc[0]
+    historical = {
+        name: float(historical_row[name]) for name in EXACT_141_FEATURES
+    }
+
+    players = FIXTURE["players"]
+
+    class TiedDayScraper(FixtureScraper):
+        def __init__(self, *, reverse: bool):
+            super().__init__()
+            self.reverse = reverse
+
+        def get_player_matches(self, slug, years=None, **_kwargs):
+            del years
+            player_key = self.by_slug[slug]
+            day_rows = list(reversed(tied)) if self.reverse else list(tied)
+            ledger = day_rows + [prior]
+            rows = []
+            for match in ledger:
+                if player_key not in (match["player1"], match["player2"]):
+                    continue
+                own_is_p1 = match["player1"] == player_key
+                opponent_key = match["player2"] if own_is_p1 else match["player1"]
+                opponent = players[opponent_key]
+                won = (
+                    bool(match["player1_wins"])
+                    if own_is_p1 else not bool(match["player1_wins"])
+                )
+                rows.append({
+                    "date": pd.Timestamp(match["date"]),
+                    "event": f"Ambiguity {match['id']}",
+                    "surface": match["surface"],
+                    "round": "R32",
+                    "level": "A",
+                    "rank": float(
+                        match["p1_rank"] if own_is_p1 else match["p2_rank"]
+                    ),
+                    "opp_name": opponent["name"],
+                    "opp_rank": float(
+                        match["p2_rank"] if own_is_p1 else match["p1_rank"]
+                    ),
+                    "opp_hand": opponent["hand"],
+                    "opp_country": opponent["country"],
+                    "score": match["score"],
+                    "result": "W" if won else "L",
+                    "source": "date_only_fixture",
+                })
+            return pd.DataFrame(rows)
+
+        @staticmethod
+        def get_upcoming_match(*_args, **_kwargs):
+            return {"date": "20260707", "round": "R32", "surface": "Clay"}
+
+    monkeypatch.setattr(ta_feature_module, "needs_stitching", lambda *_args: False)
+
+    def _build_live(reverse):
+        calc = TAFeatureCalculator(
+            TiedDayScraper(reverse=reverse),
+            feature_semantics_id=SHARED_SEMANTICS_ID,
+        )
+        calc.use_store = False
+        calc._atp_rankings = pd.DataFrame([
+            {
+                "player_name": player["name"],
+                "rank": player["current_rank"],
+                "points": player["rank_points"],
+            }
+            for player in players.values()
+        ])
+        features = calc.build_141_features_from_slugs(
+            slug1=players["alpha"]["slug"],
+            slug2=players["beta"]["slug"],
+            match_date=datetime(2026, 7, 7, 23, 30),
+            surface="Clay",
+            tournament_level="A",
+            draw_size=32,
+            round_code="R32",
+            expected_event_title="Ambiguity Cup",
+            force_refresh=False,
+            persist=False,
+            session_cache={},
+            match_date_is_explicit=True,
+        )
+        return {name: float(features[name]) for name in EXACT_141_FEATURES}
+
+    live_forward = _build_live(False)
+    live_reverse = _build_live(True)
+    _assert_structurally_valid(historical)
+    _assert_structurally_valid(live_forward)
+    assert live_forward == live_reverse == historical
+    assert historical["P1_WinStreak_Current"] == 0.0
+    assert historical["P2_WinStreak_Current"] == 0.0
+    assert historical["Surface_Transition_Flag"] == 0.0
+    assert historical["H2H_Total_Matches"] == 4.0
+    assert historical["H2H_Recent_P1_Advantage"] == 0.0
 
 
 def test_half_open_windows_score_fallback_and_population_volatility():

@@ -7,7 +7,7 @@ Returns the exact 141 features expected by NN-141 model.
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import os
@@ -34,6 +34,7 @@ from history_stitch import (
 )
 from base_141_shared import (
     SEMANTICS_ID as SHARED_SEMANTICS_ID,
+    as_of_day,
     feature_default as shared_feature_default,
     h2h_features_from_frame as shared_h2h_features_from_frame,
     normalize_player_snapshot,
@@ -886,6 +887,7 @@ class TAFeatureCalculator:
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
         metadata_source: str = "resolved",
+        canonical_match_date: Optional[datetime | date | str] = None,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract data.
@@ -904,6 +906,8 @@ class TAFeatureCalculator:
                 absolute date) and should not be overridden by the TA round-offset heuristic.
             metadata_source: Source label for tournament metadata. Fallback/default sources
                 may be overridden by TA's explicit upcoming-match surface.
+            canonical_match_date: Candidate-only timezone-naive event-local
+                date. Required when ``match_date`` is timezone-aware.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -965,6 +969,7 @@ class TAFeatureCalculator:
             session_cache=session_cache,
             match_date_is_explicit=match_date_is_explicit,
             metadata_source=metadata_source,
+            canonical_match_date=canonical_match_date,
         )
 
     def build_141_features_from_slugs(
@@ -982,6 +987,7 @@ class TAFeatureCalculator:
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
         metadata_source: str = "resolved",
+        canonical_match_date: Optional[datetime | date | str] = None,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract slugs.
@@ -996,6 +1002,8 @@ class TAFeatureCalculator:
             tournament_level: Level code (G/M/A/C/25/15)
             draw_size: Tournament draw size
             round_code: Round code (R32/QF/SF/F/etc)
+            canonical_match_date: Candidate-only timezone-naive event-local
+                date. Required when ``match_date`` is timezone-aware.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -1003,9 +1011,24 @@ class TAFeatureCalculator:
         Returns:
             Dict with exactly 143 features in correct order
         """
-        when = match_date or datetime.utcnow()
-        surface = (surface or "Hard").strip().title()
         use_shared_semantics = self.feature_semantics_id == SHARED_SEMANTICS_ID
+        if use_shared_semantics:
+            candidate_date = (
+                canonical_match_date
+                if canonical_match_date is not None
+                else match_date
+            )
+            if candidate_date is None:
+                raise ValueError(
+                    "base_141_shared requires a provenance-backed, timezone-naive "
+                    "canonical_match_date (or canonical timezone-naive match_date)"
+                )
+            # A clock-bearing aware ``match_date`` may be retained by callers as
+            # match_start_at_utc lineage, but never determines the event day.
+            when = as_of_day(candidate_date).to_pydatetime()
+        else:
+            when = match_date or datetime.utcnow()
+        surface = (surface or "Hard").strip().title()
 
         # Get profiles: store-backed by default (no TA at predict time), else
         # Tennis Abstract. Store outage -> loud TA fallback for the whole run.
@@ -1122,8 +1145,70 @@ class TAFeatureCalculator:
 
         _semantic_defaults: list = []  # Track meaningful defaults that bypass _default_for()
 
-        def _atp_points(display_name: str, ta_rank: float, player_label: str) -> float:
+        def _identity_key(value) -> Optional[str]:
+            if value is None or pd.isna(value):
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                numeric = float(text)
+            except (TypeError, ValueError, OverflowError):
+                return text
+            if np.isfinite(numeric) and numeric.is_integer():
+                return str(int(numeric))
+            return text
+
+        def _exact_observed_points(
+            display_name: str,
+            player_id=None,
+        ) -> Optional[float]:
+            rankings = self._atp_rankings
+            if (
+                rankings is None
+                or rankings.empty
+                or 'player_name' not in rankings.columns
+                or 'points' not in rankings.columns
+            ):
+                return None
+            stable_id = _identity_key(player_id)
+            if stable_id is not None and 'player_id' in rankings.columns:
+                identity_mask = rankings['player_id'].map(_identity_key).eq(stable_id)
+            else:
+                target = self._norm(display_name)
+                identity_mask = rankings['player_name'].astype(str).map(self._norm).eq(target)
+            exact = rankings.loc[identity_mask, 'points']
+            # Identity uniqueness is decided before inspecting the points cell.
+            # Otherwise two same-name/ID rows could be accepted merely because
+            # one duplicate happened to have null or malformed points.
+            if int(identity_mask.sum()) != 1:
+                return None
+            values = pd.to_numeric(exact, errors='coerce').dropna()
+            values = values[np.isfinite(values) & (values >= 0)]
+            # Duplicate full-name rows are identity-ambiguous even when the
+            # point values happen to match. Stable-ID evidence follows the same
+            # one-current-observation rule.
+            return float(values.iloc[0]) if len(values) == 1 else None
+
+        def _atp_points(
+            display_name: str,
+            ta_rank: float,
+            player_label: str,
+            player_id=None,
+        ) -> float:
             """Look up ATP points from rankings cache with rank cross-validation."""
+            if use_shared_semantics:
+                observed = _exact_observed_points(display_name, player_id)
+                if observed is not None:
+                    return observed
+                fallback = 0.0 if ta_rank >= 999 else 500.0
+                _semantic_defaults.append(
+                    f'{player_label}_Rank_Points={int(fallback)}(shared_missing_exact)'
+                )
+                return fallback
+
+            # Frozen live-legacy behavior: permissive name lookup followed by
+            # curve interpolation when a ranked player has no matched points.
             pts = get_player_points(display_name, self._atp_rankings)
             if pts is not None:
                 atp_rank = get_player_rank(display_name, self._atp_rankings)
@@ -1211,7 +1296,12 @@ class TAFeatureCalculator:
             'hand': hand1,
             'country': profile1.get('country'),
             'rank': float(profile1['current_rank']),
-            'rank_points': _atp_points(p1_display, float(profile1['current_rank']), 'P1'),
+            'rank_points': _atp_points(
+                p1_display,
+                float(profile1['current_rank']),
+                'P1',
+                profile1.get('player_id'),
+            ),
         }
         s2 = {
             'height': h2,
@@ -1219,7 +1309,12 @@ class TAFeatureCalculator:
             'hand': hand2,
             'country': profile2.get('country'),
             'rank': float(profile2['current_rank']),
-            'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
+            'rank_points': _atp_points(
+                p2_display,
+                float(profile2['current_rank']),
+                'P2',
+                profile2.get('player_id'),
+            ),
         }
         if use_shared_semantics:
             s1 = normalize_player_snapshot(**s1)

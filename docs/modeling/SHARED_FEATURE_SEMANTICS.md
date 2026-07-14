@@ -22,13 +22,16 @@ below, and an explicit registry promotion.
 
 ## Formula contract
 
-Both adapters normalize evidence and the prediction reference to a calendar
-day before comparison (timezone-aware inputs are converted to UTC first).
-Sackmann's date-only midnight and a live
-kickoff clock on that same day are therefore equivalent. All historical
-evidence is evaluated strictly before the prediction day, and rolling windows
-are half-open: `[as_of_day - window, as_of_day)`. A match on the prediction day
-is never evidence for another match that day.
+Both adapters normalize provenance-backed, timezone-naive event dates to a
+calendar day before comparison. A timezone-aware value is a kickoff instant,
+not an event-local date: the kernel rejects it rather than UTC-normalizing it
+and silently moving a late-night match to another day. Callers with an aware
+kickoff must retain it separately as `match_start_at_utc` lineage and provide a
+timezone-naive `canonical_match_date`. A time component on an explicitly
+canonical, naive event-local value is discarded. All historical evidence is
+evaluated strictly before the prediction day, and rolling windows are
+half-open: `[as_of_day - window, as_of_day)`. A match on the prediction day is
+never evidence for another match that day.
 
 | Field family | `base_141_shared@1.0.0` behavior |
 | --- | --- |
@@ -36,18 +39,29 @@ is never evidence for another match that day.
 | Activity | Match and surface counts use the same half-open as-of windows in both adapters. Career surface experience counts all prior known matches; it is not capped to an arbitrary number of days. |
 | `Sets_14d` | Sum parseable set-score tokens inside the 14-day window. Walkovers/defaults contribute zero. A genuinely absent or unparseable score uses the explicit historical estimate of `2.5` sets for that row. |
 | Form trend | Exponentially weighted win share across every valid result in the 30-day window with weight `exp(-age_days / 15)`. The constant is a 15-day exponential time constant, not a mathematical 15-day half-life. Zero observations returns `0.5`; one or two observations are not discarded. |
-| Rank change | `rank_at_or_before_cutoff - rank_as_of_ref`; positive means ranking improved. The cutoff anchor must be no more than half the requested lookback older than the cutoff. |
+| Rank change | `rank_at_or_before_cutoff - rank_as_of_ref`; positive means ranking improved. The cutoff anchor must be no more than half the requested lookback older than the cutoff. Conflicting ranks on an unordered tied day produce neutral `0`, not an arbitrary anchor. |
 | Rank volatility | Population standard deviation (`ddof=0`) over ranks in the 90-day half-open window, requiring at least three valid observations; otherwise `0.0`. |
 | First surface | No prior surface is unknown and neutral. A transition is flagged only when at least one known last surface differs from the current surface. |
 | Career H2H | Counts and win rate are always from Player 1's perspective. Career win rate uses neutral-prior Laplace smoothing with `alpha=3`. |
-| Recent H2H | Use the newest three P1-perspective meetings. Advantage is `Laplace(P1 wins, n, alpha=3) - 0.5`, including when only one meeting exists. |
+| Recent H2H | Use up to the newest three P1-perspective meetings. Advantage is `Laplace(P1 wins, n, alpha=3) - 0.5`, including when only one meeting exists. A capped sample never takes an arbitrary subset of an unordered tied-day group. |
 
 Historical rows with the same inferred calendar day read one immutable
-pre-day state. Their results are applied as one deterministic batch only after
-every row for that day has been calculated. This prevents intra-day leakage
-through activity, career surface/level/round counters, form/streak, left-handed
-opponent records, and H2H. Tied source order is resolved deterministically so
-permuting equal-day input rows cannot change the next day's vector.
+pre-day state. Their results are applied as one batch only after every row for
+that day has been calculated. This prevents intra-day leakage through activity,
+career surface/level/round counters, form/streak, left-handed opponent records,
+and H2H.
+
+Within a historical day, global `chronological_order` or retained `round_ord`
+within one event is used only when every row has unique, comparable order
+evidence. Round ordinals from different events are not comparable. A DataFrame
+position, bare `order`/`match_num`, or `match_id` is never treated as a clock;
+`match_id` is retained
+only as stable identity. Without proven order, commutative fields consume the
+whole day, a mixed-outcome latest day yields neutral streak `0`, mixed latest
+surfaces yield unknown last surface, conflicting tied ranks yield no rank
+anchor, and capped recent-form/H2H samples include complete day groups only.
+This ambiguity policy is deterministic, source-neutral, and invariant to input
+row order without guessing a match time.
 
 The candidate's profile missingness contract is also shared and finite:
 
@@ -55,17 +69,22 @@ The candidate's profile missingness contract is also shared and finite:
 | --- | --- |
 | missing/nonpositive rank | `999` |
 | missing rank points with missing/unranked rank | `0` |
-| missing rank points for an otherwise ranked player | `500` |
+| missing rank points for an otherwise ranked player | `500`; never interpolate from the current rank curve |
 | missing/invalid height | `180 cm` |
 | missing/invalid age | `25 years` |
 | missing/unknown hand | `U` |
 | missing/unrecognized country | `Other` one-hot |
 
 Historical preprocessing applies those values before calculating rank, height,
-age, and points differences/averages/ratios. Both adapters then apply the same
-finite fallback to any remaining nonnumeric/nonfinite ordered value and require
-all 141 values plus the structural one-hot groups to validate before the
-candidate output is accepted.
+age, and points differences/averages/ratios. Live candidate serving accepts
+rank points only from exactly one qualifying stable-ID row (when available) or
+exact normalized full-name row. Duplicate exact-name rows remain
+identity-ambiguous even when their point values are identical;
+a populated but unrelated current-ranking curve does not become evidence.
+Legacy live interpolation remains frozen outside the candidate. Both candidate
+adapters then apply the same finite fallback to any remaining
+nonnumeric/nonfinite ordered value and require all 141 values plus the
+structural one-hot groups to validate before output is accepted.
 
 The remaining representation fields retain their existing definitions in the
 candidate adapters. The golden test also checks their full ordered output so a
@@ -89,11 +108,21 @@ path and fails closed if that path aliases the active legacy
 hard link, or same inode. It emits the 141 base fields in `schema_141.json`
 order and does not currently combine the `performance_v1` side-feature set.
 
-Live candidate calculations opt in with:
+Live candidate calculations opt in and supply a canonical event date with:
 
 ```python
-TAFeatureCalculator(feature_semantics_id="base_141_shared@1.0.0")
+calculator = TAFeatureCalculator(
+    feature_semantics_id="base_141_shared@1.0.0",
+)
+calculator.build_141_features(
+    ...,
+    canonical_match_date="2026-07-20",  # timezone-naive event-local date
+)
 ```
+
+If `match_date` is already a provenance-backed timezone-naive canonical value,
+the separate keyword may be omitted. A timezone-aware `match_date` is rejected
+unless `canonical_match_date` is also supplied.
 
 The no-argument live constructor remains on `ta_live_legacy@3.0.0`.
 
@@ -117,8 +146,15 @@ that one ledger independently through:
 - a real full-preprocessing row with missing rank/points/height/age/hand/country
   that remains finite and is field-exact against the live profile-only adapter;
 - neutral first-history rust behavior in both adapters;
-- equal-day snapshot isolation and input-permutation invariance;
-- date-only historical midnight parity with a clocked live kickoff;
+- equal-day snapshot isolation plus historical and actual live-adapter
+  forward/reverse permutation invariance for the complete next-day vector;
+- rejection of late-night aware Eastern and UTC kickoff representations unless
+  a separate canonical event-local date is supplied;
+- date-only historical midnight parity with a timezone-naive canonical live
+  match date;
+- ranked/missing-points full-adapter parity against an unrelated populated rank
+  curve plus duplicate same-points exact-name refusal, while legacy assertions
+  pin unchanged exact lookup and interpolation behavior;
 - stable-ID H2H selection, exact-full-name fallback, and surname-collision and
   ambiguity refusal fixtures;
 - hard-link and case-folded active-output alias refusal;
@@ -154,6 +190,8 @@ activation and cannot be solved honestly by formula code alone:
    offset-neutral Monday/R32 context. Qualifiers, non-Monday starts, and
    two-week tournaments still depend on upstream round-date inference. Add
    official-date chronological fixtures for those event shapes; inferred
-   Mondays may not be promoted into canonical history.
+   Mondays may not be promoted into canonical history. An aware kickoff can
+   never fill this gap: upstream must separately supply the canonical
+   event-local date while preserving `match_start_at_utc` as clock lineage.
 
 No model was retrained or promoted as part of this candidate work.
