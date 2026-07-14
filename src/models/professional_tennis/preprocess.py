@@ -1,14 +1,33 @@
 import pandas as pd
 import numpy as np
+import json
 import os
 import sys
 from datetime import datetime
 from collections import defaultdict, deque
 from pathlib import Path
 
-# Import shared round offset function
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'production', 'features'))
+# Import production feature contracts shared by training and serving.
+_PRODUCTION_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'production'
+)
+_FEATURES_DIR = os.path.join(_PRODUCTION_DIR, 'features')
+_ACTIVE_LEGACY_DATASET = (
+    Path(__file__).resolve().parents[3]
+    / 'data' / 'JeffSackmann' / 'jeffsackmann_ml_ready_SURFACE_FIX.csv'
+).resolve()
+for _path in (_PRODUCTION_DIR, _FEATURES_DIR):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 from round_offsets import get_round_day_offset
+from base_141_shared import (
+    SEMANTICS_ID as SHARED_SEMANTICS_ID,
+    h2h_features_from_counts,
+    observations_from_records,
+    player_temporal_features,
+    surface_transition_flag as shared_surface_transition_flag,
+)
+from versioning import HISTORICAL_SEMANTICS_ID
 
 def laplace(wins: int, total: int, alpha: float = 3.0) -> float:
     """Bayesian (Laplace) smoothing: (wins + α/2) / (total + α). Returns 0.5 when total=0."""
@@ -40,12 +59,19 @@ def get_feature_columns(df):
     
     return feature_cols
 
-def calculate_temporal_features(df):
+def calculate_temporal_features(
+    df,
+    feature_semantics_id=HISTORICAL_SEMANTICS_ID,
+):
     """
     Calculate all temporal derived features from high-coverage base data.
     This implements ALL recommendations from ChatGPT/Grok analysis.
     """
     
+    if feature_semantics_id not in {HISTORICAL_SEMANTICS_ID, SHARED_SEMANTICS_ID}:
+        raise ValueError(f"unsupported historical feature semantics: {feature_semantics_id}")
+    use_shared_semantics = feature_semantics_id == SHARED_SEMANTICS_ID
+
     print("=" * 60)
     print("CALCULATING ENHANCED TEMPORAL FEATURES")
     print("=" * 60)
@@ -69,7 +95,14 @@ def calculate_temporal_features(df):
         'surface_career_count': defaultdict(int),  # Unbounded career match count per surface (fixes deque(maxlen=20) cap bug)
         'level_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
         'round_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
-        'h2h_stats': defaultdict(lambda: {'total': 0, 'wins': 0})
+        # Frozen one-direction legacy tracker plus a candidate tracker updated
+        # from both player perspectives.  Keeping these separate prevents the
+        # opt-in parity work from changing promoted historical semantics.
+        'h2h_stats': defaultdict(lambda: {'total': 0, 'wins': 0}),
+        'shared_h2h_stats': (
+            defaultdict(lambda: {'total': 0, 'wins': 0, 'recent': deque(maxlen=3)})
+            if use_shared_semantics else None
+        ),
     })
     
     # Initialize new feature columns
@@ -156,6 +189,19 @@ def calculate_temporal_features(df):
         p2_height = row['Player2_Height'] if pd.notna(row['Player2_Height']) else 180
         p1_hand = row.get('Player1_Hand', 'R') if pd.notna(row.get('Player1_Hand', 'R')) else 'R'
         p2_hand = row.get('Player2_Hand', 'R') if pd.notna(row.get('Player2_Hand', 'R')) else 'R'
+
+        shared_temporal = {}
+        if use_shared_semantics:
+            for player_num, player_id in enumerate([p1_id, p2_id], 1):
+                stats = player_stats[player_id]
+                current_rank = p1_rank if player_num == 1 else p2_rank
+                shared_temporal[player_num] = player_temporal_features(
+                    observations_from_records(stats['match_history']),
+                    match_date,
+                    surface,
+                    rank_as_of=current_rank,
+                    surface_experience=stats['surface_career_count'][surface],
+                )
         
         # Calculate features for both players
         for player_num, player_id in enumerate([p1_id, p2_id], 1):
@@ -163,7 +209,12 @@ def calculate_temporal_features(df):
             stats = player_stats[player_id]
             
             # === PHASE 1: RANKING DYNAMICS ===
-            if len(stats['rank_history']) >= 2:
+            if use_shared_semantics:
+                temporal = shared_temporal[player_num]
+                df_sorted.loc[row.name, f'{prefix}Rank_Change_30d'] = temporal['rank_change_30d']
+                df_sorted.loc[row.name, f'{prefix}Rank_Change_90d'] = temporal['rank_change_90d']
+                df_sorted.loc[row.name, f'{prefix}Rank_Volatility_90d'] = temporal['rank_volatility_90d']
+            elif len(stats['rank_history']) >= 2:
                 recent_ranks = list(stats['rank_history'])
                 dates = [match['date'] for match in stats['match_history']]
                 
@@ -185,20 +236,35 @@ def calculate_temporal_features(df):
             
             # === PHASE 1: ACTIVITY/FATIGUE ===
             # Calculate days since last TOURNAMENT, not last match (prevents leakage)
-            last_tournament_date = get_last_tournament_date(stats['match_history'], match_date)
-            if last_tournament_date is not None:
-                days_since = (match_date - last_tournament_date).days
+            if use_shared_semantics:
+                days_since = shared_temporal[player_num]['days_since_last']
+            else:
+                last_tournament_date = get_last_tournament_date(stats['match_history'], match_date)
+                days_since = (
+                    (match_date - last_tournament_date).days
+                    if last_tournament_date is not None else None
+                )
+            if days_since is not None:
                 df_sorted.loc[row.name, f'{prefix}Days_Since_Last'] = days_since
                 df_sorted.loc[row.name, f'{prefix}Rust_Flag'] = 1 if days_since > 21 else 0
             
             # Match frequency
-            matches_14d = count_matches_in_window(stats['match_history'], match_date, days=14)
-            matches_30d = count_matches_in_window(stats['match_history'], match_date, days=30)
+            if use_shared_semantics:
+                matches_14d = shared_temporal[player_num]['matches_14d']
+                matches_30d = shared_temporal[player_num]['matches_30d']
+            else:
+                matches_14d = count_matches_in_window(stats['match_history'], match_date, days=14)
+                matches_30d = count_matches_in_window(stats['match_history'], match_date, days=30)
             df_sorted.loc[row.name, f'{prefix}Matches_14d'] = matches_14d
             df_sorted.loc[row.name, f'{prefix}Matches_30d'] = matches_30d
             
-            # Sets played (estimate 2.5 sets per match on average)
-            df_sorted.loc[row.name, f'{prefix}Sets_14d'] = matches_14d * 2.5
+            # Candidate semantics uses score lineage; legacy keeps its frozen
+            # 2.5-sets-per-match approximation.
+            sets_14d = (
+                shared_temporal[player_num]['sets_14d']
+                if use_shared_semantics else matches_14d * 2.5
+            )
+            df_sorted.loc[row.name, f'{prefix}Sets_14d'] = sets_14d
             
             # === PHASE 1: AGE/PHYSICAL ===
             age = p1_age if player_num == 1 else p2_age
@@ -214,17 +280,28 @@ def calculate_temporal_features(df):
             surface_stats = stats['surface_stats'][surface]
             
             # Surface activity
-            surface_matches_30d = count_surface_matches(surface_stats['matches'], match_date, days=30)
-            surface_matches_90d = count_surface_matches(surface_stats['matches'], match_date, days=90)
+            if use_shared_semantics:
+                surface_matches_30d = shared_temporal[player_num]['surface_matches_30d']
+                surface_matches_90d = shared_temporal[player_num]['surface_matches_90d']
+            else:
+                surface_matches_30d = count_surface_matches(surface_stats['matches'], match_date, days=30)
+                surface_matches_90d = count_surface_matches(surface_stats['matches'], match_date, days=90)
             df_sorted.loc[row.name, f'{prefix}Surface_Matches_30d'] = surface_matches_30d
             df_sorted.loc[row.name, f'{prefix}Surface_Matches_90d'] = surface_matches_90d
             
             # Surface win rate (with minimum threshold)
-            surface_win_rate = calculate_surface_win_rate(surface_stats, match_date, days=90, min_matches=5)
+            surface_win_rate = (
+                shared_temporal[player_num]['surface_winrate_90d']
+                if use_shared_semantics
+                else calculate_surface_win_rate(surface_stats, match_date, days=90, min_matches=5)
+            )
             df_sorted.loc[row.name, f'{prefix}Surface_WinRate_90d'] = surface_win_rate
             
             # Career surface experience — use unbounded counter, not deque length (which was capped at 20)
-            career_surface_matches = stats['surface_career_count'][surface]
+            career_surface_matches = (
+                shared_temporal[player_num]['surface_experience']
+                if use_shared_semantics else stats['surface_career_count'][surface]
+            )
             df_sorted.loc[row.name, f'{prefix}Surface_Experience'] = career_surface_matches
             
             # === PHASE 2: TOURNAMENT LEVEL EXPERIENCE ===
@@ -251,29 +328,50 @@ def calculate_temporal_features(df):
             df_sorted.loc[row.name, f'{prefix}Semifinals_WinRate'] = sf_rate
             
             # === PHASE 2: FORM METRICS ===
-            win_rate_10_120d = calculate_recent_form(stats['match_history'], match_date, max_matches=10, max_days=120)
+            win_rate_10_120d = (
+                shared_temporal[player_num]['winrate_last10_120d']
+                if use_shared_semantics
+                else calculate_recent_form(stats['match_history'], match_date, max_matches=10, max_days=120)
+            )
             df_sorted.loc[row.name, f'{prefix}WinRate_Last10_120d'] = win_rate_10_120d
             
             # Current win streak
-            win_streak = calculate_current_streak(stats['match_history'])
+            win_streak = (
+                shared_temporal[player_num]['streak']
+                if use_shared_semantics else calculate_current_streak(stats['match_history'])
+            )
             df_sorted.loc[row.name, f'{prefix}WinStreak_Current'] = win_streak
             
             # Form trend (exponential weighted)
-            form_trend = calculate_form_trend(stats['match_history'], match_date, days=30)
+            form_trend = (
+                shared_temporal[player_num]['form_trend_30d']
+                if use_shared_semantics
+                else calculate_form_trend(stats['match_history'], match_date, days=30)
+            )
             df_sorted.loc[row.name, f'{prefix}Form_Trend_30d'] = form_trend
         
         # === PHASE 2: HEAD-TO-HEAD ===
-        h2h_stats = player_stats[p1_id]['h2h_stats'][p2_id]
-        df_sorted.loc[row.name, 'H2H_Total_Matches'] = h2h_stats['total']
-        df_sorted.loc[row.name, 'H2H_P1_Wins'] = h2h_stats['wins']
-        df_sorted.loc[row.name, 'H2H_P2_Wins'] = h2h_stats['total'] - h2h_stats['wins']
-        
-        h2h_win_rate = laplace(h2h_stats['wins'], h2h_stats['total'])
-        df_sorted.loc[row.name, 'H2H_P1_WinRate'] = h2h_win_rate
-        
-        # Recent H2H advantage (last 3 meetings)
-        recent_h2h = calculate_recent_h2h(player_stats[p1_id]['match_history'], p2_id, max_meetings=3)
-        df_sorted.loc[row.name, 'H2H_Recent_P1_Advantage'] = recent_h2h
+        if use_shared_semantics:
+            h2h_state = player_stats[p1_id]['shared_h2h_stats'][p2_id]
+            h2h = h2h_features_from_counts(
+                total=h2h_state['total'],
+                p1_wins=h2h_state['wins'],
+                recent_p1_results=list(reversed(h2h_state['recent'])),
+            )
+            for feature_name, value in h2h.items():
+                df_sorted.loc[row.name, feature_name] = value
+        else:
+            h2h_stats = player_stats[p1_id]['h2h_stats'][p2_id]
+            df_sorted.loc[row.name, 'H2H_Total_Matches'] = h2h_stats['total']
+            df_sorted.loc[row.name, 'H2H_P1_Wins'] = h2h_stats['wins']
+            df_sorted.loc[row.name, 'H2H_P2_Wins'] = h2h_stats['total'] - h2h_stats['wins']
+
+            h2h_win_rate = laplace(h2h_stats['wins'], h2h_stats['total'])
+            df_sorted.loc[row.name, 'H2H_P1_WinRate'] = h2h_win_rate
+
+            # Recent H2H advantage (last 3 meetings)
+            recent_h2h = calculate_recent_h2h(player_stats[p1_id]['match_history'], p2_id, max_meetings=3)
+            df_sorted.loc[row.name, 'H2H_Recent_P1_Advantage'] = recent_h2h
         
         # === PHASE 2: HANDEDNESS MATCHUPS ===
         handedness_key = f"{p1_hand}{p2_hand}"
@@ -293,9 +391,16 @@ def calculate_temporal_features(df):
         df_sorted.loc[row.name, 'Indoor_Season'] = 1 if month >= 10 or month <= 2 else 0
         
         # Surface transition flag
-        p1_last_surface = get_last_surface(player_stats[p1_id]['match_history'])
-        p2_last_surface = get_last_surface(player_stats[p2_id]['match_history'])
-        df_sorted.loc[row.name, 'Surface_Transition_Flag'] = 1 if (p1_last_surface != surface or p2_last_surface != surface) else 0
+        if use_shared_semantics:
+            df_sorted.loc[row.name, 'Surface_Transition_Flag'] = shared_surface_transition_flag(
+                shared_temporal[1]['last_surface'],
+                shared_temporal[2]['last_surface'],
+                surface,
+            )
+        else:
+            p1_last_surface = get_last_surface(player_stats[p1_id]['match_history'])
+            p2_last_surface = get_last_surface(player_stats[p2_id]['match_history'])
+            df_sorted.loc[row.name, 'Surface_Transition_Flag'] = 1 if (p1_last_surface != surface or p2_last_surface != surface) else 0
         
         # === PHASE 1: RANKING MOMENTUM DIFFERENCES ===
         p1_momentum_30d = df_sorted.loc[row.name, 'P1_Rank_Change_30d']
@@ -329,8 +434,10 @@ def calculate_temporal_features(df):
                 'level': level,
                 'round': round_name,
                 'won': won,
-                'rank': current_rank
+                'rank': current_rank,
             }
+            if use_shared_semantics:
+                match_info['score'] = row.get('score')
             stats['match_history'].append(match_info)
             stats['rank_history'].append(current_rank)
             stats['last_match_date'] = match_date
@@ -354,6 +461,12 @@ def calculate_temporal_features(df):
                 stats['h2h_stats'][opponent_id]['total'] += 1
                 if won:
                     stats['h2h_stats'][opponent_id]['wins'] += 1
+
+            if use_shared_semantics:
+                shared_h2h = stats['shared_h2h_stats'][opponent_id]
+                shared_h2h['total'] += 1
+                shared_h2h['wins'] += int(won)
+                shared_h2h['recent'].append(bool(won))
     
     print("\n✅ Temporal feature calculation complete!")
     print(f"Added {len(enhanced_features)} new temporal features")
@@ -362,33 +475,33 @@ def calculate_temporal_features(df):
     print("\nFilling missing values with defaults...")
     
     # Days since last match: 60 days for first match
-    df_sorted['P1_Days_Since_Last'].fillna(60, inplace=True)
-    df_sorted['P2_Days_Since_Last'].fillna(60, inplace=True)
+    df_sorted['P1_Days_Since_Last'] = df_sorted['P1_Days_Since_Last'].fillna(60)
+    df_sorted['P2_Days_Since_Last'] = df_sorted['P2_Days_Since_Last'].fillna(60)
     
     # Activity counts: 0 for new players
     activity_cols = [col for col in enhanced_features if 'Matches_' in col or 'Sets_' in col]
     for col in activity_cols:
-        df_sorted[col].fillna(0, inplace=True)
+        df_sorted[col] = df_sorted[col].fillna(0)
     
     # Win rates: 0.5 (neutral) for insufficient data
     rate_cols = [col for col in enhanced_features if 'WinRate' in col or 'Rate' in col]
     for col in rate_cols:
-        df_sorted[col].fillna(0.5, inplace=True)
+        df_sorted[col] = df_sorted[col].fillna(0.5)
     
     # Ranking changes: 0 for insufficient history
     rank_cols = [col for col in enhanced_features if 'Rank_Change' in col or 'Volatility' in col or 'Momentum' in col]
     for col in rank_cols:
-        df_sorted[col].fillna(0, inplace=True)
+        df_sorted[col] = df_sorted[col].fillna(0)
     
     # Binary flags: 0 as default
     flag_cols = [col for col in enhanced_features if 'Flag' in col or 'Season' in col or 'Peak_Age' in col or 'Handedness_Matchup' in col]
     for col in flag_cols:
-        df_sorted[col].fillna(0, inplace=True)
+        df_sorted[col] = df_sorted[col].fillna(0)
     
     # Streaks and trends: 0 as neutral
     misc_cols = [col for col in enhanced_features if 'Streak' in col or 'Trend' in col or 'Advantage' in col]
     for col in misc_cols:
-        df_sorted[col].fillna(0, inplace=True)
+        df_sorted[col] = df_sorted[col].fillna(0)
     
     return df_sorted
 
@@ -585,12 +698,33 @@ def get_last_tournament_date(match_history, current_date):
     else:
         return None
 
-def preprocess_jeffsackmann_data_for_ml(output_path=None, include_performance_features=False):
+def preprocess_jeffsackmann_data_for_ml(
+    output_path=None,
+    include_performance_features=False,
+    feature_semantics_id=HISTORICAL_SEMANTICS_ID,
+):
     """
     Enhanced preprocessing with comprehensive temporal features.
     This replaces the old preprocessing with all AI-recommended features.
     """
     
+    if feature_semantics_id not in {HISTORICAL_SEMANTICS_ID, SHARED_SEMANTICS_ID}:
+        raise ValueError(f"unsupported historical feature semantics: {feature_semantics_id}")
+    if feature_semantics_id == SHARED_SEMANTICS_ID and output_path is None:
+        raise ValueError(
+            "base_141_shared is a reserved candidate; provide an explicit side-output path"
+        )
+    if (
+        feature_semantics_id == SHARED_SEMANTICS_ID
+        and Path(output_path).expanduser().resolve() == _ACTIVE_LEGACY_DATASET
+    ):
+        raise ValueError(
+            "base_141_shared candidate cannot overwrite the active legacy dataset; "
+            "use an explicit versioned side-output path"
+        )
+    if feature_semantics_id == SHARED_SEMANTICS_ID and include_performance_features:
+        raise ValueError("base_141_shared candidate currently covers the base 141 fields only")
+
     print("=" * 60)
     print("ENHANCED JEFF SACKMANN ATP DATA ML PREPROCESSING")
     print("=" * 60)
@@ -801,7 +935,10 @@ def preprocess_jeffsackmann_data_for_ml(output_path=None, include_performance_fe
     print("\n   Calculating enhanced temporal features...")
     print("   This is the major enhancement - adding 60+ temporal features!")
 
-    df_with_temporal = calculate_temporal_features(df)
+    df_with_temporal = calculate_temporal_features(
+        df,
+        feature_semantics_id=feature_semantics_id,
+    )
     
     # 7. Select final features for ML
     print("\n7. Selecting final ML features...")
@@ -846,12 +983,40 @@ def preprocess_jeffsackmann_data_for_ml(output_path=None, include_performance_fe
     
     # Keep only features that actually exist in the dataframe
     feature_columns = [col for col in feature_columns if col in df_with_temporal.columns]
+
+    if feature_semantics_id == SHARED_SEMANTICS_ID:
+        with open(os.path.join(_FEATURES_DIR, 'schema_141.json')) as schema_file:
+            shared_schema = json.load(schema_file)
+        ordered_shared_features = [item['name'] for item in shared_schema['features']]
+        structural_zero_prefixes = (
+            'Level_', 'Round_', 'P1_Hand_', 'P2_Hand_',
+            'P1_Country_', 'P2_Country_', 'Handedness_Matchup_',
+        )
+        structural_zero_fields = {
+            name for name in ordered_shared_features
+            if name.startswith(structural_zero_prefixes)
+            or (name.startswith('Surface_') and name != 'Surface_Transition_Flag')
+        }
+        for name in structural_zero_fields:
+            if name not in df_with_temporal.columns:
+                df_with_temporal[name] = 0
+        missing_shared_features = [
+            name for name in ordered_shared_features if name not in df_with_temporal.columns
+        ]
+        if missing_shared_features:
+            raise ValueError(
+                "base_141_shared historical candidate is missing ordered fields: "
+                + ",".join(missing_shared_features)
+            )
+        feature_columns = ordered_shared_features
     
     # Add metadata columns for tracking
     metadata_columns = [
         'tourney_date', 'tourney_name', 'tourney_level', 'surface', 'round',
         'Player1_Name', 'Player2_Name', 'Player1_Rank', 'Player2_Rank'
     ]
+    if feature_semantics_id == SHARED_SEMANTICS_ID:
+        metadata_columns = [name for name in metadata_columns if name not in feature_columns]
     
     # Target variable
     target_column = 'Player1_Wins'
@@ -880,7 +1045,9 @@ def preprocess_jeffsackmann_data_for_ml(output_path=None, include_performance_fe
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ml_df.to_csv(output_path, index=False)
     
-    if include_performance_features:
+    if feature_semantics_id == SHARED_SEMANTICS_ID:
+        print(f"   ✅ Saved reserved shared-semantics candidate side output: {output_path}")
+    elif include_performance_features:
         print(f"   ✅ Saved side feature-set dataset: {output_path}")
     else:
         print(f"   ✅ REPLACED old dataset with enhanced version: {output_path}")

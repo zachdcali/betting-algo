@@ -1,0 +1,121 @@
+{
+  "semantics_id": "base_141_shared@1.0.0",
+  "as_of": "2026-07-20T12:00:00",
+  "context": {
+    "surface": "Clay",
+    "tournament_level": "A",
+    "draw_size": 32,
+    "round_code": "R32",
+    "expected_event_title": "Parity Cup"
+  },
+  "players": {
+    "alpha": {
+      "id": 101,
+      "slug": "alpha-one",
+      "name": "Alpha One",
+      "hand": "R",
+      "height_cm": 190.0,
+      "country": "USA",
+      "birthdate": "1999-01-01",
+      "current_rank": 40,
+      "rank_points": 1300
+    },
+    "beta": {
+      "id": 202,
+      "slug": "beta-two",
+      "name": "Beta Two",
+      "hand": "L",
+      "height_cm": 180.0,
+      "country": "ESP",
+      "birthdate": "2003-01-01",
+      "current_rank": 110,
+      "rank_points": 700
+    },
+    "gamma": {
+      "id": 303,
+      "slug": "gamma-three",
+      "name": "Gamma Three",
+      "hand": "L",
+      "height_cm": 185.0,
+      "country": "FRA",
+      "birthdate": "1997-06-01",
+      "current_rank": 200,
+      "rank_points": 300
+    },
+    "delta": {
+      "id": 404,
+      "slug": "delta-four",
+      "name": "Delta Four",
+      "hand": "R",
+      "height_cm": 183.0,
+      "country": "GBR",
+      "birthdate": "2000-06-01",
+      "current_rank": 210,
+      "rank_points": 280
+    }
+  },
+  "matches": [
+    {"id": "m01", "date": "2026-04-06", "player1": "alpha", "player2": "gamma", "player1_wins": 0, "p1_rank": 70, "p2_rank": 200, "surface": "Hard", "score": "4-6 4-6"},
+    {"id": "m02", "date": "2026-04-06", "player1": "beta", "player2": "delta", "player1_wins": 1, "p1_rank": 150, "p2_rank": 210, "surface": "Clay", "score": "6-4 6-4"},
+    {"id": "m03", "date": "2026-04-20", "player1": "beta", "player2": "alpha", "player1_wins": 0, "p1_rank": 139, "p2_rank": 64, "surface": "Clay", "score": "5-7 4-6"},
+    {"id": "m04", "date": "2026-05-04", "player1": "alpha", "player2": "gamma", "player1_wins": 1, "p1_rank": 60, "p2_rank": 198, "surface": "Hard", "score": "6-3 6-4"},
+    {"id": "m05", "date": "2026-05-04", "player1": "beta", "player2": "delta", "player1_wins": 0, "p1_rank": 135, "p2_rank": 205, "surface": "Hard", "score": "6-4 3-6 4-6"},
+    {"id": "m06", "date": "2026-05-18", "player1": "alpha", "player2": "gamma", "player1_wins": 0, "p1_rank": 58, "p2_rank": 196, "surface": "Grass", "score": "6-7(4) 4-6"},
+    {"id": "m07", "date": "2026-05-18", "player1": "beta", "player2": "delta", "player1_wins": 1, "p1_rank": 132, "p2_rank": 202, "surface": "Grass", "score": "7-6(4) 6-4"},
+    {"id": "m08", "date": "2026-06-01", "player1": "alpha", "player2": "beta", "player1_wins": 1, "p1_rank": 55, "p2_rank": 128, "surface": "Clay", "score": "6-4 3-6 6-3"},
+    {"id": "m09", "date": "2026-06-15", "player1": "alpha", "player2": "gamma", "player1_wins": 1, "p1_rank": 50, "p2_rank": 190, "surface": "Clay", "score": "6-2 6-2"},
+    {"id": "m10", "date": "2026-06-15", "player1": "beta", "player2": "delta", "player1_wins": 0, "p1_rank": 125, "p2_rank": 195, "surface": "Hard", "score": "4-6 4-6"},
+    {"id": "m11", "date": "2026-06-29", "player1": "beta", "player2": "alpha", "player1_wins": 1, "p1_rank": 120, "p2_rank": 46, "surface": "Clay", "score": "7-5 6-4"},
+    {"id": "m12", "date": "2026-07-06", "player1": "alpha", "player2": "gamma", "player1_wins": 0, "p1_rank": 44, "p2_rank": 188, "surface": "Clay", "score": "6-4 3-6 4-6"},
+    {"id": "m13", "date": "2026-07-06", "player1": "beta", "player2": "delta", "player1_wins": 1, "p1_rank": 116, "p2_rank": 192, "surface": "Clay", "score": "6-3 6-4"},
+    {"id": "m14", "date": "2026-07-13", "player1": "alpha", "player2": "gamma", "player1_wins": 1, "p1_rank": 42, "p2_rank": 186, "surface": "Hard", "score": "4-6 6-3 6-2"},
+    {"id": "m15", "date": "2026-07-13", "player1": "beta", "player2": "delta", "player1_wins": 0, "p1_rank": 112, "p2_rank": 190, "surface": "Hard", "score": "4-6 4-6"}
+  ],
+  "target": {
+    "id": "target",
+    "player1": "alpha",
+    "player2": "beta",
+    "p1_rank": 40,
+    "p2_rank": 110
+  },
+  "future_matches": [
+    {"id": "future", "date": "2026-07-27", "player1": "alpha", "player2": "beta", "player1_wins": 1, "p1_rank": 35, "p2_rank": 115, "surface": "Clay", "score": "6-0 6-0"}
+  ],
+  "expected_disputed": {
+    "H2H_P1_WinRate": 0.5833333333333334,
+    "H2H_P1_Wins": 2.0,
+    "H2H_P2_Wins": 1.0,
+    "H2H_Recent_P1_Advantage": 0.08333333333333337,
+    "H2H_Total_Matches": 3.0,
+    "P1_Days_Since_Last": 7.0,
+    "P1_Form_Trend_30d": 0.4949686912305473,
+    "P1_Matches_14d": 1.0,
+    "P1_Matches_30d": 3.0,
+    "P1_Rank_Change_30d": 10.0,
+    "P1_Rank_Change_90d": 24.0,
+    "P1_Rank_Volatility_90d": 6.562105187346201,
+    "P1_Rust_Flag": 0.0,
+    "P1_Sets_14d": 3.0,
+    "P1_Surface_Experience": 5.0,
+    "P1_Surface_Matches_30d": 2.0,
+    "P1_Surface_Matches_90d": 4.0,
+    "P1_Surface_WinRate_90d": 0.5,
+    "P2_Days_Since_Last": 7.0,
+    "P2_Form_Trend_30d": 0.5050313087694527,
+    "P2_Matches_14d": 1.0,
+    "P2_Matches_30d": 3.0,
+    "P2_Rank_Change_30d": 15.0,
+    "P2_Rank_Change_90d": 29.0,
+    "P2_Rank_Volatility_90d": 7.801098823700598,
+    "P2_Rust_Flag": 0.0,
+    "P2_Sets_14d": 2.0,
+    "P2_Surface_Experience": 5.0,
+    "P2_Surface_Matches_30d": 2.0,
+    "P2_Surface_Matches_90d": 3.0,
+    "P2_Surface_WinRate_90d": 0.5833333333333334,
+    "Rank_Momentum_Diff_30d": -5.0,
+    "Rank_Momentum_Diff_90d": -5.0,
+    "Surface_Transition_Flag": 1.0
+  },
+  "expected_vector_sha256": "639999ab2f8c7f0033d4cb4143d3b6ef72236d2d85b6c4d760e490142a012b8c"
+}

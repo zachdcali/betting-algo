@@ -152,11 +152,15 @@ semantic identities because parity is not proven:
 - `ta_live_legacy@3.0.0`
 
 The future shared, parity-tested implementation is reserved as
-`base_141_shared@1.0.0`. It is not active until chronological golden fixtures
-pass. If the shared implementation keeps the same ordered fields, the schema
-can remain `base_141@1.0.0`; changing formulas is represented by the semantics
-ID and normally warrants a major model-family version because behavior changes
-materially.
+`base_141_shared@1.0.0`. Its opt-in implementation and synthetic chronological
+contract are documented in
+[SHARED_FEATURE_SEMANTICS.md](../modeling/SHARED_FEATURE_SEMANTICS.md). Passing
+that fixture is necessary but does not activate the candidate: source
+provenance, immutable dataset/model releases, chronological evaluation, and an
+explicit registry promotion are still required. If the shared implementation
+keeps the same ordered fields, the schema can remain `base_141@1.0.0`; changing
+formulas is represented by the semantics ID and normally warrants a major
+model-family version because behavior changes materially.
 
 Every new model-registry entry must record:
 

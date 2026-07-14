@@ -32,6 +32,16 @@ from history_stitch import (
     round_from_draws,
     stitch_history,
 )
+from base_141_shared import (
+    SEMANTICS_ID as SHARED_SEMANTICS_ID,
+    h2h_features_from_frame as shared_h2h_features_from_frame,
+    observations_from_records,
+    player_temporal_features,
+    surface_transition_flag as shared_surface_transition_flag,
+)
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from versioning import LIVE_SEMANTICS_ID
 
 # Import schema contract
 import json
@@ -94,8 +104,19 @@ class TAFeatureCalculator:
     Mirrors LiveFeatureEngine but uses TA as primary data source.
     """
 
-    def __init__(self, ta_scraper: Optional[TennisAbstractScraper] = None):
+    def __init__(
+        self,
+        ta_scraper: Optional[TennisAbstractScraper] = None,
+        *,
+        feature_semantics_id: str = LIVE_SEMANTICS_ID,
+    ):
+        if feature_semantics_id not in {LIVE_SEMANTICS_ID, SHARED_SEMANTICS_ID}:
+            raise ValueError(f"unsupported live feature semantics: {feature_semantics_id}")
         self.scraper = ta_scraper or TennisAbstractScraper()
+        # The shared contract is opt-in until a separately versioned model is
+        # trained and promoted.  Existing callers therefore remain on the
+        # registry-declared live legacy semantics.
+        self.feature_semantics_id = feature_semantics_id
         self.player_slug_map = self._load_player_mapping()
         self._atp_rankings = load_rankings()  # None if not yet scraped
         if self._atp_rankings is None:
@@ -706,6 +727,28 @@ class TAFeatureCalculator:
             'H2H_Recent_P1_Advantage': float(adv)
         }
 
+    def _shared_h2h_stats(
+        self,
+        p1_history: pd.DataFrame,
+        p2_display_name: str,
+        as_of: datetime,
+    ) -> Dict[str, float]:
+        """Candidate P1-oriented H2H adapter over the already as-of history.
+
+        The formula is shared and source-neutral.  Opponent selection remains
+        an adapter concern; store rows should eventually use stable opponent
+        IDs, while the TA fallback is still limited to name evidence.
+        """
+
+        if p1_history is None or p1_history.empty or 'opp_name' not in p1_history.columns:
+            meetings = pd.DataFrame()
+        else:
+            mask = p1_history['opp_name'].astype(str).apply(
+                lambda candidate: self._opponent_name_matches(candidate, p2_display_name)
+            )
+            meetings = p1_history.loc[mask].copy()
+        return dict(shared_h2h_features_from_frame(meetings, as_of))
+
     # ========== One-Hot Encodings ==========
 
     @staticmethod
@@ -1232,33 +1275,59 @@ class TAFeatureCalculator:
         matches2 = apply_round_offsets_to_history(matches2, ref=when)
 
         # Calculate temporal features
-        def temporal(df):
-            return {
-                'matches_14d': self._count_period(df, when, 14),
-                'matches_30d': self._count_period(df, when, 30),
-                'matches_90d': self._count_period(df, when, 90),
-                'surface_matches_30d': self._count_surface(df, when, surface, 30),
-                'surface_matches_90d': self._count_surface(df, when, surface, 90),
-                'surface_experience': self._count_surface(df, when, surface, 9999),
-                'surface_winrate_90d': self._surface_winrate(df, when, surface, 90),
-                'winrate_last10_120d': self._winrate_lastN_within(df, when, 10, 120),
-                'streak': self._streak(df),
-                'form_trend_30d': self._form_trend_ewm(df, when, 30),
-                'days_since_last': (self._days_since_last_tournament(df, when) or 60),
-                'sets_14d': self._sets_14d(df, when),
-                'last_surface': str(df.iloc[0]['surface']).title() if not df.empty and pd.notna(df.iloc[0].get('surface')) else None
-            }
+        use_shared_semantics = self.feature_semantics_id == SHARED_SEMANTICS_ID
+        if use_shared_semantics:
+            t1 = player_temporal_features(
+                observations_from_records(matches1),
+                when,
+                surface,
+                rank_as_of=s1['rank'],
+            )
+            t2 = player_temporal_features(
+                observations_from_records(matches2),
+                when,
+                surface,
+                rank_as_of=s2['rank'],
+            )
+            # First-history behavior stays explicit and field-compatible.
+            if t1['days_since_last'] is None:
+                t1['days_since_last'] = 60
+            if t2['days_since_last'] is None:
+                t2['days_since_last'] = 60
+            p1_rc30 = t1['rank_change_30d']
+            p1_rc90 = t1['rank_change_90d']
+            p2_rc30 = t2['rank_change_30d']
+            p2_rc90 = t2['rank_change_90d']
+            p1_vol90 = t1['rank_volatility_90d']
+            p2_vol90 = t2['rank_volatility_90d']
+        else:
+            def temporal(df):
+                return {
+                    'matches_14d': self._count_period(df, when, 14),
+                    'matches_30d': self._count_period(df, when, 30),
+                    'matches_90d': self._count_period(df, when, 90),
+                    'surface_matches_30d': self._count_surface(df, when, surface, 30),
+                    'surface_matches_90d': self._count_surface(df, when, surface, 90),
+                    'surface_experience': self._count_surface(df, when, surface, 9999),
+                    'surface_winrate_90d': self._surface_winrate(df, when, surface, 90),
+                    'winrate_last10_120d': self._winrate_lastN_within(df, when, 10, 120),
+                    'streak': self._streak(df),
+                    'form_trend_30d': self._form_trend_ewm(df, when, 30),
+                    'days_since_last': (self._days_since_last_tournament(df, when) or 60),
+                    'sets_14d': self._sets_14d(df, when),
+                    'last_surface': str(df.iloc[0]['surface']).title() if not df.empty and pd.notna(df.iloc[0].get('surface')) else None
+                }
 
-        t1 = temporal(matches1)
-        t2 = temporal(matches2)
+            t1 = temporal(matches1)
+            t2 = temporal(matches2)
 
-        # Rank changes and volatility
-        p1_rc30 = self._rank_change(matches1, when, 30)
-        p1_rc90 = self._rank_change(matches1, when, 90)
-        p2_rc30 = self._rank_change(matches2, when, 30)
-        p2_rc90 = self._rank_change(matches2, when, 90)
-        p1_vol90 = self._rank_volatility(matches1, when, 90)
-        p2_vol90 = self._rank_volatility(matches2, when, 90)
+            # Rank changes and volatility
+            p1_rc30 = self._rank_change(matches1, when, 30)
+            p1_rc90 = self._rank_change(matches1, when, 90)
+            p2_rc30 = self._rank_change(matches2, when, 30)
+            p2_rc90 = self._rank_change(matches2, when, 90)
+            p1_vol90 = self._rank_volatility(matches1, when, 90)
+            p2_vol90 = self._rank_volatility(matches2, when, 90)
         p1_rc30 = _coerce_numeric(p1_rc30, 'P1_Rank_Change_30d')
         p1_rc90 = _coerce_numeric(p1_rc90, 'P1_Rank_Change_90d')
         p2_rc30 = _coerce_numeric(p2_rc30, 'P2_Rank_Change_30d')
@@ -1280,7 +1349,9 @@ class TAFeatureCalculator:
         p2_vs_lefty = self._winrate_vs_hand(matches2, 'L')
 
         # H2H stats (pass session_cache to avoid duplicate requests)
-        if self.use_store:
+        if use_shared_semantics:
+            h2h = self._shared_h2h_stats(matches1, p2_display, when)
+        elif self.use_store:
             h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache,
                                       _frame=_m1_prestitch, _name2=p2_display)
         else:
@@ -1300,8 +1371,13 @@ class TAFeatureCalculator:
         c2 = self._country_onehot(s2['country'], 'P2')
 
         # Surface transition flag
-        st_flag = 1 if ((t1['last_surface'] and t1['last_surface'].lower() != surface.lower()) or
-                        (t2['last_surface'] and t2['last_surface'].lower() != surface.lower())) else 0
+        if use_shared_semantics:
+            st_flag = shared_surface_transition_flag(
+                t1['last_surface'], t2['last_surface'], surface
+            )
+        else:
+            st_flag = 1 if ((t1['last_surface'] and t1['last_surface'].lower() != surface.lower()) or
+                            (t2['last_surface'] and t2['last_surface'].lower() != surface.lower())) else 0
 
         p1_height = _coerce_numeric(s1['height'], 'Player1_Height')
         p2_height = _coerce_numeric(s2['height'], 'Player2_Height')
@@ -1484,6 +1560,8 @@ class TAFeatureCalculator:
             pass
         final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
         final['_resolved_surface'] = surface or ''
+        if use_shared_semantics:
+            final['_feature_semantics_id'] = self.feature_semantics_id
 
         return final
 
