@@ -146,10 +146,31 @@ API + store history, cross-checked; disagreements flag not-bettable.
   evening-of), so the pipeline must keep re-asking hourly and *never write a
   guess*. It does, but the whole thing is brittle and hard to reason about.
 
+- **A single flaky fetch collapses the entire slate.** Round resolution depends
+  on ATP event *discovery* (the challenger/tour calendar pages). When that fetch
+  intermittently returns an empty parse ("calendar discovery unavailable —
+  returned no events", the same datacenter-IP flakiness as §4), **no events are
+  discovered, so no draws are fetched, so EVERY match that run gets round=None
+  and goes not-bettable.** Observed live: Bastad went 11/11 bettable on one run
+  to 0/11 the next, purely because that run's calendar fetch came back empty.
+- **And "latest run wins" lets a failed run clobber a good one.** Because each
+  run TRUNCATE-reloads the mirror and the newest run's data is authoritative, a
+  run that resolved *fewer* rounds overwrites a prior run that had them all —
+  the round resolution is non-deterministic per run and there is no memory of
+  prior success (the stale git base, §2, forgets it). Band-aid added: the mirror
+  now treats a **resolved round / complete prediction as sticky** (restores a
+  complete prediction the reload downgraded to round-pending) — the same
+  monotonic principle as settlement-preservation. But this is a mirror-side
+  patch on a design where features are re-derived from scratch every run and any
+  one flaky fetch can erase them.
+
 **What to reason about:** is the layered live-scrape round chain the right model,
-or should round/draw/schedule state be ingested into the DB once per event and
-served from there? How should "bettable" be defined and surfaced so it's
-obviously correct and self-explaining?
+or should round/draw/schedule state be **ingested into the DB once per event and
+served from there** (so a match's round, once known, is a durable fact, not
+something re-scraped and re-riskable every hour)? How should "bettable" be
+defined and surfaced so it's obviously correct and self-explaining? How should
+the pipeline degrade when a source fetch fails — never let one empty parse zero
+out the whole slate?
 
 ---
 
