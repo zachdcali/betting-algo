@@ -53,11 +53,15 @@ Exact-ID evidence also cross-checks ordered player identity. Historical
 changed when round and surface identity inputs were corrected; player
 orientation is the stable fail-closed check across those known UID migrations.
 
-The shared structural checks in `evaluation.cohorts.verify_feature_frame` are
-used for both exact and legacy evidence. Valid vectors must contain the ordered
+The shared authority resolver in `feature_lineage.py` is used by the ledger,
+replay, importer, and dashboard. It reads feature floats with round-trip
+precision and selects immutable `logs/features_*.csv` evidence before the
+derived aggregate. A derived duplicate may differ element-wise within `1e-12`
+without poisoning the ID, but only the immutable bit-exact SHA is accepted for
+prediction referential verification. Valid vectors must contain the ordered
 141-feature schema, finite numeric values, and valid binary/cardinality groups.
-The manifest records both the schema SHA-256 and vector SHA-256, along with the
-source CSV path and physical CSV row number.
+The manifest records both the canonical schema SHA-256 and vector SHA-256,
+along with the immutable source CSV path and physical CSV row number.
 
 The representation is identified centrally as `base_141@1.0.0`; the replay
 manifest contract is SemVer `1.0.0`. Those values come from

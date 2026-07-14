@@ -22,6 +22,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 from features.performance_v1 import PERFORMANCE_FEATURES, build_match_performance_features  # noqa: E402
 from features.ta_feature_calculator import TAFeatureCalculator  # noqa: E402
+from feature_lineage import read_feature_csv  # noqa: E402
 from logging_utils import normalize_name  # noqa: E402
 from models.inference import EXACT_141_FEATURES  # noqa: E402
 from prediction_logger import upgrade_prediction_log  # noqa: E402
@@ -45,7 +46,7 @@ def load_feature_snapshots(features_dir: Path) -> pd.DataFrame:
     frames = []
     for path in sorted(features_dir.glob("features_*.csv")):
         try:
-            df = pd.read_csv(path)
+            df = read_feature_csv(path)
         except Exception as exc:
             print(f"skip feature log {path}: {exc}")
             continue

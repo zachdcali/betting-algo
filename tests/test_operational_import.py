@@ -1,6 +1,7 @@
 import csv
 from hashlib import sha256
 import json
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -11,6 +12,7 @@ PRODUCTION = Path(__file__).resolve().parents[1] / "production"
 sys.path.insert(0, str(PRODUCTION))
 
 import storage.import_csv as import_csv  # noqa: E402
+from feature_contract import feature_fingerprint  # noqa: E402
 from storage.import_csv import _parser, _resolve_database_url, build_plan, main  # noqa: E402
 from versioning import FEATURE_SCHEMA_ID, FEATURE_SCHEMA_SHA256  # noqa: E402
 
@@ -237,6 +239,74 @@ def test_feature_import_uses_stable_version_contract_and_exact_vector_hash(tmp_p
     assert snapshot["feature_vector_sha256"] == sha256(expected_payload.encode()).hexdigest()
 
 
+@pytest.mark.parametrize("malformed_count", ["not-a-count", "141.5"])
+def test_feature_import_rejects_malformed_nonblank_feature_count(
+    tmp_path, malformed_count
+):
+    prod, _ = _fixture_prod(tmp_path)
+    path = prod / "logs/feature_vectors.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    row["feature_count"] = malformed_count
+    _write_csv(path, [row])
+
+    snapshot = _all_records(
+        build_plan(prod, include_run_feature_files=False),
+        "ml.feature_snapshots",
+    )[0]
+
+    assert snapshot["features_complete"] is False
+    assert snapshot["feature_vector_sha256"] is None
+    assert "structural:source_feature_count_invalid" in json.loads(
+        snapshot["defaulted_features"]
+    )
+
+
+def test_feature_import_uses_immutable_authority_for_ulp_aggregate_duplicate(tmp_path):
+    prod, immutable_vector = _fixture_prod(tmp_path)
+    immutable_vector["Player1_Rank"] = 12.0
+    schema_hash, immutable_hash, count = feature_fingerprint(
+        immutable_vector, tuple(immutable_vector)
+    )
+    aggregate_vector = dict(immutable_vector)
+    aggregate_vector["Player1_Rank"] = math.nextafter(12.0, math.inf)
+    _, aggregate_hash, _ = feature_fingerprint(
+        aggregate_vector, tuple(aggregate_vector)
+    )
+    assert immutable_hash != aggregate_hash
+
+    aggregate_path = prod / "logs/feature_vectors.csv"
+    with aggregate_path.open(newline="", encoding="utf-8") as handle:
+        aggregate = next(csv.DictReader(handle))
+    aggregate.update({
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": aggregate_hash,
+        "feature_count": str(count),
+        "features_json": json.dumps(aggregate_vector, separators=(",", ":")),
+    })
+    _write_csv(aggregate_path, [aggregate])
+
+    immutable = {
+        **immutable_vector,
+        "player1_raw": "One", "player2_raw": "Two",
+        "meta_match_date": "2026-07-13", "timestamp": "2026-07-13T12:02:00Z",
+        "run_id": "run_1", "match_uid": "match_1",
+        "feature_snapshot_id": "feature_1", "status": "ok",
+        "meta_defaulted_features": "",
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": immutable_hash,
+        "feature_count": str(count),
+    }
+    _write_csv(prod / "logs/features_20260713_120200.csv", [immutable])
+
+    snapshots = _all_records(build_plan(prod), "ml.feature_snapshots")
+
+    assert len(snapshots) == 1
+    assert snapshots[0]["source_file"] == "logs/features_20260713_120200.csv"
+    assert snapshots[0]["feature_vector_sha256"] == immutable_hash
+    assert json.loads(snapshots[0]["feature_vector"])["Player1_Rank"] == 12.0
+
+
 def test_feature_import_marks_generated_legacy_source_row_identity(tmp_path):
     prod, _ = _fixture_prod(tmp_path)
     path = prod / "logs/feature_vectors.csv"
@@ -281,6 +351,25 @@ def test_structurally_invalid_declared_complete_feature_is_demoted(tmp_path):
     assert "structural:one_hot_cardinality:round:0" in json.loads(
         snapshot["defaulted_features"]
     )
+
+
+def test_defaulted_but_structurally_valid_feature_retains_exact_hash(tmp_path):
+    prod, vector = _fixture_prod(tmp_path)
+    path = prod / "logs/feature_vectors.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    row["defaulted_features"] = "Player1_Height"
+    row["features_complete"] = "False"
+    _write_csv(path, [row])
+
+    snapshot = _all_records(
+        build_plan(prod, include_run_feature_files=False), "ml.feature_snapshots"
+    )[0]
+    _, expected_hash, _ = feature_fingerprint(vector, tuple(vector))
+
+    assert snapshot["features_complete"] is False
+    assert snapshot["feature_vector_sha256"] == expected_hash
+    assert json.loads(snapshot["defaulted_features"]) == ["Player1_Height"]
 
 
 def test_prediction_import_is_one_observation_per_available_model_family(tmp_path):

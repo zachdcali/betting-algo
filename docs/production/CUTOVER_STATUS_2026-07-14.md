@@ -99,10 +99,13 @@ candidates across 336 reused external keys. They require explicit reviewed
 resolution; the importer never selects a first row merely because it appeared
 first.
 
-This plan includes 73 ignored local `logs/features_*.csv` files and therefore
-describes a timestamped machine snapshot, not a fresh-clone-reproducible
-artifact. Before staging apply, freeze the exact source manifest and those
-private lineage files together.
+The plan above predates the feature-evidence recovery commit and must be
+regenerated before staging. The clean `f5669c7` proof contained 74
+repository-tracked `logs/features_*.csv` files. In particular, all 17 immutable
+files selected by the 56 cross-format reconciliation repairs are tracked and
+clean-clone reproducible; see `FEATURE_LINEAGE_AUTHORITY.md`. Regenerate the
+count after integration, and freeze any future private lineage file with the
+exact import source manifest before apply.
 
 A prior 38,675-row snapshot was applied to fresh disposable PostgreSQL 16 as
 batch `8120d931-0953-570a-88c4-f4aff29ba4d1`. All target rows and 38,674 fact
@@ -147,15 +150,18 @@ set for tuning.
 | Random Forest | 0.640447 | 0.224613 | 0.683375 | 0.629412 |
 | Neural Network | 0.698384 | 0.236339 | 0.663507 | 0.625490 |
 
-The GOLD decline from 566 to 510 is not ordinary sample drift and no settled
+The GOLD decline from 566 to 510 was not ordinary sample drift and no settled
 outcome changed. Durable hydration exposed duplicate snapshot IDs whose
 per-run CSV and aggregate JSON copies produce different bit-exact SHA-256
 values. All 56 downgraded vectors are element-wise equal within `1e-12` and
-their maximum absolute difference is `7.105e-15`, but the v1 lineage contract
-correctly fails closed on any hash disagreement. Until a reviewed cross-format
-serialization/equivalence contract is implemented, normalized staging apply is
-blocked and 510 is the conservative replay count. Do not silently relabel the
-56 rows GOLD or weaken the existing SHA contract.
+their maximum absolute difference is `7.105e-15`. The branch now implements a
+reviewed cross-format resolver: round-trip parsing, immutable per-run
+precedence, identity agreement, and a `1e-12` tolerance used only to reconcile
+the derived copy. The immutable bit-exact v1 hash remains the sole prediction
+referential hash. A clean `f5669c7` proof moves 55 to 111 GOLD rows—exactly 56
+restored—and all 17 selected authority files are tracked. The 510-row table
+above remains dated pre-repair evidence and must be regenerated after merge;
+normalized staging apply remains blocked until that fresh proof passes.
 
 ## Paper-account backlog
 
@@ -190,9 +196,9 @@ was performed.
    `OPERATIONAL_STAGING_DATABASE_URL` / `OPERATIONAL_DATABASE_URL`.
 4. Apply Postgres contracts `1.0.0` then `1.1.0`, import the exact reviewed
    manifest, repeat it, apply a changed second manifest, and time a restore.
-5. Version and test a stable cross-format feature-vector serialization/hash
-   contract, remediate duplicate snapshot IDs, and regenerate replay/import
-   evidence before staging apply.
+5. Deploy and verify the implemented cross-format feature-lineage resolver,
+   then regenerate both fresh-clone and machine-private replay/import evidence.
+   Keep staging apply blocked until that refreshed proof reconciles exactly.
 6. Finish and independently review deterministic pending-bet plan/apply tooling;
    do not production-apply it until crash recovery, replay, shared locking, and
    ledger/session integrity gates are proven.

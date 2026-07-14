@@ -37,6 +37,11 @@ except ImportError:  # pragma: no cover - package-style execution
     )
 
 try:
+    from feature_lineage import load_production_feature_lineage
+except ImportError:  # pragma: no cover - package-style execution
+    from production.feature_lineage import load_production_feature_lineage  # type: ignore
+
+try:
     from versioning import (
         FEATURE_SCHEMA_ID, FEATURE_SCHEMA_NAME, FEATURE_SCHEMA_SHA256,
         FEATURE_SCHEMA_VERSION, LIVE_SEMANTICS_ID, LOGGING_SCHEMA_VERSION,
@@ -682,14 +687,15 @@ def _feature(
     source_schema_hash = _text(row.get("feature_schema_sha256"))
     if source_schema_hash and source_schema_hash != FEATURE_SCHEMA_SHA256:
         structural_issues += ("source_schema_hash_mismatch",)
+    source_feature_count_text = _text(row.get("feature_count"))
     source_feature_count = _integer(row.get("feature_count"))
-    if source_feature_count is not None and source_feature_count != len(feature_names):
+    if source_feature_count_text is not None and source_feature_count is None:
+        structural_issues += ("source_feature_count_invalid",)
+    elif source_feature_count is not None and source_feature_count != len(feature_names):
         structural_issues += ("source_feature_count_mismatch",)
     source_vector_hash = _text(row.get("feature_vector_sha256"))
     if source_vector_hash and computed_hash and source_vector_hash != computed_hash:
         structural_issues += ("source_vector_hash_mismatch",)
-    if defaulted_features:
-        structural_issues += ("declared_defaulted_features",)
     if structural_issues:
         computed_hash = None
         defaulted_features.extend(
@@ -1254,6 +1260,11 @@ def build_plan(
     sources: dict[str, set[str]] = {}
     warnings: list[str] = []
     feature_names = _load_feature_names(production_dir)
+    feature_lineage = load_production_feature_lineage(
+        production_dir,
+        feature_names,
+        include_run_feature_files=include_run_feature_files,
+    )
     (
         model_registry_generation,
         model_releases,
@@ -1282,7 +1293,18 @@ def build_plan(
             if mapper is not None:
                 mapped.extend(mapper(source, batch_id))
             if is_feature:
-                mapped.extend(_feature(source, batch_id, feature_names))
+                snapshot_id = _text(source.row.get("feature_snapshot_id"))
+                canonical_location = (
+                    feature_lineage.canonical_location(snapshot_id)
+                    if snapshot_id else None
+                )
+                # Exact IDs are normalized once from their resolved authority.
+                # Blank-ID legacy rows remain independently imported because
+                # they have no immutable foreign key to reconcile.
+                if not snapshot_id or canonical_location == (
+                    source.relative_path, source.row_number
+                ):
+                    mapped.extend(_feature(source, batch_id, feature_names))
             if is_authoritative_prediction:
                 mapped.extend(_prediction(source, batch_id))
                 mapped.extend(_settlement_from_prediction(source, batch_id))

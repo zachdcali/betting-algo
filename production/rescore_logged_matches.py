@@ -17,9 +17,11 @@ import torch
 import xgboost as xgb
 
 try:
+    from feature_lineage import read_feature_csv
     from models.nn_runtime import TennisNet
     from models.registry_utils import resolve_artifact_path
 except ModuleNotFoundError:  # pragma: no cover - package import path
+    from .feature_lineage import read_feature_csv
     from .models.nn_runtime import TennisNet
     from .models.registry_utils import resolve_artifact_path
 
@@ -38,7 +40,7 @@ print("=" * 60)
 dfs = []
 for path in sorted(glob.glob(os.path.join(LOGS, "features_*.csv"))):
     try:
-        df = pd.read_csv(path)
+        df = read_feature_csv(path)
         df["_source_file"] = os.path.basename(path)
         dfs.append(df)
     except Exception as e:

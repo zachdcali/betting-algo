@@ -107,9 +107,14 @@ def verify_feature_frame(frame: pd.DataFrame) -> tuple[dict[str, str], set[str]]
 
 
 def load_prediction_log(prod_dir: str) -> pd.DataFrame:
+    from feature_lineage import (
+        expected_feature_hash_matches,
+        load_production_feature_lineage,
+        read_feature_csv,
+    )
+    from models.inference import EXACT_141_FEATURES
+
     frame = pd.read_csv(os.path.join(prod_dir, "prediction_log.csv"), low_memory=False)
-    evidence: dict[str, str] = {}
-    invalid_ids: set[str] = set()
     scanned_paths: list[str] = []
     legacy_paths: list[str] = []
     paths = [
@@ -120,27 +125,29 @@ def load_prediction_log(prod_dir: str) -> pd.DataFrame:
         if not os.path.exists(path):
             continue
         try:
-            header = pd.read_csv(path, nrows=0)
+            header = read_feature_csv(path, nrows=0)
         except Exception as exc:
             raise RuntimeError(f"feature snapshot verification could not read {path}: {exc}") from exc
         if "feature_snapshot_id" not in header.columns:
             legacy_paths.append(path)
             continue
-        try:
-            feature_frame = pd.read_csv(path, low_memory=False, keep_default_na=False)
-            file_evidence, file_invalid = verify_feature_frame(feature_frame)
-        except Exception as exc:
-            raise RuntimeError(f"feature snapshot verification failed while scanning {path}: {exc}") from exc
         scanned_paths.append(path)
-        invalid_ids.update(file_invalid)
-        for snapshot_id, vector_hash in file_evidence.items():
-            existing = evidence.get(snapshot_id)
-            if existing and existing != vector_hash:
-                invalid_ids.add(snapshot_id)
-            else:
-                evidence[snapshot_id] = vector_hash
-    for snapshot_id in invalid_ids:
-        evidence.pop(snapshot_id, None)
+    try:
+        lineage = load_production_feature_lineage(prod_dir, EXACT_141_FEATURES)
+    except Exception as exc:
+        raise RuntimeError(
+            f"feature snapshot authority reconciliation failed: {exc}"
+        ) from exc
+    invalid_ids = set(lineage.invalid_ids)
+    evidence = {
+        snapshot_id: occurrence.verified_vector_sha256
+        for snapshot_id, occurrence in lineage.canonical_by_id.items()
+        if snapshot_id not in invalid_ids and occurrence.verified_vector_sha256
+    }
+    referential_hashes = {
+        snapshot_id: lineage.referential_vector_hashes(snapshot_id)
+        for snapshot_id in evidence
+    }
     ids = frame.get("feature_snapshot_id", pd.Series("", index=frame.index)).fillna("").astype(str)
     # Referential verification is fail-closed. If no compatible lineage file
     # exists, no row can claim GOLD merely because it carries an ID-shaped
@@ -151,9 +158,15 @@ def load_prediction_log(prod_dir: str) -> pd.DataFrame:
     matched_hash = pd.Series(
         [evidence.get(snapshot_id, "") for snapshot_id in ids], index=frame.index
     )
+    expected_matches = pd.Series([
+        expected_feature_hash_matches(
+            expected, referential_hashes.get(snapshot_id, frozenset())
+        )
+        for snapshot_id, expected in zip(ids, expected_hash)
+    ], index=frame.index)
     frame["feature_snapshot_verified"] = (
         ids.ne("") & matched_hash.ne("")
-        & (expected_hash.eq("") | expected_hash.eq(matched_hash))
+        & expected_matches
     )
     frame.attrs["feature_snapshot_verification"] = {
         "scanned_paths": scanned_paths,

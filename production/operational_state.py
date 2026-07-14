@@ -257,7 +257,9 @@ def _write_csv_atomic(path: Path, frame: pd.DataFrame) -> None:
 def hydrate_operational_state(base: Path = BASE, verbose: bool = True) -> dict[str, int]:
     """Merge the durable Supabase snapshot into local CSVs before a cloud run."""
     from canonical_store import connect
-    from dashboard_sync import _table_exists, read_table
+    from dashboard_sync import (
+        _load_feature_state, _merge_feature_state, _table_exists, read_table,
+    )
 
     counts: dict[str, int] = {}
     planned: dict[StateSpec, pd.DataFrame] = {}
@@ -303,8 +305,16 @@ def hydrate_operational_state(base: Path = BASE, verbose: bool = True) -> dict[s
                             f"manifest={expected}, rows={len(remote)}"
                         )
                 path = spec.path(base)
-                local = load_csv(path)
-                merged = merge_state_frames(remote, local, spec)
+                local = (
+                    _load_feature_state(path)
+                    if spec.table == "dash_features"
+                    else load_csv(path)
+                )
+                merged = (
+                    _merge_feature_state(remote, local)
+                    if spec.table == "dash_features"
+                    else merge_state_frames(remote, local, spec)
+                )
                 planned[spec] = merged
                 counts[spec.table] = len(merged)
                 if verbose:
