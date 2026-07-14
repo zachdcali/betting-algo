@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 
 try:
@@ -11,8 +12,25 @@ except ModuleNotFoundError:  # pragma: no cover - package import path
     from .registry_utils import validate_registry
 
 
-def main() -> int:
-    issues = validate_registry()
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Validate model-registry contracts and artifact files.",
+    )
+    parser.add_argument(
+        "--artifact-scope",
+        choices=("promoted", "all"),
+        default="promoted",
+        help=(
+            "Require promoted inference artifacts (default), or every "
+            "registered archive and candidate artifact for a local audit."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    issues = validate_registry(artifact_scope=args.artifact_scope)
     missing = issues.get("missing", [])
     invalid = issues.get("invalid", [])
 
