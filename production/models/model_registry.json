@@ -1,4 +1,30 @@
 {
+  "registry_schema_version": "2.0.0",
+  "registry_generation": 1,
+  "registry_effective_at": "2026-07-14T00:00:00Z",
+  "feature_contracts": {
+    "schemas": {
+      "base_141@1.0.0": {
+        "feature_count": 141,
+        "schema_sha256": "17a33325776292ad31e4bbaff81cb223355f026aa019b8b516a0281945930b4d",
+        "status": "active_representation"
+      }
+    },
+    "semantics": {
+      "sackmann_historical_legacy@1.0.0": {
+        "status": "legacy_training",
+        "parity_verified": false
+      },
+      "ta_live_legacy@3.0.0": {
+        "status": "active_live_legacy",
+        "parity_verified": false
+      },
+      "base_141_shared@1.0.0": {
+        "status": "reserved_candidate",
+        "parity_verified": false
+      }
+    }
+  },
   "current_version": "v1.2.3",
   "candidate_version": "v1.3.0",
   "models": {
@@ -90,6 +116,11 @@
       "name": "NN-141-DYNAMIC_OFFSETS_v2",
       "date": "2026-07-11",
       "features": 141,
+      "feature_schema_id": "base_141@1.0.0",
+      "feature_schema_sha256": "17a33325776292ad31e4bbaff81cb223355f026aa019b8b516a0281945930b4d",
+      "training_feature_semantics_id": "sackmann_historical_legacy@1.0.0",
+      "live_feature_semantics_id": "ta_live_legacy@3.0.0",
+      "training_dataset_id": "legacy_unversioned_jeffsackmann_surface_fix",
       "architecture": "128-64-32-16-1",
       "test_accuracy": 0.6639,
       "test_auc": 0.7282,
@@ -176,6 +207,11 @@
         "name": "XGB-141-FIXED_SPLIT",
         "date": "2026-07-11",
         "features": 141,
+        "feature_schema_id": "base_141@1.0.0",
+        "feature_schema_sha256": "17a33325776292ad31e4bbaff81cb223355f026aa019b8b516a0281945930b4d",
+        "training_feature_semantics_id": "sackmann_historical_legacy@1.0.0",
+        "live_feature_semantics_id": "ta_live_legacy@3.0.0",
+        "training_dataset_id": "legacy_unversioned_jeffsackmann_surface_fix",
         "test_accuracy": 0.6649,
         "test_auc": 0.7302,
         "test_log_loss": 0.6064,
@@ -238,6 +274,11 @@
         "name": "RF-141-FIXED_SPLIT",
         "date": "2026-07-11",
         "features": 141,
+        "feature_schema_id": "base_141@1.0.0",
+        "feature_schema_sha256": "17a33325776292ad31e4bbaff81cb223355f026aa019b8b516a0281945930b4d",
+        "training_feature_semantics_id": "sackmann_historical_legacy@1.0.0",
+        "live_feature_semantics_id": "ta_live_legacy@3.0.0",
+        "training_dataset_id": "legacy_unversioned_jeffsackmann_surface_fix",
         "test_accuracy": 0.6603,
         "test_auc": 0.7251,
         "test_log_loss": 0.6105,

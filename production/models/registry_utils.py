@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import hashlib
 import pickle
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -91,6 +92,26 @@ def resolve_artifact_path(
 def validate_registry(registry: Optional[Dict] = None) -> Dict[str, list[str]]:
     registry = registry or load_registry()
     issues: Dict[str, list[str]] = {"missing": [], "invalid": []}
+    feature_contracts = registry.get("feature_contracts", {})
+    feature_schemas = feature_contracts.get("schemas", {})
+    feature_semantics = feature_contracts.get("semantics", {})
+
+    generation = registry.get("registry_generation")
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+        issues["invalid"].append(
+            "registry_generation must be a positive integer"
+        )
+    effective_at = registry.get("registry_effective_at")
+    try:
+        parsed_effective_at = datetime.fromisoformat(
+            str(effective_at or "").replace("Z", "+00:00")
+        )
+        if parsed_effective_at.tzinfo is None or parsed_effective_at.utcoffset() is None:
+            raise ValueError("timezone required")
+    except ValueError:
+        issues["invalid"].append(
+            "registry_effective_at must be an ISO-8601 timestamp with timezone"
+        )
 
     for family in FAMILY_DIRS:
         block = _family_block(registry, family)
@@ -135,6 +156,41 @@ def validate_registry(registry: Optional[Dict] = None) -> Dict[str, list[str]]:
             continue
         entry = block.get("models", {}).get(current_version, {})
         expected_features = int(entry.get("features") or 0)
+        required_contract_fields = (
+            "feature_schema_id",
+            "feature_schema_sha256",
+            "training_feature_semantics_id",
+            "live_feature_semantics_id",
+            "training_dataset_id",
+        )
+        for field in required_contract_fields:
+            if not str(entry.get(field) or "").strip():
+                issues["invalid"].append(
+                    f"{family}:{current_version} missing {field}"
+                )
+        feature_schema_id = str(entry.get("feature_schema_id") or "")
+        declared_schema = feature_schemas.get(feature_schema_id, {})
+        if feature_schema_id and not declared_schema:
+            issues["invalid"].append(
+                f"{family}:{current_version} unknown feature_schema_id={feature_schema_id}"
+            )
+        elif declared_schema:
+            declared_hash = str(declared_schema.get("schema_sha256") or "").lower()
+            entry_hash = str(entry.get("feature_schema_sha256") or "").lower()
+            if declared_hash != entry_hash:
+                issues["invalid"].append(
+                    f"{family}:{current_version} feature schema checksum mismatch"
+                )
+            if int(declared_schema.get("feature_count") or 0) != expected_features:
+                issues["invalid"].append(
+                    f"{family}:{current_version} feature count does not match schema"
+                )
+        for field in ("training_feature_semantics_id", "live_feature_semantics_id"):
+            semantics_id = str(entry.get(field) or "")
+            if semantics_id and semantics_id not in feature_semantics:
+                issues["invalid"].append(
+                    f"{family}:{current_version} unknown {field}={semantics_id}"
+                )
         model_path = resolve_artifact_path(
             family, "model_file", version=current_version, registry=registry
         )

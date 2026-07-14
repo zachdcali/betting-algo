@@ -28,11 +28,25 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   3. update [production/models/model_registry.json](/Users/zachdodson/Documents/betting-algo/production/models/model_registry.json)
   4. update [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md)
 - Use [production/models/validate_registry.py](/Users/zachdodson/Documents/betting-algo/production/models/validate_registry.py) after registry changes.
+- Every committed registry change must increment the positive
+  `registry_generation` and set a timezone-aware `registry_effective_at`.
+  Database release status is ordered by that explicit generation, never by
+  import time; reusing a generation number with different registry bytes is an
+  integrity failure.
 - Current promoted artifact entries must pin model/scaler SHA-256 values and
   pass checksum, deserialization, and feature-count validation before cloud
   inference.
 - A changed train/validation/test protocol warrants at least a minor version bump.
 - Probability calibration for the NN should be tracked separately from the base NN artifact version.
+- Keep the ordered feature schema and feature semantics as separate versioned
+  contracts. The current representation is `base_141@1.0.0`; its historical
+  and live semantics remain explicitly different until shared chronological
+  parity passes. Do not hide feature behavior behind names such as `_v2` or
+  `final_fixed`.
+- Existing promoted artifact paths stay stable. New artifacts use
+  `releases|candidates|archive/<family>/v<semver>/model.<format>`, with registry
+  metadata binding the feature schema/semantics, training dataset, protocol,
+  calibration, and content hashes.
 
 ## Training Rules
 
@@ -71,6 +85,19 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   source of truth.
 - `logs/betting.db` is derived from the CSV logs and must not be committed as
   hourly binary churn.
+- The normalized Postgres operational schema is versioned independently from
+  models, features, and logging. During migration, typed `raw`/`ops`/`ml`
+  tables are additive and CSV remains authoritative until an import batch has
+  exact key/hash parity, staging recovery drills pass, and the cutover is
+  explicitly accepted. Never big-bang replace the CSV path or run a migration
+  directly against production without backup/PITR and a staging proof.
+- Import batches are keyed by source hashes, operational schema, normalizer
+  version, and normalized target manifest. Facts can belong to multiple batches
+  through append-only memberships. A reused idempotency key with a different
+  semantic record hash is a hard conflict, never a first-wins retry.
+- After cutover, Postgres is the operational source of truth; CSV/Parquet and
+  SQLite are one-way exports. Raw source bodies belong in private object
+  storage with URI/checksum provenance, not public dashboard tables.
 - `python main.py --dry-run` should not start a betting session or write
   `logs/all_bets.csv`; use it for pipeline smoke checks when duplicate live
   bet logging would be risky.

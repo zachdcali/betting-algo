@@ -6,15 +6,56 @@ Registry truth still lives in [model_registry.json](/Users/zachdodson/Documents/
 
 ## Current Production Versions
 
-- Neural Network: `v1.2.1`
-- XGBoost: `v1.2.0`
-- Random Forest: `v1.2.0`
+- Neural Network: `v1.2.3` (weights from `v1.2.1`; pipeline-only releases
+  `v1.2.2` and `v1.2.3`)
+- XGBoost: `v1.2.2` (weights from `v1.2.0`; pipeline-only releases
+  `v1.2.1` and `v1.2.2`)
+- Random Forest: `v1.2.2` (weights from `v1.2.0`; pipeline-only releases
+  `v1.2.1` and `v1.2.2`)
 
 ## Current Candidate Versions
 
 - Neural Network: `v1.3.0`
 
 ## Release Notes
+
+### 2026-07-14
+
+#### Registry generation ordering
+
+- The registry document now has an explicit monotonic generation and effective
+  timestamp. Database promotion state follows that generation rather than file
+  import order, so replaying an older registry cannot demote a newer release.
+- No promoted model, candidate status, artifact path, or artifact byte changed
+  in this registry-contract release.
+
+### 2026-07-13
+
+#### Registry contract metadata
+
+- Promoted artifacts remain at their existing stable paths; no model bytes were
+  renamed or replaced.
+- The registry now identifies the ordered representation as
+  `base_141@1.0.0` and pins its schema SHA-256.
+- Historical training semantics are explicitly recorded as
+  `sackmann_historical_legacy@1.0.0`; active live semantics are recorded as
+  `ta_live_legacy@3.0.0`. Their mismatch is a retraining stop gate, not hidden
+  behind a filename.
+- `base_141_shared@1.0.0` is reserved for the future parity-tested feature
+  kernel and is not active.
+- New artifacts will use family/version directories such as
+  `candidates/xgboost/v2.0.0/model.json`; registry metadata binds the feature
+  contract, dataset, calibration, and hashes.
+
+### 2026-07-11
+
+#### Pipeline-only releases
+
+- NN `v1.2.3`, XGBoost `v1.2.2`, and Random Forest `v1.2.2` identify the
+  week-boundary and store-ingest feature regime introduced on July 11.
+- Model weights are unchanged from NN `v1.2.1` and XGB/RF `v1.2.0`.
+- These versions improve operational lineage; they are not claims of a newly
+  trained or better-performing artifact.
 
 ### 2026-04-23
 

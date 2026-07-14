@@ -1,6 +1,8 @@
 # Versioning
 
-This project now needs two kinds of versioning, not one.
+This project uses separate version domains. A model version, feature contract,
+dataset snapshot, logging schema, and operational database schema must never be
+inferred from one another.
 
 ## 1. Model Versions
 
@@ -27,6 +29,20 @@ Candidate versions are useful when a model has been retrained honestly but is no
 - keep `current_version` pointed at the live promoted version
 - track a `candidate_version` separately when a retrain exists but should not silently replace production
 - use candidate status for cases like "honest retrain completed, but offline or live review is not strong enough to promote"
+
+The registry document is an independently ordered release stream. Its root
+must carry:
+
+- `registry_schema_version`: shape of the registry document;
+- `registry_generation`: a positive, monotonically increasing integer; and
+- `registry_effective_at`: an explicit timezone-aware timestamp.
+
+Every registry content hash is stored as an immutable database generation.
+Model status events are unique per release and generation, and "current" is
+selected by `registry_generation`, never by import time. Increment the
+generation whenever a committed registry change alters release status or
+contract metadata. Reusing a generation number with different bytes is an
+integrity error.
 
 Practical guidance for the next NN retrain:
 
@@ -102,3 +118,95 @@ A model should only become the production `current_version` after:
 - explicit registry update
 
 That keeps training experiments, archived artifacts, and live production behavior from drifting out of sync.
+
+## 6. Feature Schema And Semantics
+
+Do not use ambiguous names such as `base_141_v2`, `model_final_v2.pkl`, or
+`latest_fixed.pth` as identifiers. Version identity lives in metadata and uses
+Semantic Versioning.
+
+Two feature versions are tracked independently:
+
+- `feature_schema_id`
+  Ordered names, types, and cardinality. The current representation is
+  `base_141@1.0.0`, with 141 ordered fields and schema SHA-256
+  `17a33325776292ad31e4bbaff81cb223355f026aa019b8b516a0281945930b4d`.
+- `feature_semantics_id`
+  Formula, as-of, source-priority, missingness, and orientation behavior.
+
+The current historical and live implementations deliberately have different
+semantic identities because parity is not proven:
+
+- `sackmann_historical_legacy@1.0.0`
+- `ta_live_legacy@3.0.0`
+
+The future shared, parity-tested implementation is reserved as
+`base_141_shared@1.0.0`. It is not active until chronological golden fixtures
+pass. If the shared implementation keeps the same ordered fields, the schema
+can remain `base_141@1.0.0`; changing formulas is represented by the semantics
+ID and normally warrants a major model-family version because behavior changes
+materially.
+
+Every new model-registry entry must record:
+
+- `feature_schema_id` and `feature_schema_sha256`
+- `feature_semantics_id`
+- `training_dataset_id` and manifest SHA-256
+- training protocol/version and code commit
+- model, scaler, and calibrator hashes where applicable
+
+## 7. Artifact Paths
+
+Existing promoted filenames remain untouched for compatibility. New artifacts
+use a stable directory hierarchy:
+
+```text
+releases/<family>/v<model-semver>/model.<format>
+candidates/<family>/v<model-semver>/model.<format>
+archive/<family>/v<model-semver>/model.<format>
+```
+
+For example:
+
+```text
+candidates/xgboost/v2.0.0/model.json
+candidates/nn/v2.0.0/model.pth
+candidates/nn/v2.0.0/scaler.pkl
+```
+
+The model registry—not a long filename—binds an artifact to its family,
+version, feature contract, dataset, calibration, and hashes.
+
+The extension remains the real serialization format (`.pth`, `.pkl`, `.json`,
+or another reviewed format). Do not encode release identity in suffixes such as
+`_v2`, `_final`, or `_fixed`; the family directory and SemVer registry entry are
+the release identity.
+
+## 8. Dataset Releases
+
+Training reads an immutable Parquet release exported from a specific canonical
+database watermark. Each release has a JSON manifest with its own SemVer,
+content hashes, query hash, canonical snapshot/watermark, feature schema and
+semantics IDs, cleanup-map version, row counts, chronological cutoffs, code
+commit, and deterministic orientation rule.
+
+Never overwrite a dataset release directory. A corrected canonical snapshot or
+changed feature semantics creates a new release even when the row count happens
+to be unchanged.
+
+## 9. Operational Database Schema
+
+Typed Postgres migrations have an independent version. The current normalized
+operational contract is `1.1.0`; migration filenames use an ordered UTC
+timestamp plus a descriptive slug. Contract `1.0.0` is the base schema and
+`1.1.0` adds the integrity layer. This does not bump any model.
+
+The legacy-to-Postgres normalizer is versioned separately as
+`operational_csv_normalizer@1.0.0`. An import batch identity includes the
+source-file hashes, operational schema version, normalizer version, and exact
+normalized target manifest. A mapping change therefore creates a new batch
+even when the source bytes are unchanged.
+
+Logging remains `prediction_log_v2` during dual-write. A logging-schema bump
+occurs only when the persisted record contract changes, not merely because the
+same evidence is copied into Postgres.
