@@ -116,6 +116,15 @@ def _check_prediction_logger():
                 prediction_logger.SNAPSHOT_LOG_PATH = tmp_path / "prediction_snapshots.csv"
                 prediction_logger.ODDS_HISTORY_LOG_PATH = tmp_path / "odds_history.csv"
 
+                from logging_utils import build_feature_snapshot_id, build_match_uid
+                match_uid = build_match_uid(
+                    "Player One", "Player Two", "2026-04-18",
+                    "Test Event", "R32", "Hard",
+                )
+                feature_snapshot_id = build_feature_snapshot_id(
+                    match_uid, "run_test", "Player One", "Player Two",
+                )
+
                 prediction_logger.log_prediction(
                     p1="Player One",
                     p2="Player Two",
@@ -125,8 +134,8 @@ def _check_prediction_logger():
                     round_code="R32",
                     match_date="2026-04-18",
                     run_id="run_test",
-                    match_uid="match_test",
-                    feature_snapshot_id="feat_test",
+                    match_uid=match_uid,
+                    feature_snapshot_id=feature_snapshot_id,
                     model_p1_prob=0.61,
                     model_p2_prob=0.39,
                     market_p1_prob=0.55,

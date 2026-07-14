@@ -13,10 +13,13 @@ from evaluation import cohorts  # noqa: E402
 from feature_contract import feature_fingerprint  # noqa: E402
 from feature_lineage import FeatureLineageConflict, resolve_feature_lineage  # noqa: E402
 from feature_vector_log import COLS as FEATURE_VECTOR_COLS  # noqa: E402
+from logging_utils import build_feature_snapshot_id  # noqa: E402
 from models.inference import EXACT_141_FEATURES  # noqa: E402
 
 
-def _aggregate_feature(snapshot_id: str) -> dict:
+def _aggregate_feature(
+    snapshot_id: str, *, match_uid: str, run_id: str, p1: str, p2: str
+) -> dict:
     payload = {name: 0.0 for name in EXACT_141_FEATURES}
     payload.update({
         "Surface_Hard": 1.0, "Level_A": 1.0, "Round_R32": 1.0,
@@ -25,6 +28,10 @@ def _aggregate_feature(snapshot_id: str) -> dict:
     })
     return {
         "feature_snapshot_id": snapshot_id,
+        "match_uid": match_uid,
+        "run_id": run_id,
+        "p1": p1,
+        "p2": p2,
         "build_status": "ok",
         "features_complete": True,
         "features_json": json.dumps(payload),
@@ -72,18 +79,37 @@ def test_materialized_metrics_use_remote_plus_local_merged_cohort(monkeypatch):
         "p1_odds_decimal": 1.8,
         "p2_odds_decimal": 2.1,
     }
+    local_id = build_feature_snapshot_id(
+        "local", "run_local", "Local P1", "Local P2"
+    )
+    remote_id = build_feature_snapshot_id(
+        "remote", "run_remote", "Remote P1", "Remote P2"
+    )
     local = pd.DataFrame([{
         **base, "match_uid": "local", "actual_winner": 1,
-        "feature_snapshot_id": "feat_local", "feature_snapshot_verified": True,
+        "run_id": "run_local", "p1": "Local P1", "p2": "Local P2",
+        "feature_snapshot_id": local_id, "feature_snapshot_verified": True,
     }])
     merged = pd.DataFrame([
         local.iloc[0].to_dict(),
         {**base, "match_uid": "remote", "actual_winner": 2,
-         "feature_snapshot_id": "feat_remote"},
+         "run_id": "run_remote", "p1": "Remote P1", "p2": "Remote P2",
+         "feature_snapshot_id": remote_id},
+        # Valid vector hash/ID evidence is insufficient when the prediction's
+        # match/run/orientation does not name the producing feature row.
+        {**base, "match_uid": "wrong_match", "actual_winner": 1,
+         "run_id": "wrong_run", "p1": "Remote P2", "p2": "Remote P1",
+         "feature_snapshot_id": remote_id},
     ])
     features = pd.DataFrame([
-        _aggregate_feature("feat_local"),
-        _aggregate_feature("feat_remote"),
+        _aggregate_feature(
+            local_id, match_uid="local", run_id="run_local",
+            p1="Local P1", p2="Local P2",
+        ),
+        _aggregate_feature(
+            remote_id, match_uid="remote", run_id="run_remote",
+            p1="Remote P1", p2="Remote P2",
+        ),
     ])
     monkeypatch.setattr(cohorts, "load_prediction_log", lambda _prod: local)
 
@@ -176,9 +202,13 @@ def test_feature_projection_normalizes_nonfinite_json_values():
 
 
 def test_feature_publish_then_clean_clone_hydrate_preserves_immutable_repair(tmp_path):
+    snapshot_id = build_feature_snapshot_id(
+        "match_1", "run_1", "Player One", "Player Two"
+    )
     immutable_vector = _lineage_vector(12.0)
     stale_vector = _lineage_vector(12.000000000000002)
     stale = _derived_lineage_row(stale_vector)
+    stale["feature_snapshot_id"] = snapshot_id
     production = tmp_path / "production"
     logs = production / "logs"
     logs.mkdir(parents=True)
@@ -193,7 +223,7 @@ def test_feature_publish_then_clean_clone_hydrate_preserves_immutable_repair(tmp
         "player1_raw": "Player One", "player2_raw": "Player Two",
         "meta_match_date": "2026-07-13", "timestamp": "2026-07-13T10:00:00Z",
         "run_id": "run_1", "match_uid": "match_1",
-        "feature_snapshot_id": "feature_1", "status": "ok",
+        "feature_snapshot_id": snapshot_id, "status": "ok",
         "meta_defaulted_features": "",
         "feature_schema_sha256": schema_hash,
         "feature_vector_sha256": immutable_hash,
@@ -213,7 +243,9 @@ def test_feature_publish_then_clean_clone_hydrate_preserves_immutable_repair(tmp
     immutable_path.unlink()
     stale_local = pd.DataFrame([stale])
     durable = published.copy()
-    durable["dashboard_row_key"] = "dash_features:feature_snapshot_id:feature_1"
+    durable["dashboard_row_key"] = (
+        f"dash_features:feature_snapshot_id:{snapshot_id}"
+    )
     durable["sync_id"] = "sync_previous"
     hydrated = dashboard_sync._merge_feature_state(durable, stale_local)
     assert list(hydrated.columns) == FEATURE_VECTOR_COLS
@@ -225,7 +257,9 @@ def test_feature_publish_then_clean_clone_hydrate_preserves_immutable_repair(tmp
     assert json.loads(reloaded.iloc[0]["features_json"])["Player1_Rank"] == 12.0
 
     prediction = {
-        "match_uid": "match_1", "feature_snapshot_id": "feature_1",
+        "match_uid": "match_1", "run_id": "run_1",
+        "p1": "Player One", "p2": "Player Two",
+        "feature_snapshot_id": snapshot_id,
         "feature_vector_sha256": immutable_hash,
     }
     pd.DataFrame([prediction]).to_csv(production / "prediction_log.csv", index=False)
@@ -334,6 +368,9 @@ def test_explicitly_incomplete_durable_status_ok_row_remains_non_gold_repair():
 
 
 def test_materialized_dashboard_gold_matches_ledger_after_ulp_reconciliation(monkeypatch):
+    snapshot_id = build_feature_snapshot_id(
+        "match_1", "run_1", "Player One", "Player Two"
+    )
     immutable_vector = _lineage_vector(12.0)
     derived_vector = _lineage_vector(12.000000000000002)
     schema_hash, immutable_hash, count = feature_fingerprint(
@@ -342,13 +379,15 @@ def test_materialized_dashboard_gold_matches_ledger_after_ulp_reconciliation(mon
     _, derived_hash, _ = feature_fingerprint(derived_vector, EXACT_141_FEATURES)
     immutable = {
         **immutable_vector,
+        "player1_raw": "Player One", "player2_raw": "Player Two",
         "run_id": "run_1", "match_uid": "match_1",
-        "feature_snapshot_id": "feature_1", "status": "ok",
+        "feature_snapshot_id": snapshot_id, "status": "ok",
         "feature_schema_sha256": schema_hash,
         "feature_vector_sha256": immutable_hash,
         "feature_count": count,
     }
     derived = _derived_lineage_row(derived_vector)
+    derived["feature_snapshot_id"] = snapshot_id
     lineage = resolve_feature_lineage(
         ordered_names=EXACT_141_FEATURES,
         immutable_sources=[("features_run.csv", pd.DataFrame([immutable]))],
@@ -356,7 +395,8 @@ def test_materialized_dashboard_gold_matches_ledger_after_ulp_reconciliation(mon
     )
     prediction = pd.DataFrame([{
         "match_uid": "match_1", "actual_winner": 1,
-        "feature_snapshot_id": "feature_1",
+        "run_id": "run_1", "p1": "Player One", "p2": "Player Two",
+        "feature_snapshot_id": snapshot_id,
         "feature_vector_sha256": immutable_hash,
         "features_complete": True,
         "logging_quality": "snapshot_v2",

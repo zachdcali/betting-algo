@@ -100,6 +100,8 @@ RUN_HISTORY_COLUMNS = [
     "prediction_log_created",
     "prediction_log_updated",
     "prediction_log_skipped_incomplete",
+    "prediction_identity_aliases",
+    "prediction_identity_conflicts",
     "bet_opportunities",
     "bets_logged",
     "settlement_candidates",

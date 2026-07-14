@@ -15,6 +15,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 from evaluation import replay_manifest
 from feature_vector_log import feature_fingerprint
+from logging_utils import build_feature_snapshot_id
 from models.inference import EXACT_141_FEATURES
 
 
@@ -33,6 +34,18 @@ def _valid_features(*, rank: float = 100.0) -> dict:
         }
     )
     return row
+
+
+def _fixture_run_id(snapshot_label: str) -> str:
+    return f"run_{snapshot_label}"
+
+
+def _fixture_snapshot_id(snapshot_label: str, uid: str, p1: str, p2: str) -> str:
+    if snapshot_label.startswith("feat_") and len(snapshot_label) == 25:
+        return snapshot_label
+    return build_feature_snapshot_id(
+        uid, _fixture_run_id(snapshot_label), p1, p2
+    )
 
 
 def _prediction(uid: str, p1: str, p2: str, **overrides) -> dict:
@@ -57,6 +70,19 @@ def _prediction(uid: str, p1: str, p2: str, **overrides) -> dict:
         "market_p2_prob": 0.46,
         "actual_winner": 1,
     }
+    snapshot_label = str(overrides.get("feature_snapshot_id", "") or "")
+    if snapshot_label:
+        overrides["run_id"] = overrides.get("run_id") or _fixture_run_id(
+            snapshot_label
+        )
+        overrides["feature_snapshot_id"] = _fixture_snapshot_id(
+            snapshot_label, uid, p1, p2
+        )
+    latest_label = str(overrides.get("latest_feature_snapshot_id", "") or "")
+    if latest_label:
+        overrides["latest_feature_snapshot_id"] = _fixture_snapshot_id(
+            latest_label, uid, p1, p2
+        )
     row.update(overrides)
     return row
 
@@ -70,12 +96,18 @@ def _feature(
     rank: float = 100.0,
     complete: bool = True,
 ) -> dict:
+    snapshot_label = snapshot_id
+    snapshot_id = (
+        _fixture_snapshot_id(snapshot_label, uid, p1, p2)
+        if snapshot_label else ""
+    )
     row = _valid_features(rank=rank)
     schema_hash, vector_hash, _ = feature_fingerprint(row)
     row.update(
         {
             "feature_snapshot_id": snapshot_id,
             "match_uid": uid,
+            "run_id": _fixture_run_id(snapshot_label) if snapshot_label else "",
             "player1_raw": p1,
             "player2_raw": p2,
             "meta_match_date": "2026-07-10",
@@ -146,6 +178,73 @@ def test_classifies_gold_exact_incomplete_legacy_and_no_vector(tmp_path):
     assert "NO_REPLAYABLE_VECTOR" in result.loc["none", "reason_codes"]
 
 
+def test_cross_match_snapshot_pointer_and_identity_terminal_rows_fail_closed(tmp_path):
+    cross = _feature("feat_cross", "old_uid", "Player A", "Player B")
+    terminal = _feature("feat_terminal", "terminal_uid", "Player C", "Player D")
+    predictions = [
+        _prediction(
+            "new_uid",
+            "Player A",
+            "Player B",
+            feature_snapshot_id=cross["feature_snapshot_id"],
+            run_id=cross["run_id"],
+            feature_vector_sha256=cross["feature_vector_sha256"],
+        ),
+        _prediction(
+            "terminal_uid",
+            "Player C",
+            "Player D",
+            feature_snapshot_id=terminal["feature_snapshot_id"],
+            run_id=terminal["run_id"],
+            feature_vector_sha256=terminal["feature_vector_sha256"],
+            record_status="identity_conflict",
+            identity_status="conflict",
+        ),
+    ]
+    production = _write_inputs(tmp_path, predictions, [cross, terminal])
+
+    result = replay_manifest.build_replay_manifest(production).frame.set_index(
+        "match_uid"
+    )
+
+    assert result.loc["new_uid", "replay_tier"] == "EXACT_INCOMPLETE"
+    assert not result.loc["new_uid", "snapshot_verified"]
+    assert "FEATURE_IDENTITY_UNVERIFIED" in result.loc[
+        "new_uid", "reason_codes"
+    ]
+    assert result.loc["terminal_uid", "replay_tier"] == "NO_VECTOR"
+    assert "MATCH_IDENTITY_CONFLICT" in result.loc[
+        "terminal_uid", "reason_codes"
+    ]
+
+
+def test_any_identity_tombstone_blocks_same_uid_replay_group(tmp_path):
+    feature = _feature("feat_group", "group_uid", "Player A", "Player B")
+    settled = _prediction(
+        "group_uid",
+        "Player A",
+        "Player B",
+        feature_snapshot_id="feat_group",
+        feature_vector_sha256=feature["feature_vector_sha256"],
+        record_status="settled",
+        actual_winner=1,
+    )
+    conflict = dict(settled)
+    conflict.update({
+        "logged_at": "2026-07-10T10:06:00Z",
+        "record_status": "identity_conflict",
+        "identity_status": "conflict",
+        "features_complete": False,
+        "actual_winner": "",
+    })
+    production = _write_inputs(tmp_path, [settled, conflict], [feature])
+
+    row = replay_manifest.build_replay_manifest(production).frame.iloc[0]
+
+    assert row["replay_tier"] == "NO_VECTOR"
+    assert "MATCH_IDENTITY_CONFLICT" in row["reason_codes"]
+
+
 def test_alternative_snapshot_is_preserved_but_never_cherry_picked(tmp_path):
     bad = _feature("feat_opening", "match_1", "Player A", "Player B")
     bad["Round_R32"] = 0.0  # structural one-hot failure
@@ -162,12 +261,17 @@ def test_alternative_snapshot_is_preserved_but_never_cherry_picked(tmp_path):
     row = replay_manifest.build_replay_manifest(production).frame.iloc[0]
 
     assert row["replay_tier"] == "EXACT_INCOMPLETE"
-    assert row["feature_snapshot_id"] == "feat_opening"
+    assert row["feature_snapshot_id"] == bad["feature_snapshot_id"]
     assert not row["snapshot_verified"]
     assert "EXACT_LINEAGE_UNVERIFIED" in row["reason_codes"]
-    assert json.loads(row["alternative_snapshot_ids"]) == ["feat_later"]
+    assert json.loads(row["alternative_snapshot_ids"]) == [
+        good["feature_snapshot_id"]
+    ]
     alternatives = json.loads(row["alternative_snapshot_provenance"])
-    assert any(item.get("feature_snapshot_id") == "feat_later" for item in alternatives)
+    assert any(
+        item.get("feature_snapshot_id") == good["feature_snapshot_id"]
+        for item in alternatives
+    )
 
 
 def test_ulp_equivalent_aggregate_does_not_poison_immutable_exact_verification(tmp_path):
@@ -184,8 +288,10 @@ def test_ulp_equivalent_aggregate_does_not_poison_immutable_exact_verification(t
     production = _write_inputs(tmp_path, [prediction], [immutable])
     pd.DataFrame([{
         "p1": "Player A", "p2": "Player B", "match_date": "2026-07-10",
-        "logged_at": "2026-07-10T10:01:00Z", "run_id": "",
-        "match_uid": "match_ulp", "feature_snapshot_id": "feat_ulp",
+        "logged_at": "2026-07-10T10:01:00Z",
+        "run_id": immutable["run_id"],
+        "match_uid": "match_ulp",
+        "feature_snapshot_id": immutable["feature_snapshot_id"],
         "build_status": "ok", "features_complete": True,
         "feature_schema_sha256": schema_hash,
         "feature_vector_sha256": derived_hash,
@@ -214,8 +320,10 @@ def test_materially_divergent_aggregate_aborts_replay(tmp_path):
     schema_hash, vector_hash, feature_count = feature_fingerprint(divergent)
     pd.DataFrame([{
         "p1": "Player A", "p2": "Player B", "match_date": "2026-07-10",
-        "logged_at": "2026-07-10T10:01:00Z", "run_id": "",
-        "match_uid": "match_bad", "feature_snapshot_id": "feat_bad_copy",
+        "logged_at": "2026-07-10T10:01:00Z",
+        "run_id": immutable["run_id"],
+        "match_uid": "match_bad",
+        "feature_snapshot_id": immutable["feature_snapshot_id"],
         "build_status": "ok", "features_complete": True,
         "feature_schema_sha256": schema_hash,
         "feature_vector_sha256": vector_hash,
@@ -348,7 +456,8 @@ def test_gold_requires_snapshot_v2_contract_and_oriented_feature_identity(tmp_pa
                 "wrong",
                 "Player A",
                 "Player B",
-                feature_snapshot_id="feat_wrong",
+                feature_snapshot_id=wrong_identity["feature_snapshot_id"],
+                run_id=wrong_identity["run_id"],
                 feature_vector_sha256=wrong_identity["feature_vector_sha256"],
                 logging_quality="legacy_backfilled",
                 rescore_quality="legacy_fallback_match",

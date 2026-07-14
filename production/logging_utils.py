@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -52,6 +53,79 @@ def stable_hash(*parts, length: int = 20) -> str:
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:length]
 
 
+_BOVADA_BUCKET_COUNT_SUFFIX = re.compile(r"(?:\s*\(\s*\d+\s*\))+\s*$")
+
+
+def canonicalize_live_event_key(event_title: str) -> str:
+    """Return the stable event component used by live match identity.
+
+    Bovada appends the current number of visible events to bucket titles (for
+    example ``"Challenger - Lincoln (8)"``).  That number changes as matches
+    start and disappear, so it is display metadata rather than identity.
+
+    This intentionally removes only trailing numeric parentheticals.  It does
+    not fuzzy-merge cities, levels, sponsors, dates, or rounds.
+    """
+    text = (
+        ""
+        if event_title is None or pd.isna(event_title)
+        else str(event_title).strip()
+    )
+    text = _BOVADA_BUCKET_COUNT_SUFFIX.sub("", text)
+    return normalize_text(text)
+
+
+@dataclass(frozen=True)
+class LiveMatchIdentity:
+    """Canonical live identity plus the metadata that produced it."""
+
+    match_uid: str
+    player1_key: str
+    player2_key: str
+    match_date: str
+    event_key: str
+    round_key: str
+    surface_key: str
+
+
+def build_live_match_identity(
+    p1: str,
+    p2: str,
+    match_date: str,
+    tournament: str = "",
+    round_code: str = "",
+    surface: str = "",
+) -> LiveMatchIdentity:
+    """Build the single forward identity contract for a live match.
+
+    Player order is intentionally ignored.  Date, round, and surface remain
+    explicit identity inputs: if one of them changes, the prediction logger
+    must record an alias/conflict decision rather than silently reusing a row.
+    """
+    players = sorted([normalize_name(p1), normalize_name(p2)])
+    event_key = canonicalize_live_event_key(tournament)
+    date_key = normalize_text(match_date)
+    round_key = normalize_text(round_code)
+    surface_key = normalize_text(surface)
+    match_uid = "match_" + stable_hash(
+        players[0],
+        players[1],
+        date_key,
+        event_key,
+        round_key,
+        surface_key,
+    )
+    return LiveMatchIdentity(
+        match_uid=match_uid,
+        player1_key=players[0],
+        player2_key=players[1],
+        match_date=date_key,
+        event_key=event_key,
+        round_key=round_key,
+        surface_key=surface_key,
+    )
+
+
 def build_match_uid(
     p1: str,
     p2: str,
@@ -67,15 +141,14 @@ def build_match_uid(
     metadata so that live odds, feature rows, and later rescoring can refer to
     the same match without relying on a per-run row index.
     """
-    players = sorted([normalize_name(p1), normalize_name(p2)])
-    return "match_" + stable_hash(
-        players[0],
-        players[1],
+    return build_live_match_identity(
+        p1,
+        p2,
         match_date,
         tournament,
         round_code,
         surface,
-    )
+    ).match_uid
 
 
 def build_feature_snapshot_id(match_uid: str, run_id: str, p1: str, p2: str) -> str:

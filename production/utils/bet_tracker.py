@@ -435,6 +435,7 @@ class BetTracker:
     def settle_pending_bets_for_match(
         self,
         match_uid: str = None,
+        alias_match_uids=None,
         p1: str = None,
         p2: str = None,
         actual_winner: int = None,
@@ -449,8 +450,15 @@ class BetTracker:
             return 0
 
         candidates = pd.DataFrame()
+        allowed_uids = {
+            str(value).strip()
+            for value in [match_uid, *(alias_match_uids or [])]
+            if str(value or '').strip()
+        }
         if match_uid and 'match_uid' in pending.columns:
-            candidates = pending[pending['match_uid'].fillna('') == match_uid]
+            candidates = pending[
+                pending['match_uid'].fillna('').astype(str).str.strip().isin(allowed_uids)
+            ]
 
         if candidates.empty and p1 and p2:
             p1_norm = normalize_name(p1)
@@ -462,7 +470,15 @@ class BetTracker:
                     return False
                 return parts == [p1_norm, p2_norm] or parts == [p2_norm, p1_norm]
 
-            candidates = pending[pending['match'].apply(_match_pair)]
+            pair_pool = pending
+            if match_uid and 'match_uid' in pending.columns:
+                # Player-only matching is a compatibility path for legacy bets
+                # that predate immutable IDs. A different nonblank UID may be a
+                # different round/event and must never be settled fuzzily.
+                pair_pool = pending[
+                    pending['match_uid'].fillna('').astype(str).str.strip().eq('')
+                ]
+            candidates = pair_pool[pair_pool['match'].apply(_match_pair)]
 
         settled = 0
         auto_note = notes or "Auto-settled from Tennis Abstract"

@@ -28,6 +28,34 @@ non-decision-grade. Their historical aggregate may omit the ordered vector, but
 any fields retained by both copies must still agree within the same tolerance
 and neither copy may claim an exact decision-grade hash.
 
+## Live match identity and snapshot attachment
+
+Forward live identity canonicalizes player names and removes only Bovada's
+trailing numeric bucket count from the event key. Thus `Challenger - Lincoln
+(8)` and `Challenger - Lincoln (3)` produce the same event component, while
+date, round, surface, canonical event, and player orientation remain explicit.
+Display tournament text may enrich independently when the canonical event key
+is unchanged.
+
+For snapshot-backed rows, prediction refresh is exact-`match_uid` only. The
+feature snapshot ID is recomputed from `match_uid`, `run_id`, and oriented
+players before prediction evidence is written. A mismatch aborts before a
+prediction, shadow, odds, or bet can use that pointer.
+
+A nearby pre-contract row with an otherwise identical metadata contract is
+retired as `superseded_identity`, and the canonical replacement records the old
+UID as an explicit alias. The same explicit supersession is allowed when an
+unsettled, incomplete blank-round row enriches to a complete known round. A
+date, nonblank-round, surface, canonical-event, or orientation shift is instead
+persisted as `identity_conflict` with `features_complete=False`; an impossible
+collision on an already-used exact UID raises and writes nothing.
+
+An identity tombstone on any row blocks the whole match UID in settlement,
+ground truth, replay, dashboard GOLD, shadow evaluation, and staking until an
+explicit resolution. Dashboard metric publication uses the same match, run,
+orientation, deterministic-ID, and vector-hash checks as the evaluation ledger;
+it may not reconstruct GOLD from a hash-only join.
+
 ## Dashboard repair and clean-clone precedence
 
 Dashboard publication reconstructs every locally available exact-ID row from

@@ -22,6 +22,7 @@ import pandas as pd
 
 BASE = Path(__file__).resolve().parent
 CONTROL_COLUMNS = {"dashboard_row_key", "sync_id"}
+IDENTITY_TERMINAL_STATUSES = {"identity_conflict", "superseded_identity"}
 
 
 @dataclass(frozen=True)
@@ -161,12 +162,29 @@ def _reconcile_prediction_groups(combined: pd.DataFrame,
         "record_status", pd.Series("", index=combined.index)
     ).map(_clean).str.lower()
     combined["_is_terminal"] = winner.isin([1, 2]) | status.isin(
-        {"settled", "void", "cancelled", "canceled"}
+        {
+            "settled", "void", "cancelled", "canceled",
+            *IDENTITY_TERMINAL_STATUSES,
+        }
+    )
+    # Identity terminals are safety tombstones, not ordinary freshness-based
+    # outcomes.  Once any durable copy records an identity conflict or
+    # supersession, a later/staler settlement copy must not make the match
+    # decision-eligible again.  Only an explicit identity-resolution workflow
+    # may clear these states.
+    combined["_terminal_priority"] = (
+        combined["_is_terminal"].astype(int) * 100
+        + status.isin(IDENTITY_TERMINAL_STATUSES).astype(int) * 100
     )
     terminal_fields = (
         "actual_winner", "score", "settled_at", "model_correct",
         "market_correct", "xgb_correct", "rf_correct", "record_status",
         "record_note",
+    )
+    identity_terminal_fields = (
+        "identity_status", "identity_event_key",
+        "identity_related_match_uid", "identity_conflict_fields",
+        "features_complete", "defaulted_features",
     )
     rows: list[pd.Series] = []
     for _, group in combined.groupby("_row_key", sort=False):
@@ -176,9 +194,14 @@ def _reconcile_prediction_groups(combined: pd.DataFrame,
         terminal = group[group["_is_terminal"]]
         if not terminal.empty:
             terminal_row = terminal.sort_values(
-                ["_freshness", "_source_order"], kind="stable"
+                ["_terminal_priority", "_freshness", "_source_order"],
+                kind="stable",
             ).iloc[-1]
-            for field in terminal_fields:
+            terminal_status = _clean(terminal_row.get("record_status", "")).lower()
+            fields = terminal_fields
+            if terminal_status in IDENTITY_TERMINAL_STATUSES:
+                fields = (*fields, *identity_terminal_fields)
+            for field in fields:
                 if field not in group.columns:
                     continue
                 value = terminal_row.get(field, "")

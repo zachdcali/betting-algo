@@ -381,15 +381,44 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
         for snapshot_id in local_lineage.canonical_by_id
         if snapshot_id not in local_lineage.invalid_ids
     }
+    authority_contracts = {
+        snapshot_id: cohorts.feature_identity_contract(
+            occurrence.row,
+            match_uid=occurrence.match_uid,
+            run_id=occurrence.run_id,
+        )
+        for snapshot_id, occurrence in local_lineage.canonical_by_id.items()
+        if snapshot_id not in local_lineage.invalid_ids
+    }
+    identity_invalid = set(local_lineage.invalid_ids)
     remote_evidence: dict[str, str] = {}
     remote_invalid: set[str] = set()
     if feature_log is not None and "feature_snapshot_id" in feature_log.columns:
         remote_evidence, remote_invalid = cohorts.verify_feature_frame(feature_log)
         for snapshot_id, vector_hash in remote_evidence.items():
             if snapshot_id not in remote_invalid:
-                referential_hashes.setdefault(snapshot_id, {vector_hash})
+                referential_hashes.setdefault(snapshot_id, set()).add(vector_hash)
+        for _, feature_row in feature_log.iterrows():
+            raw_snapshot_id = feature_row.get("feature_snapshot_id", "")
+            snapshot_id = (
+                "" if raw_snapshot_id is None or pd.isna(raw_snapshot_id)
+                else str(raw_snapshot_id).strip()
+            )
+            if not snapshot_id or snapshot_id not in remote_evidence:
+                continue
+            contract = cohorts.feature_identity_contract(feature_row)
+            if not all(contract.values()):
+                continue
+            existing = authority_contracts.get(snapshot_id)
+            if existing is not None and existing != contract:
+                identity_invalid.add(snapshot_id)
+            else:
+                authority_contracts[snapshot_id] = contract
         for snapshot_id in remote_invalid:
             referential_hashes.pop(snapshot_id, None)
+            identity_invalid.add(snapshot_id)
+    for snapshot_id in identity_invalid:
+        authority_contracts.pop(snapshot_id, None)
 
     if pred_log is None:
         pred_log = local_pred
@@ -408,8 +437,11 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
             )
             for snapshot_id, expected in zip(ids, expected_hash)
         ], index=pred_log.index)
+        identity_verified = cohorts.prediction_feature_identity_matches(
+            pred_log, authority_contracts
+        )
         pred_log["feature_snapshot_verified"] = (
-            ids.ne("") & hash_verified
+            ids.ne("") & hash_verified & identity_verified
         )
     if shadow_log is None:
         shadow_log = cohorts.load_shadow_log(os.path.dirname(__file__))

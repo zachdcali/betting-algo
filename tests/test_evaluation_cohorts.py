@@ -14,6 +14,7 @@ import pytest
 from evaluation import cohorts
 from evaluation.ledger import build_live_ledger
 from feature_vector_log import feature_fingerprint
+from logging_utils import build_feature_snapshot_id
 from models.inference import EXACT_141_FEATURES
 
 
@@ -80,6 +81,30 @@ def test_ground_truth_orientation_and_dedup():
     assert gt.loc["m2"] == 0   # player2 won
     assert "m3" not in gt.index  # unsettled excluded
     assert "m4" not in gt.index  # void sentinel excluded
+
+
+def test_any_identity_tombstone_blocks_uid_ground_truth_and_tiers():
+    rows = pd.DataFrame([
+        {
+            "match_uid": "m1", "actual_winner": 1,
+            "record_status": "settled", "features_complete": True,
+            "feature_snapshot_verified": True,
+            "logging_quality": "snapshot_v2",
+            "rescore_quality": "exact_feature_snapshot",
+        },
+        {
+            "match_uid": "m1", "actual_winner": None,
+            "record_status": "identity_conflict", "features_complete": False,
+            "feature_snapshot_verified": False,
+            "logging_quality": "snapshot_v2",
+            "rescore_quality": "exact_feature_snapshot",
+        },
+    ])
+
+    assert "m1" not in cohorts.build_ground_truth(rows).index
+    tier = cohorts._tier_flags(rows).iloc[0]
+    assert not bool(tier["is_complete"])
+    assert not bool(tier["is_gold"])
 
 
 def test_scored_frame_models_and_tiers():
@@ -208,12 +233,25 @@ def test_shadow_models_join_to_ground_truth():
 
 def test_load_prediction_log_verifies_feature_snapshot_foreign_key(tmp_path):
     log = _pred_log().iloc[:2].copy()
-    log["feature_snapshot_id"] = ["feat_present", "feat_missing"]
+    log.loc[log.index[0], ["run_id", "p1", "p2"]] = [
+        "run_1", "Player A", "Player B",
+    ]
+    present_id = build_feature_snapshot_id(
+        "m1", "run_1", "Player A", "Player B"
+    )
+    log["feature_snapshot_id"] = [present_id, "feat_missing"]
     log.to_csv(tmp_path / "prediction_log.csv", index=False)
     logs = tmp_path / "logs"
     logs.mkdir()
     feature_row = _valid_features()
-    feature_row.update({"feature_snapshot_id": "feat_present", "status": "ok"})
+    feature_row.update({
+        "feature_snapshot_id": present_id,
+        "match_uid": "m1",
+        "run_id": "run_1",
+        "player1_raw": "Player A",
+        "player2_raw": "Player B",
+        "status": "ok",
+    })
     pd.DataFrame([feature_row]).to_csv(
         logs / "features_20260701.csv", index=False,
     )
@@ -224,6 +262,77 @@ def test_load_prediction_log_verifies_feature_snapshot_foreign_key(tmp_path):
     scored = cohorts.build_scored_frame(loaded.reset_index(), None)
     assert bool(scored.loc[scored.match_uid == "m1", "is_gold"].iloc[0])
     assert not bool(scored.loc[scored.match_uid == "m2", "is_gold"].iloc[0])
+
+
+def test_feature_snapshot_verification_rejects_cross_match_pointer(tmp_path):
+    log = _pred_log().iloc[:1].copy()
+    log.loc[log.index[0], ["run_id", "p1", "p2"]] = [
+        "run_prediction", "Player A", "Player B",
+    ]
+    cross_id = build_feature_snapshot_id(
+        "different_match_uid", "run_authority", "Player A", "Player B"
+    )
+    log["feature_snapshot_id"] = [cross_id]
+    log.to_csv(tmp_path / "prediction_log.csv", index=False)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    feature_row = _valid_features()
+    feature_row.update({
+        "feature_snapshot_id": cross_id,
+        "match_uid": "different_match_uid",
+        "run_id": "run_authority",
+        "player1_raw": "Player A",
+        "player2_raw": "Player B",
+        "status": "ok",
+    })
+    pd.DataFrame([feature_row]).to_csv(logs / "features_cross.csv", index=False)
+
+    loaded = cohorts.load_prediction_log(str(tmp_path))
+
+    assert not bool(loaded.iloc[0]["feature_snapshot_verified"])
+    assert loaded.attrs["feature_snapshot_verification"][
+        "match_uid_mismatch_count"
+    ] == 1
+
+
+@pytest.mark.parametrize(
+    ("prediction_run", "prediction_p1", "prediction_p2"),
+    [
+        ("wrong_run", "Player A", "Player B"),
+        ("run_authority", "Player B", "Player A"),
+    ],
+)
+def test_feature_snapshot_verification_rejects_wrong_run_or_orientation(
+    tmp_path, prediction_run, prediction_p1, prediction_p2,
+):
+    match_uid = "match_identity"
+    authority_run = "run_authority"
+    snapshot_id = build_feature_snapshot_id(
+        match_uid, authority_run, "Player A", "Player B"
+    )
+    log = _pred_log().iloc[:1].copy()
+    log["match_uid"] = match_uid
+    log["run_id"] = prediction_run
+    log["p1"] = prediction_p1
+    log["p2"] = prediction_p2
+    log["feature_snapshot_id"] = snapshot_id
+    log.to_csv(tmp_path / "prediction_log.csv", index=False)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    feature_row = _valid_features()
+    feature_row.update({
+        "feature_snapshot_id": snapshot_id,
+        "match_uid": match_uid,
+        "run_id": authority_run,
+        "player1_raw": "Player A",
+        "player2_raw": "Player B",
+        "status": "ok",
+    })
+    pd.DataFrame([feature_row]).to_csv(logs / "features_identity.csv", index=False)
+
+    loaded = cohorts.load_prediction_log(str(tmp_path))
+
+    assert not bool(loaded.iloc[0]["feature_snapshot_verified"])
 
 
 def test_ulp_derived_hash_is_not_accepted_as_prediction_referential_hash(tmp_path):

@@ -21,6 +21,12 @@ def main():
     tracker = BetTracker(str(LOGS_DIR))
     df = pd.read_csv(PREDICTION_LOG_PATH)
     settled = df[df["actual_winner"].notna()].copy()
+    if "record_status" in settled.columns:
+        settled = settled[
+            ~settled["record_status"].fillna("").astype(str).str.lower().isin(
+                {"identity_conflict", "superseded_identity"}
+            )
+        ].copy()
     if settled.empty:
         print("No settled prediction rows found.")
         return 0
@@ -29,6 +35,18 @@ def main():
     for _, row in settled.iterrows():
         settled_count += tracker.settle_pending_bets_for_match(
             match_uid=row.get("match_uid"),
+            alias_match_uids=(
+                [
+                    value.strip()
+                    for value in str(
+                        row.get("identity_related_match_uid") or ""
+                    ).split("|")
+                    if value.strip()
+                ]
+                if str(row.get("identity_status") or "").strip().lower()
+                == "canonical_alias"
+                else []
+            ),
             p1=row.get("p1"),
             p2=row.get("p2"),
             actual_winner=int(row["actual_winner"]),

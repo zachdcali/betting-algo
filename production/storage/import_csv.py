@@ -765,8 +765,61 @@ def _prediction(source: SourceRow, batch_id: str) -> Iterable[tuple[str, dict[st
             "player1_probability": p1_probability,
             "player2_probability": p2_probability,
             "logging_quality": _text(row.get("logging_quality")),
+            # Legacy imports are non-decision by default. Operational identity
+            # state is imported separately as an append-only skip event so it
+            # cannot mutate/conflict with the immutable prediction observation.
+            "decision_eligible": False,
             **_provenance(source, batch_id),
         }
+
+
+def _identity_state_from_prediction(
+    source: SourceRow, batch_id: str
+) -> Iterable[tuple[str, dict[str, Any]]]:
+    """Persist operational identity gates without rewriting immutable inference."""
+    row = source.row
+    record_status = (_text(row.get("record_status")) or "").lower()
+    if record_status not in {"identity_conflict", "superseded_identity"}:
+        return
+    match_uid = _text(row.get("match_uid"))
+    prediction_uid = _text(row.get("prediction_uid"))
+    state_prediction_uid = _text(
+        row.get("latest_prediction_uid") or prediction_uid
+    )
+    observed_at = _timestamp(row.get("latest_logged_at") or row.get("logged_at"))
+    context = {
+        "identity_status": _text(row.get("identity_status")),
+        "identity_event_key": _text(row.get("identity_event_key")),
+        "identity_related_match_uid": _text(
+            row.get("identity_related_match_uid")
+        ),
+        "identity_conflict_fields": _string_list(
+            row.get("identity_conflict_fields")
+        ),
+        "identity_decision_blocked": True,
+    }
+    external_id = deterministic_key(
+        "prediction_identity_state",
+        match_uid,
+        state_prediction_uid,
+        observed_at,
+        record_status,
+        canonical_json(context),
+    )
+    yield "ops.skip_events", {
+        "idempotency_key": f"skip:{external_id}",
+        "external_skip_event_id": external_id,
+        "external_run_id": _text(row.get("latest_run_id") or row.get("run_id")),
+        "match_uid": match_uid,
+        "external_feature_snapshot_id": _text(row.get("feature_snapshot_id")),
+        "external_prediction_id": prediction_uid,
+        "skipped_at": observed_at,
+        "stage_name": "prediction_identity_reconciliation",
+        "reason_code": record_status,
+        "reason_detail": _text(row.get("record_note")),
+        "context": canonical_json(context),
+        **_provenance(source, batch_id),
+    }
 
 
 def _shadow_prediction(
@@ -841,7 +894,12 @@ def _settlement_from_prediction(
     row = source.row
     winner = _integer(row.get("actual_winner"))
     match_uid = _text(row.get("match_uid"))
-    if winner not in {1, 2} or not match_uid:
+    record_status = (_text(row.get("record_status")) or "").lower()
+    if (
+        winner not in {1, 2}
+        or not match_uid
+        or record_status in {"identity_conflict", "superseded_identity"}
+    ):
         return
     yield "ops.settlement_events", {
         "idempotency_key": f"settlement:{match_uid}",
@@ -1307,6 +1365,7 @@ def build_plan(
                     mapped.extend(_feature(source, batch_id, feature_names))
             if is_authoritative_prediction:
                 mapped.extend(_prediction(source, batch_id))
+                mapped.extend(_identity_state_from_prediction(source, batch_id))
                 mapped.extend(_settlement_from_prediction(source, batch_id))
             for table, record in mapped:
                 if table == "ml.prediction_observations":

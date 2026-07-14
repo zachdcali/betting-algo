@@ -513,18 +513,37 @@ def sync_shadow_settlements(shadow_path: Path, prediction_log_path: Path) -> int
         return 0
 
     settled = pred_df[pred_df["actual_winner"].notna()].copy()
+    if "record_status" in settled.columns:
+        settled = settled[
+            ~settled["record_status"].fillna("").astype(str).str.lower().isin(
+                {"identity_conflict", "superseded_identity"}
+            )
+        ].copy()
     if settled.empty:
         return 0
 
     settled["_snapshot_key"] = settled.apply(_prediction_snapshot_key, axis=1)
     settled_by_snapshot = settled.drop_duplicates("_snapshot_key", keep="last").set_index("_snapshot_key")
     settled_by_match = settled.drop_duplicates("match_uid", keep="last").set_index("match_uid")
-    def _players_key(row) -> str:
-        return (str(row.get("p1", "")).strip().lower() + "|" +
-                str(row.get("p2", "")).strip().lower() + "|" +
-                str(row.get("match_date", ""))[:10])
-    settled["_players_key"] = settled.apply(_players_key, axis=1)
-    settled_by_players = settled.drop_duplicates("_players_key", keep="last").set_index("_players_key")
+    # UID drift is accepted only through the explicit canonical alias written
+    # by prediction_logger. Plain players/date matching can cross rounds or
+    # events and would score the wrong immutable shadow observation.
+    alias_to_canonical: dict[str, str] = {}
+    for _, prediction_row in pred_df.iterrows():
+        status = _clean_existing(prediction_row.get("identity_status")).lower()
+        uid = _clean_existing(prediction_row.get("match_uid"))
+        related = [
+            value.strip()
+            for value in _clean_existing(
+                prediction_row.get("identity_related_match_uid")
+            ).split("|")
+            if value.strip()
+        ]
+        if status == "canonical_alias" and uid:
+            for old_uid in related:
+                alias_to_canonical[old_uid] = uid
+        elif status == "superseded_alias" and uid and len(related) == 1:
+            alias_to_canonical[uid] = related[0]
 
     updated = 0
     for idx, shadow_row in shadow_df.iterrows():
@@ -535,10 +554,13 @@ def sync_shadow_settlements(shadow_path: Path, prediction_log_path: Path) -> int
             pred_row = settled_by_snapshot.loc[key]
         elif shadow_row.get("match_uid", "") in settled_by_match.index:
             pred_row = settled_by_match.loc[shadow_row.get("match_uid", "")]
-        elif _players_key(shadow_row) in settled_by_players.index:
-            # match_uid drifts across runs (it hashes round/odds context);
-            # players+date is the stable identity
-            pred_row = settled_by_players.loc[_players_key(shadow_row)]
+        elif (
+            alias_to_canonical.get(_clean_existing(shadow_row.get("match_uid")), "")
+            in settled_by_match.index
+        ):
+            pred_row = settled_by_match.loc[
+                alias_to_canonical[_clean_existing(shadow_row.get("match_uid"))]
+            ]
         else:
             continue
 
