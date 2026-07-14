@@ -8,13 +8,14 @@ before investing in the full cloud build.
 
 Exit code 0 = both sources served us; 1 = at least one blocked (would need a proxy).
 """
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))  # put production/ on path
+PRODUCTION_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PRODUCTION_ROOT))
 
 
-def test_tennis_abstract() -> bool:
+def probe_tennis_abstract() -> bool:
     from scraping.ta_scraper import TennisAbstractScraper
     s = TennisAbstractScraper()
     try:
@@ -29,7 +30,7 @@ def test_tennis_abstract() -> bool:
         return False
 
 
-def test_bovada() -> bool:
+def probe_bovada() -> bool:
     from odds.fetch_bovada import fetch_bovada_tennis_odds
     try:
         df = fetch_bovada_tennis_odds(headless=True)
@@ -42,7 +43,7 @@ def test_bovada() -> bool:
         return False
 
 
-def test_atptour() -> bool:
+def probe_atptour() -> bool:
     """atptour.com via headless Chromium (rankings page = heaviest dependency).
 
     Since features-from-store (2026-07-08) the live pipeline needs atptour +
@@ -81,9 +82,9 @@ def test_atptour() -> bool:
 
 def main() -> int:
     print("=== Cloud scrape feasibility (datacenter IP) ===")
-    atp_ok = test_atptour()
-    bovada_ok = test_bovada()
-    ta_ok = test_tennis_abstract()
+    atp_ok = probe_atptour()
+    bovada_ok = probe_bovada()
+    ta_ok = probe_tennis_abstract()
     print()
     print(f"VERDICT: atptour = {'OK' if atp_ok else 'BLOCKED'} | Bovada = {'OK' if bovada_ok else 'BLOCKED'} | "
           f"Tennis Abstract (optional since features-from-store) = {'OK' if ta_ok else 'BLOCKED'}")

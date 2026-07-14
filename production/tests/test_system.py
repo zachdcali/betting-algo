@@ -10,6 +10,7 @@ These tests are intentionally lightweight:
 
 import sys
 import tempfile
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +23,7 @@ if str(PROD_ROOT) not in sys.path:
     sys.path.insert(0, str(PROD_ROOT))
 
 
-def test_schema_contract():
+def _check_schema_contract():
     print("🧪 Testing schema contract...")
     try:
         from models.inference import EXACT_141_FEATURES as model_features
@@ -41,7 +42,7 @@ def test_schema_contract():
         return False
 
 
-def test_round_offsets():
+def _check_round_offsets():
     print("🧪 Testing round offsets...")
     try:
         from features.round_offsets import get_round_day_offset
@@ -57,7 +58,7 @@ def test_round_offsets():
         return False
 
 
-def test_model_inference():
+def _check_model_inference():
     print("🧪 Testing model inference...")
     try:
         from models.inference import TennisPredictor, EXACT_141_FEATURES
@@ -79,7 +80,7 @@ def test_model_inference():
         return False
 
 
-def test_stake_calculation():
+def _check_stake_calculation():
     print("🧪 Testing stake calculation...")
     try:
         from utils.stake_calculator import simulate_daily_betting
@@ -99,63 +100,76 @@ def test_stake_calculation():
         return False
 
 
-def test_prediction_logger():
+def _check_prediction_logger():
     print("🧪 Testing prediction logger...")
     try:
         import prediction_logger
+        original_paths = (
+            prediction_logger.LOG_PATH,
+            prediction_logger.SNAPSHOT_LOG_PATH,
+            prediction_logger.ODDS_HISTORY_LOG_PATH,
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                prediction_logger.LOG_PATH = str(tmp_path / "prediction_log.csv")
+                prediction_logger.SNAPSHOT_LOG_PATH = tmp_path / "prediction_snapshots.csv"
+                prediction_logger.ODDS_HISTORY_LOG_PATH = tmp_path / "odds_history.csv"
 
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            prediction_logger.LOG_PATH = str(tmp_path / "prediction_log.csv")
-            prediction_logger.SNAPSHOT_LOG_PATH = tmp_path / "prediction_snapshots.csv"
-            prediction_logger.ODDS_HISTORY_LOG_PATH = tmp_path / "odds_history.csv"
+                prediction_logger.log_prediction(
+                    p1="Player One",
+                    p2="Player Two",
+                    tournament="Test Event",
+                    surface="Hard",
+                    level="A",
+                    round_code="R32",
+                    match_date="2026-04-18",
+                    run_id="run_test",
+                    match_uid="match_test",
+                    feature_snapshot_id="feat_test",
+                    model_p1_prob=0.61,
+                    model_p2_prob=0.39,
+                    market_p1_prob=0.55,
+                    market_p2_prob=0.45,
+                    p1_odds_decimal=1.82,
+                    p2_odds_decimal=2.10,
+                    model_version="v-test",
+                    odds_scraped_at="2026-04-18T12:00:00+00:00",
+                    match_start_time="2026-04-18 09:00 AM",
+                )
 
-            prediction_logger.log_prediction(
-                p1="Player One",
-                p2="Player Two",
-                tournament="Test Event",
-                surface="Hard",
-                level="A",
-                round_code="R32",
-                match_date="2026-04-18",
-                run_id="run_test",
-                match_uid="match_test",
-                feature_snapshot_id="feat_test",
-                model_p1_prob=0.61,
-                model_p2_prob=0.39,
-                market_p1_prob=0.55,
-                market_p2_prob=0.45,
-                p1_odds_decimal=1.82,
-                p2_odds_decimal=2.10,
-                model_version="v-test",
-                odds_scraped_at="2026-04-18T12:00:00+00:00",
-                match_start_time="2026-04-18 09:00 AM",
-            )
+                log_df = pd.read_csv(prediction_logger.LOG_PATH)
+                snap_df = pd.read_csv(prediction_logger.SNAPSHOT_LOG_PATH)
+                odds_df = pd.read_csv(prediction_logger.ODDS_HISTORY_LOG_PATH)
+                upgraded = prediction_logger.upgrade_prediction_log(
+                    Path(prediction_logger.LOG_PATH), write=False
+                )
 
-            log_df = pd.read_csv(prediction_logger.LOG_PATH)
-            snap_df = pd.read_csv(prediction_logger.SNAPSHOT_LOG_PATH)
-            odds_df = pd.read_csv(prediction_logger.ODDS_HISTORY_LOG_PATH)
-            upgraded = prediction_logger.upgrade_prediction_log(Path(prediction_logger.LOG_PATH), write=False)
-
-            if len(log_df) != 1 or len(snap_df) != 1 or len(odds_df) != 1:
-                print("❌ Logger did not create exactly one row in each output")
-                return False
-            required = {
-                'match_uid', 'prediction_uid', 'logging_quality', 'rescore_quality',
-                'record_status', 'nn_model_version'
-            }
-            if not required.issubset(set(upgraded.columns)):
-                print(f"❌ Logger missing metadata columns: {sorted(required - set(upgraded.columns))}")
-                return False
-            if upgraded.loc[0, 'logging_quality'] != 'snapshot_v2':
-                print(f"❌ Expected snapshot_v2 logging quality, got {upgraded.loc[0, 'logging_quality']}")
-                return False
-            if upgraded.loc[0, 'record_status'] != 'pending':
-                print(f"❌ Expected pending record status, got {upgraded.loc[0, 'record_status']}")
-                return False
-            if 'match_uid' not in log_df.columns or 'prediction_uid' not in log_df.columns:
-                print("❌ Logger missing immutable ID columns")
-                return False
+                if len(log_df) != 1 or len(snap_df) != 1 or len(odds_df) != 1:
+                    print("❌ Logger did not create exactly one row in each output")
+                    return False
+                required = {
+                    'match_uid', 'prediction_uid', 'logging_quality', 'rescore_quality',
+                    'record_status', 'nn_model_version'
+                }
+                if not required.issubset(set(upgraded.columns)):
+                    print(f"❌ Logger missing metadata columns: {sorted(required - set(upgraded.columns))}")
+                    return False
+                if upgraded.loc[0, 'logging_quality'] != 'snapshot_v2':
+                    print(f"❌ Expected snapshot_v2 logging quality, got {upgraded.loc[0, 'logging_quality']}")
+                    return False
+                if upgraded.loc[0, 'record_status'] != 'pending':
+                    print(f"❌ Expected pending record status, got {upgraded.loc[0, 'record_status']}")
+                    return False
+                if 'match_uid' not in log_df.columns or 'prediction_uid' not in log_df.columns:
+                    print("❌ Logger missing immutable ID columns")
+                    return False
+        finally:
+            (
+                prediction_logger.LOG_PATH,
+                prediction_logger.SNAPSHOT_LOG_PATH,
+                prediction_logger.ODDS_HISTORY_LOG_PATH,
+            ) = original_paths
 
         print("✅ Prediction logger test passed")
         return True
@@ -164,7 +178,7 @@ def test_prediction_logger():
         return False
 
 
-def test_audit_logger():
+def _check_audit_logger():
     print("🧪 Testing audit logger...")
     try:
         import audit_logger
@@ -256,12 +270,19 @@ def test_audit_logger():
         return False
 
 
-def test_orchestrator_init():
+def _check_orchestrator_init():
     print("🧪 Testing orchestrator initialization...")
     try:
         from main import LiveBettingOrchestrator
 
-        _ = LiveBettingOrchestrator()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps({"logs_dir": str(tmp_path / "logs")}),
+                encoding="utf-8",
+            )
+            _ = LiveBettingOrchestrator(str(config_path))
         print("✅ Orchestrator initialization test passed")
         return True
     except Exception as e:
@@ -269,13 +290,20 @@ def test_orchestrator_init():
         return False
 
 
-def test_inference_guardrails():
+def _check_inference_guardrails():
     print("🧪 Testing inference guardrails...")
     try:
         from main import LiveBettingOrchestrator
         from features.ta_feature_calculator import TAFeatureCalculator
 
-        orch = LiveBettingOrchestrator()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps({"logs_dir": str(tmp_path / "logs")}),
+                encoding="utf-8",
+            )
+            orch = LiveBettingOrchestrator(str(config_path))
         parsed = orch.parse_match_start_datetime("4/21/26 7:30 PM", now=datetime(2026, 4, 21, 12, 0))
         if parsed != datetime(2026, 4, 21, 19, 30):
             print(f"❌ Unexpected parsed match start: {parsed}")
@@ -341,18 +369,50 @@ def test_inference_guardrails():
         return False
 
 
+def test_schema_contract():
+    assert _check_schema_contract()
+
+
+def test_round_offsets():
+    assert _check_round_offsets()
+
+
+def test_model_inference():
+    assert _check_model_inference()
+
+
+def test_stake_calculation():
+    assert _check_stake_calculation()
+
+
+def test_prediction_logger():
+    assert _check_prediction_logger()
+
+
+def test_audit_logger():
+    assert _check_audit_logger()
+
+
+def test_orchestrator_init():
+    assert _check_orchestrator_init()
+
+
+def test_inference_guardrails():
+    assert _check_inference_guardrails()
+
+
 def main():
     print("🎾 Testing Tennis Betting Production System")
     print("=" * 50)
     tests = [
-        ("Schema Contract", test_schema_contract),
-        ("Round Offsets", test_round_offsets),
-        ("Model Inference", test_model_inference),
-        ("Stake Calculation", test_stake_calculation),
-        ("Prediction Logger", test_prediction_logger),
-        ("Audit Logger", test_audit_logger),
-        ("Orchestrator Init", test_orchestrator_init),
-        ("Inference Guardrails", test_inference_guardrails),
+        ("Schema Contract", _check_schema_contract),
+        ("Round Offsets", _check_round_offsets),
+        ("Model Inference", _check_model_inference),
+        ("Stake Calculation", _check_stake_calculation),
+        ("Prediction Logger", _check_prediction_logger),
+        ("Audit Logger", _check_audit_logger),
+        ("Orchestrator Init", _check_orchestrator_init),
+        ("Inference Guardrails", _check_inference_guardrails),
     ]
 
     ok = 0

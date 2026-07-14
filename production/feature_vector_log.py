@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import os
-from hashlib import sha256
-import math
 from datetime import datetime, timezone
 
 import pandas as pd
+
+from feature_contract import (
+    feature_fingerprint as contract_feature_fingerprint,
+    normalize_feature_vector,
+)
 
 PATH = os.path.join(os.path.dirname(__file__), "logs", "feature_vectors.csv")
 COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "match_uid",
@@ -24,46 +27,8 @@ COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "match_uid",
 def feature_validation_issues(features: dict) -> list[str]:
     """Hard schema/domain checks required before promoted-model inference."""
     from models.inference import EXACT_141_FEATURES
-
-    missing = [name for name in EXACT_141_FEATURES if name not in features]
-    if missing:
-        return [f"missing:{','.join(missing)}"]
-
-    numeric: dict[str, float] = {}
-    for name in EXACT_141_FEATURES:
-        try:
-            value = float(features[name])
-        except (TypeError, ValueError, OverflowError):
-            return [f"nonnumeric:{name}"]
-        if not math.isfinite(value):
-            return [f"nonfinite:{name}"]
-        numeric[name] = value
-
-    groups = {
-        "surface": [name for name in EXACT_141_FEATURES if name.startswith("Surface_")
-                    and name != "Surface_Transition_Flag"],
-        "level": [name for name in EXACT_141_FEATURES if name.startswith("Level_")],
-        "round": [name for name in EXACT_141_FEATURES if name.startswith("Round_")],
-        "p1_hand": [name for name in EXACT_141_FEATURES if name.startswith("P1_Hand_")],
-        "p2_hand": [name for name in EXACT_141_FEATURES if name.startswith("P2_Hand_")],
-        "p1_country": [name for name in EXACT_141_FEATURES if name.startswith("P1_Country_")],
-        "p2_country": [name for name in EXACT_141_FEATURES if name.startswith("P2_Country_")],
-        "hand_matchup": [name for name in EXACT_141_FEATURES
-                         if name.startswith("Handedness_Matchup_")],
-    }
-    issues: list[str] = []
-    for label, names in groups.items():
-        values = [numeric[name] for name in names]
-        if any(value not in {0.0, 1.0} for value in values):
-            issues.append(f"one_hot_nonbinary:{label}")
-            continue
-        total = sum(values)
-        if label == "hand_matchup":
-            if total not in {0.0, 1.0}:
-                issues.append(f"one_hot_cardinality:{label}:{total:g}")
-        elif total != 1.0:
-            issues.append(f"one_hot_cardinality:{label}:{total:g}")
-    return issues
+    _, issues = normalize_feature_vector(features, EXACT_141_FEATURES)
+    return list(issues)
 
 
 def feature_fingerprint(features: dict) -> tuple[str, str, int]:
@@ -74,23 +39,7 @@ def feature_fingerprint(features: dict) -> tuple[str, str, int]:
     empty content hash so structural failures cannot be presented as exact.
     """
     from models.inference import EXACT_141_FEATURES
-
-    schema_hash = sha256("\x1f".join(EXACT_141_FEATURES).encode("utf-8")).hexdigest()
-    if feature_validation_issues(features):
-        return schema_hash, "", len(EXACT_141_FEATURES)
-    vector: list[list[object]] = []
-    try:
-        for name in EXACT_141_FEATURES:
-            if name not in features:
-                return schema_hash, "", len(EXACT_141_FEATURES)
-            value = float(features[name])
-            if not math.isfinite(value):
-                return schema_hash, "", len(EXACT_141_FEATURES)
-            vector.append([name, value])
-        payload = json.dumps(vector, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError, OverflowError):
-        return schema_hash, "", len(EXACT_141_FEATURES)
-    return schema_hash, sha256(payload.encode("utf-8")).hexdigest(), len(vector)
+    return contract_feature_fingerprint(features, EXACT_141_FEATURES)
 
 
 def save_feature_vector(p1: str, p2: str, match_date, run_id: str,

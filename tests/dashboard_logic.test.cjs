@@ -27,6 +27,21 @@ function completeSlateRow(overrides = {}) {
   };
 }
 
+test("timezone-naive operational timestamps are interpreted as UTC", () => {
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14T08:26:24.639361"),
+    Date.parse("2026-07-14T08:26:24.639361Z"),
+  );
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14 08:08:02"),
+    Date.parse("2026-07-14T08:08:02Z"),
+  );
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14T08:08:02-04:00"),
+    Date.parse("2026-07-14T08:08:02-04:00"),
+  );
+});
+
 test("normalizes the operational bet outcome vocabulary", () => {
   assert.equal(Logic.normalizeBetOutcome({ outcome: "win", status: "settled" }), "win");
   assert.equal(Logic.normalizeBetOutcome({ outcome: "won", status: "settled" }), "win");
@@ -185,6 +200,20 @@ test("pipeline health distinguishes failure, degraded no-odds, and stale state",
     now: NOW,
   });
   assert.equal(stale.state, "stale");
+});
+
+test("terminal run freshness uses completion time while active runs use start time", () => {
+  const completed = {
+    run_id: "run_20260713T170000Z",
+    run_kind: "prediction_pipeline",
+    status: "partial",
+    started_at: "2026-07-13T17:00:00Z",
+    completed_at: "2026-07-13T17:58:00Z",
+  };
+  const running = { ...completed, status: "running" };
+
+  assert.equal(Logic.runTimestamp(completed), Date.parse(completed.completed_at));
+  assert.equal(Logic.runTimestamp(running), Date.parse(running.started_at));
 });
 
 test("next cadence calculation advances across :17 and :47", () => {

@@ -1,0 +1,78 @@
+name: Operational database contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: betting_algo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d betting_algo_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install focused contract dependencies
+        run: >-
+          python -m pip install pytest "psycopg[binary]"
+          pandas==2.3.1 numpy==2.3.2 torch==2.7.1
+          scikit-learn==1.7.1 xgboost==3.0.3
+          streamlit==1.56.0 plotly==6.7.0 pyarrow==24.0.0
+
+      - name: Verify migration, import, reconciliation, and live records
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/betting_algo_test
+        run: >-
+          python -m pytest -q
+          tests/test_operational_schema.py
+          tests/test_operational_repository.py
+          tests/test_operational_import.py
+          tests/test_model_registry_postgres.py
+          tests/test_operational_postgres_integration.py
+          tests/test_operational_runtime.py
+          tests/test_live_records.py
+          tests/test_pending_reconciliation.py
+
+      - name: Verify artifact, replay, lineage, and dashboard boundaries
+        run: >-
+          python -m pytest -q
+          tests/test_registry_validation_scope.py
+          tests/test_inference_registry_fail_closed.py
+          tests/test_versioning_contract.py
+          tests/test_replay_manifest.py
+          tests/test_replay_models.py
+          tests/test_feature_vector_log.py
+          tests/test_dashboard_sync.py
+          tests/test_dashboard_data.py
+          tests/test_dashboard_smoke.py
+          tests/test_operational_state.py
+          tests/test_evaluation_cohorts.py
+          tests/test_evaluation_roi.py
+
+      - name: Verify static dashboard contracts
+        run: |
+          node --check docs/dashboard.js
+          node --test tests/dashboard_logic.test.cjs tests/dashboard_contract.test.cjs
+
+      - name: Check patch whitespace
+        run: git diff --check

@@ -49,15 +49,29 @@
   function parseTimestamp(value) {
     const text = clean(value);
     if (!text) return null;
-    const parsed = Date.parse(text);
+    // Operational CSV/Postgres timestamps are written in UTC, but older rows
+    // omit the trailing zone. Date.parse treats those ISO values as browser
+    // local time, which can make fresh data appear to come from the future.
+    const naiveOperationalIso = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+    const normalized = naiveOperationalIso.test(text) ? `${text.replace(" ", "T")}Z` : text;
+    const parsed = Date.parse(normalized);
     return Number.isFinite(parsed) ? parsed : parseRunId(text);
   }
 
   function runTimestamp(run) {
     if (!run) return null;
+    const status = clean(run.status).toLowerCase();
+    const isActive = !status || ["running", "started"].includes(status);
+    if (isActive) {
+      return (
+        parseTimestamp(run.started_at) ||
+        parseTimestamp(run.completed_at) ||
+        parseRunId(run.run_id)
+      );
+    }
     return (
-      parseTimestamp(run.started_at) ||
       parseTimestamp(run.completed_at) ||
+      parseTimestamp(run.started_at) ||
       parseRunId(run.run_id)
     );
   }

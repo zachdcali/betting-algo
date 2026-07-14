@@ -35,6 +35,13 @@ test("deployed build changes self-heal already-open tabs", () => {
   assert.match(html, /id="dashboard-build"/);
 });
 
+test("deployment-version checks are allowed by the dashboard CSP", () => {
+  assert.match(
+    html,
+    /connect-src 'self' https:\/\/nwcayyusigznreygjlxl\.supabase\.co/,
+  );
+});
+
 test("current slate is snapshot and skipped-audit based, never canonical-latest based", () => {
   assert.match(client, /fetchAll\("dash_snapshots"[^\n]+currentRunFilter\)/);
   assert.match(client, /fetchAll\("dash_skipped_live_matches"[^\n]+currentRunFilter\)/);
@@ -58,6 +65,15 @@ test("operations UI exposes accepted generation, capital gate, and settlement ba
   assert.match(html, /id="account-state"/);
   assert.match(html, /id="metric-overdue"/);
   assert.match(html, /Capital \/ exposure/);
+});
+
+test("slate wording separates valid decision inputs from available capital", () => {
+  assert.match(html, /Data-valid now/);
+  assert.match(html, /Decision inputs valid/);
+  assert.doesNotMatch(html, /Eligible for paper decision/);
+  assert.match(client, /data valid · capital blocked/);
+  assert.match(client, /function statusChip\(status, extraClass, displayLabel\)/);
+  assert.match(client, /statusChip\(state, state, stateLabel\)/);
 });
 
 test("manifest counts cover every published operational projection", () => {

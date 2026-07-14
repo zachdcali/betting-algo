@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-13.2";
+  const BUILD_ID = "2026-07-14.3";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -200,9 +200,10 @@
     return "neutral";
   }
 
-  function statusChip(status, extraClass) {
+  function statusChip(status, extraClass, displayLabel) {
     const value = Logic.clean(status) || "unknown";
-    return element("span", `status-chip ${extraClass || statusClass(value)}`, value.replaceAll("_", " "));
+    const label = Logic.clean(displayLabel) || value.replaceAll("_", " ");
+    return element("span", `status-chip ${extraClass || statusClass(value)}`, label);
   }
 
   function emptyState(message) {
@@ -734,7 +735,13 @@
       summary.append(element("div", "match-meta", `Line ${americanOdds(row.p1_odds_decimal)} / ${americanOdds(row.p2_odds_decimal)}`));
       summary.append(element("div", "match-meta", pendingBet ? `Paper bet pending: ${Logic.clean(pendingBet.bet_on)} · ${formatMoney(pendingBet.stake, 0)}` : matchValueSummary(row)));
     }
-    footer.append(summary, statusChip(state, state));
+    const allocationGate = Logic.clean(
+      health && health.latestAttempt && health.latestAttempt.run.exposure_gate_status,
+    ).toLowerCase();
+    const stateLabel = state === "eligible"
+      ? (allocationGate.startsWith("blocked") ? "data valid · capital blocked" : "data valid")
+      : state;
+    footer.append(summary, statusChip(state, state, stateLabel));
     card.appendChild(footer);
 
     const details = element("details", "match-lineage");

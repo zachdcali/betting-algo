@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Operational dashboard for the paper-trading tennis model pipeline.">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-13.2">
-  <script src="dashboard_logic.js?v=2026-07-13.2" defer></script>
-  <script src="dashboard.js?v=2026-07-13.2" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.3">
+  <script src="dashboard_logic.js?v=2026-07-14.3" defer></script>
+  <script src="dashboard.js?v=2026-07-14.3" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,7 +23,7 @@
       </div>
       <div class="header-meta" aria-label="Dashboard metadata">
         <span class="paper-pill">Paper only</span>
-        <span id="dashboard-build">Build 2026-07-13.2</span>
+        <span id="dashboard-build">Build 2026-07-14.3</span>
         <span id="page-fetch-time">Loading data…</span>
       </div>
     </header>
@@ -44,7 +44,7 @@
     </section>
 
     <section class="metric-grid" id="headline-metrics" aria-label="Pipeline summary">
-      <article class="metric-card"><span>Eligible now</span><strong id="metric-eligible">—</strong><small>pre-start, priced, exact lineage</small></article>
+      <article class="metric-card"><span>Data-valid now</span><strong id="metric-eligible">—</strong><small>pre-start, priced, exact lineage</small></article>
       <article class="metric-card"><span>Blocked</span><strong id="metric-blocked">—</strong><small>waiting on required inputs</small></article>
       <article class="metric-card"><span>Expired / started</span><strong id="metric-expired">—</strong><small>never presented as actionable</small></article>
       <article class="metric-card"><span>Settled predictions</span><strong id="metric-settled">—</strong><small>valid winner only</small></article>
@@ -98,7 +98,7 @@
           <p id="slate-cohort-note">Only rows from the last successful prediction-bearing run are considered.</p>
         </div>
         <div id="eligible-section" class="state-section">
-          <div class="state-heading"><div><span class="state-dot eligible"></span><h3>Eligible for paper decision</h3></div><span id="eligible-count" class="count-pill">0</span></div>
+          <div class="state-heading"><div><span class="state-dot eligible"></span><h3>Decision inputs valid</h3></div><span id="eligible-count" class="count-pill">0</span></div>
           <p class="section-note">Pre-start rows with complete metadata, two-sided prices, model output, and an exact feature snapshot ID.</p>
           <div id="eligible-slate" class="match-grid"></div>
         </div>

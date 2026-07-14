@@ -638,51 +638,75 @@ def render_live_slate_tab(live_latest: pd.DataFrame, prediction_log: pd.DataFram
     disagreement = live_latest.sort_values("probability_range", ascending=False).copy()
     chart_cols = st.columns([1.1, 0.9])
     if p1_prob_col in disagreement.columns:
-        disagreement_chart = px.scatter(
-            disagreement,
-            x="market_p1_prob",
-            y=p1_prob_col,
-            color="surface",
-            size=disagreement["probability_range"].clip(lower=0.01),
-            hover_name="match_label",
-            hover_data={
-                "tournament": True,
-                "round": True,
-                "xgb_p1_prob": ":.3f",
-                "rf_p1_prob": ":.3f",
-                "consensus_p1_prob": ":.3f" if "consensus_p1_prob" in disagreement.columns else False,
-                "probability_range": ":.3f",
-            },
-            title=f"{lens_label} vs Market on Current Slate",
-            labels={"market_p1_prob": "Market P1 Prob", p1_prob_col: f"{lens_label} P1 Prob"},
+        chart_data = disagreement.copy()
+        chart_data["market_p1_prob"] = pd.to_numeric(
+            chart_data["market_p1_prob"], errors="coerce"
         )
-        disagreement_chart.add_trace(
-            go.Scatter(
-                x=[0, 1],
-                y=[0, 1],
-                mode="lines",
-                line={"dash": "dash", "color": "#94a3b8"},
-                name="No edge",
+        chart_data[p1_prob_col] = pd.to_numeric(
+            chart_data[p1_prob_col], errors="coerce"
+        )
+        chart_data["_marker_size"] = pd.to_numeric(
+            chart_data["probability_range"], errors="coerce"
+        ).fillna(0.0).clip(lower=0.01)
+        chart_data = chart_data.dropna(subset=["market_p1_prob", p1_prob_col])
+        if chart_data.empty:
+            chart_cols[0].info(
+                f"No finite {lens_label} and market probability pairs are available."
             )
-        )
-        chart_cols[0].plotly_chart(disagreement_chart, use_container_width=True)
+        else:
+            disagreement_chart = px.scatter(
+                chart_data,
+                x="market_p1_prob",
+                y=p1_prob_col,
+                color="surface",
+                size="_marker_size",
+                hover_name="match_label",
+                hover_data={
+                    "tournament": True,
+                    "round": True,
+                    "xgb_p1_prob": ":.3f",
+                    "rf_p1_prob": ":.3f",
+                    "consensus_p1_prob": ":.3f" if "consensus_p1_prob" in chart_data.columns else False,
+                    "probability_range": ":.3f",
+                    "_marker_size": False,
+                },
+                title=f"{lens_label} vs Market on Current Slate",
+                labels={"market_p1_prob": "Market P1 Prob", p1_prob_col: f"{lens_label} P1 Prob"},
+            )
+            disagreement_chart.add_trace(
+                go.Scatter(
+                    x=[0, 1],
+                    y=[0, 1],
+                    mode="lines",
+                    line={"dash": "dash", "color": "#94a3b8"},
+                    name="No edge",
+                )
+            )
+            chart_cols[0].plotly_chart(disagreement_chart, use_container_width=True)
 
     if p1_edge_col in disagreement.columns:
         top_edges = disagreement.copy()
+        top_edges[p1_edge_col] = pd.to_numeric(
+            top_edges[p1_edge_col], errors="coerce"
+        )
+        top_edges = top_edges.dropna(subset=[p1_edge_col])
         top_edges["abs_edge"] = top_edges[p1_edge_col].abs()
         top_edges = top_edges.sort_values("abs_edge", ascending=False).head(12)
-        edge_chart = px.bar(
-            top_edges.sort_values(p1_edge_col),
-            x=p1_edge_col,
-            y="match_label",
-            color=p1_edge_col,
-            color_continuous_scale="RdBu",
-            title=f"Largest {lens_label} P1 edges",
-            hover_data={"tournament": True, "round": True, "market_p1_prob": ":.3f", p1_prob_col: ":.3f"},
-            labels={p1_edge_col: "Probability point edge", "match_label": ""},
-        )
-        edge_chart.update_layout(xaxis_tickformat="+.0%", coloraxis_showscale=False)
-        chart_cols[1].plotly_chart(edge_chart, use_container_width=True)
+        if top_edges.empty:
+            chart_cols[1].info(f"No finite {lens_label} market edges are available.")
+        else:
+            edge_chart = px.bar(
+                top_edges.sort_values(p1_edge_col),
+                x=p1_edge_col,
+                y="match_label",
+                color=p1_edge_col,
+                color_continuous_scale="RdBu",
+                title=f"Largest {lens_label} P1 edges",
+                hover_data={"tournament": True, "round": True, "market_p1_prob": ":.3f", p1_prob_col: ":.3f"},
+                labels={p1_edge_col: "Probability point edge", "match_label": ""},
+            )
+            edge_chart.update_layout(xaxis_tickformat="+.0%", coloraxis_showscale=False)
+            chart_cols[1].plotly_chart(edge_chart, use_container_width=True)
 
     table_cols = [
         "logged_at",
