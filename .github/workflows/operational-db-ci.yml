@@ -37,6 +37,7 @@ jobs:
           python -m pip install pytest "psycopg[binary]"
           pandas==2.3.1 numpy==2.3.2 torch==2.7.1
           scikit-learn==1.7.1 xgboost==3.0.3
+          playwright==1.54.0
           streamlit==1.56.0 plotly==6.7.0 pyarrow==24.0.0
 
       - name: Verify migration, import, reconciliation, and live records
@@ -62,7 +63,9 @@ jobs:
           tests/test_versioning_contract.py
           tests/test_replay_manifest.py
           tests/test_replay_models.py
+          tests/test_feature_lineage.py
           tests/test_feature_vector_log.py
+          tests/test_performance_v1_backfill.py
           tests/test_dashboard_sync.py
           tests/test_dashboard_data.py
           tests/test_dashboard_smoke.py

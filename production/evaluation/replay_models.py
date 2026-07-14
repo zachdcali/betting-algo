@@ -28,6 +28,7 @@ import pandas as pd
 
 from evaluation import metrics, replay_manifest
 from feature_vector_log import feature_fingerprint, feature_validation_issues
+from feature_lineage import read_feature_csv
 from models.inference import EXACT_141_FEATURES
 from models.registry_utils import (
     REGISTRY_PATH,
@@ -403,9 +404,7 @@ def load_selected_vectors(
                 f"selected feature source changed after manifest build: {relative}"
             )
         if relative not in source_cache:
-            source_cache[relative] = pd.read_csv(
-                source_path, low_memory=False, keep_default_na=False
-            )
+            source_cache[relative] = read_feature_csv(source_path)
         source_frame = source_cache[relative]
         try:
             source_line = int(float(row["feature_source_row"]))

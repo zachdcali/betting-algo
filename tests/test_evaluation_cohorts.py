@@ -1,3 +1,5 @@
+import json
+import math
 import sys
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pandas as pd
 import pytest
 from evaluation import cohorts
 from evaluation.ledger import build_live_ledger
+from feature_vector_log import feature_fingerprint
 from models.inference import EXACT_141_FEATURES
 
 
@@ -221,6 +224,42 @@ def test_load_prediction_log_verifies_feature_snapshot_foreign_key(tmp_path):
     scored = cohorts.build_scored_frame(loaded.reset_index(), None)
     assert bool(scored.loc[scored.match_uid == "m1", "is_gold"].iloc[0])
     assert not bool(scored.loc[scored.match_uid == "m2", "is_gold"].iloc[0])
+
+
+def test_ulp_derived_hash_is_not_accepted_as_prediction_referential_hash(tmp_path):
+    immutable = _valid_features()
+    immutable["Player1_Rank"] = 12.0
+    schema_hash, immutable_hash, count = feature_fingerprint(immutable)
+    derived = dict(immutable)
+    derived["Player1_Rank"] = math.nextafter(12.0, math.inf)
+    _, derived_hash, _ = feature_fingerprint(derived)
+    pd.DataFrame([{
+        "match_uid": "match_1", "feature_snapshot_id": "feature_1",
+        "feature_vector_sha256": derived_hash,
+    }]).to_csv(tmp_path / "prediction_log.csv", index=False)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    pd.DataFrame([{
+        **immutable,
+        "run_id": "run_1", "match_uid": "match_1",
+        "feature_snapshot_id": "feature_1", "status": "ok",
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": immutable_hash,
+        "feature_count": count,
+    }]).to_csv(logs / "features_run.csv", index=False)
+    pd.DataFrame([{
+        "run_id": "run_1", "match_uid": "match_1",
+        "feature_snapshot_id": "feature_1", "build_status": "ok",
+        "features_complete": True,
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": derived_hash,
+        "feature_count": count,
+        "features_json": json.dumps(derived, separators=(",", ":")),
+    }]).to_csv(logs / "feature_vectors.csv", index=False)
+
+    loaded = cohorts.load_prediction_log(str(tmp_path))
+
+    assert not bool(loaded.iloc[0]["feature_snapshot_verified"])
 
 
 def test_load_prediction_log_fails_on_corrupt_feature_lineage_file(tmp_path):

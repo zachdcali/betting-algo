@@ -124,6 +124,16 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   SHA-256. Inference and GOLD verification require a structurally valid, finite
   persisted vector with valid binary/cardinality one-hot groups; a corrupt file,
   mismatched hash, or ambiguous duplicate ID fails closed.
+- Immutable per-run `logs/features_*.csv` rows outrank derived
+  `logs/feature_vectors.csv` and `dash_features` copies for the same snapshot
+  ID. Parse feature CSV floats with round-trip precision; require run, match,
+  and schema identity; tolerate derived serialization differences only when
+  every ordered element is within `1e-12`. The immutable v1 SHA remains the
+  sole prediction referential hash. Material or conflicting immutable evidence
+  fails closed; an accepted durable row may preserve compatible explicitly
+  incomplete evidence in a derived-only clean clone, but an invalid row cannot
+  claim exactness or be promoted to GOLD. See
+  `docs/production/FEATURE_LINEAGE_AUTHORITY.md`.
 - Bovada display times are interpreted in `America/New_York`; immutable
   prediction/odds lineage also stores `match_start_at_utc`.
 - Missing odds evidence is null, never a fabricated 50/50 market probability.

@@ -12,6 +12,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 from shadow.backfill_performance_v1 import (  # noqa: E402
     DEFAULT_MODEL_VERSION,
     is_correct_pick,
+    load_feature_snapshots,
     select_candidates,
     shadow_pick,
 )
@@ -53,6 +54,18 @@ def test_shadow_pick_and_correct_are_name_normalized():
     assert is_correct_pick("Player A", 1.0, p1="Player A", p2="Player B") is True
     assert is_correct_pick("Player B", 2.0, p1="Player A", p2="Player B") is True
     assert is_correct_pick("Player A", 2.0, p1="Player A", p2="Player B") is False
+
+
+def test_feature_snapshot_loader_uses_round_trip_float_parser(tmp_path):
+    value = 29.215605749486652
+    pd.DataFrame([{
+        "feature_snapshot_id": "feat_1",
+        "Player2_Age": value,
+    }]).to_csv(tmp_path / "features_run.csv", index=False)
+
+    loaded = load_feature_snapshots(tmp_path)
+
+    assert loaded.iloc[0]["Player2_Age"] == float("29.215605749486652")
 
 
 def _row(match_uid, snapshot_id, logging_quality, rescore_quality, actual_winner, features_complete):

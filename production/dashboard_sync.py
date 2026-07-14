@@ -21,6 +21,15 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
 from canonical_store import connect  # noqa: E402
+from feature_lineage import (  # noqa: E402
+    expected_feature_hash_matches,
+    load_production_feature_lineage,
+    parse_feature_occurrence,
+    read_feature_csv,
+    resolve_feature_lineage,
+    validate_derived_feature_copy,
+    validate_derived_projection_authority,
+)
 from operational_state import (  # noqa: E402
     STATE_SPECS, add_row_keys, hydrate_operational_state, load_csv,
     merge_state_frames,
@@ -45,69 +54,181 @@ def _json_scalar(value):
 
 
 def _load_feature_state(aggregate_path) -> pd.DataFrame:
-    """Build exact drill-down lineage from aggregate and immutable run files."""
-    from feature_vector_log import COLS, feature_fingerprint
+    """Rebuild derived drill-down rows from immutable per-run authorities."""
+    from feature_vector_log import COLS
     from features.performance_v1 import PERFORMANCE_FEATURES
     from models.inference import EXACT_141_FEATURES
 
     aggregate = load_csv(aggregate_path).reindex(columns=COLS, fill_value="")
-    existing_ids = set(
-        value for value in aggregate["feature_snapshot_id"].fillna("").astype(str) if value
-    )
-    rows: list[dict] = []
-    feature_names = [*EXACT_141_FEATURES, *PERFORMANCE_FEATURES]
+    immutable_sources: list[tuple[str, pd.DataFrame]] = []
     for path in sorted(glob(str(aggregate_path.parent / "features_*.csv"))):
-        run_frame = pd.read_csv(path, low_memory=False)
-        if "feature_snapshot_id" not in run_frame.columns:
+        run_frame = read_feature_csv(path)
+        if "feature_snapshot_id" in run_frame.columns:
+            immutable_sources.append((os.path.basename(path), run_frame))
+    resolution = resolve_feature_lineage(
+        ordered_names=EXACT_141_FEATURES,
+        immutable_sources=immutable_sources,
+        derived_sources=[(aggregate_path.name, aggregate)],
+    )
+
+    # Blank-ID legacy rows have no immutable join key. Preserve them exactly;
+    # every exact-ID row is reconstructed from the resolved authority below.
+    blank_ids = aggregate["feature_snapshot_id"].fillna("").astype(str).str.strip().eq("")
+    output = aggregate.loc[blank_ids, COLS].copy()
+    rows: list[dict[str, object]] = []
+    feature_names = [*EXACT_141_FEATURES, *PERFORMANCE_FEATURES]
+    for feature_id, authority in sorted(resolution.canonical_by_id.items()):
+        source = authority.row
+        if authority.source_kind == "derived":
+            validate_derived_projection_authority(authority)
+            rows.append({column: source.get(column, "") for column in COLS})
             continue
-        run_frame = run_frame[
-            run_frame["feature_snapshot_id"].fillna("").astype(str).ne("")
-        ]
-        for _, source in run_frame.iterrows():
-            feature_id = str(source.get("feature_snapshot_id", "")).strip()
-            if not feature_id or feature_id in existing_ids:
-                continue
-            payload = {
-                name: _json_scalar(source.get(name))
-                for name in feature_names if name in source.index and pd.notna(source.get(name))
-            }
-            defaults = source.get("meta_defaulted_features", "")
-            payload["_defaulted_features"] = "" if pd.isna(defaults) else str(defaults)
-            build_status = str(source.get("status", "unknown") or "unknown")
-            schema_hash, vector_hash, feature_count = feature_fingerprint(payload)
 
-            def hand(prefix: str) -> str:
-                for label in ("U", "L", "R"):
-                    value = pd.to_numeric(source.get(f"{prefix}_Hand_{label}"), errors="coerce")
-                    if pd.notna(value) and float(value) == 1.0:
-                        return label
-                return ""
+        payload = {
+            name: _json_scalar(source.get(name))
+            for name in feature_names if name in source and pd.notna(source.get(name))
+        }
+        defaults = source.get("meta_defaulted_features", "")
+        payload["_defaulted_features"] = "" if pd.isna(defaults) else str(defaults)
+        build_status = authority.status or "unknown"
 
-            rows.append({
-                "p1": source.get("player1_raw", ""),
-                "p2": source.get("player2_raw", ""),
-                "match_date": source.get("meta_match_date", ""),
-                "logged_at": source.get("timestamp", source.get("run_started_at", "")),
-                "run_id": source.get("run_id", ""),
-                "match_uid": source.get("match_uid", ""),
-                "feature_snapshot_id": feature_id,
-                "build_status": build_status,
-                "features_complete": (
-                    build_status == "ok"
-                    and not payload["_defaulted_features"]
-                    and bool(vector_hash)
-                ),
-                "p1_hand": hand("P1"),
-                "p2_hand": hand("P2"),
-                "feature_schema_sha256": schema_hash,
-                "feature_vector_sha256": vector_hash,
-                "feature_count": feature_count,
-                "features_json": json.dumps(payload, separators=(",", ":"), default=str),
-            })
-            existing_ids.add(feature_id)
+        def hand(prefix: str) -> str:
+            for label in ("U", "L", "R"):
+                value = pd.to_numeric(source.get(f"{prefix}_Hand_{label}"), errors="coerce")
+                if pd.notna(value) and float(value) == 1.0:
+                    return label
+            return ""
+
+        rows.append({
+            "p1": source.get("player1_raw", ""),
+            "p2": source.get("player2_raw", ""),
+            "match_date": source.get("meta_match_date", ""),
+            "logged_at": source.get("timestamp", source.get("run_started_at", "")),
+            "run_id": authority.run_id,
+            "match_uid": authority.match_uid,
+            "feature_snapshot_id": feature_id,
+            "build_status": build_status,
+            "features_complete": (
+                build_status == "ok"
+                and not payload["_defaulted_features"]
+                and authority.structurally_verified
+            ),
+            "p1_hand": hand("P1"),
+            "p2_hand": hand("P2"),
+            "feature_schema_sha256": authority.schema_sha256,
+            "feature_vector_sha256": authority.verified_vector_sha256,
+            "feature_count": len(EXACT_141_FEATURES),
+            "features_json": json.dumps(
+                payload, separators=(",", ":"), default=str, allow_nan=False
+            ),
+        })
     if rows:
-        aggregate = pd.concat([aggregate, pd.DataFrame(rows, columns=COLS)], ignore_index=True)
-    return aggregate.reindex(columns=COLS, fill_value="")
+        output = pd.concat([output, pd.DataFrame(rows, columns=COLS)], ignore_index=True)
+    output = output.reindex(columns=COLS, fill_value="")
+    output.attrs["immutable_feature_ids"] = set(resolution.immutable_ids)
+    return output
+
+
+def _merge_feature_state(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+    """Merge rows with immutable-local, then durable-remote precedence.
+
+    A clean clone may contain an older aggregate but no additional private run
+    file.  In that case the accepted durable projection is the repair source
+    and must not be overwritten merely because the local frame was appended
+    second.  A locally tracked immutable row outranks both after compatibility
+    validation.
+    """
+    from feature_vector_log import COLS
+    from models.inference import EXACT_141_FEATURES
+
+    authoritative_ids = set(incoming.attrs.get("immutable_feature_ids", set()))
+    existing_ids = existing.get(
+        "feature_snapshot_id", pd.Series("", index=existing.index)
+    ).fillna("").astype(str).str.strip()
+    incoming_ids = incoming.get(
+        "feature_snapshot_id", pd.Series("", index=incoming.index)
+    ).fillna("").astype(str).str.strip()
+
+    # Accepted durable state is an authority during clean-clone recovery, so
+    # validate it before a generic merge can collapse duplicate IDs or carry an
+    # invalid exactness claim into the hydrated CSV.
+    durable_authorities: dict[str, pd.Series] = {}
+    for snapshot_id in sorted(set(existing_ids) - {""}):
+        durable_rows = existing.loc[existing_ids.eq(snapshot_id)]
+        if len(durable_rows) != 1:
+            raise RuntimeError(
+                f"durable feature {snapshot_id!r} has {len(durable_rows)} projection rows"
+            )
+        durable_row = durable_rows.iloc[0]
+        parsed = parse_feature_occurrence(
+            durable_row,
+            EXACT_141_FEATURES,
+            source_kind="derived",
+            source_file="durable dash_features",
+            source_row=2,
+        )
+        if parsed is None:  # pragma: no cover - guarded by nonblank ID filter
+            raise RuntimeError(
+                f"durable feature {snapshot_id!r} lost its projection identity"
+            )
+        validate_derived_projection_authority(parsed)
+        durable_authorities[snapshot_id] = durable_row
+
+    for snapshot_id in sorted(authoritative_ids):
+        authorities = incoming.loc[incoming_ids.eq(snapshot_id)]
+        if len(authorities) != 1:
+            raise RuntimeError(
+                f"resolved immutable feature {snapshot_id!r} has {len(authorities)} projection rows"
+            )
+        authority = authorities.iloc[0]
+        for _, candidate in existing.loc[existing_ids.eq(snapshot_id)].iterrows():
+            validate_derived_feature_copy(
+                authority,
+                candidate,
+                EXACT_141_FEATURES,
+                snapshot_id=snapshot_id,
+                authority_source="local immutable reconstruction",
+                candidate_source="durable dash_features",
+                require_valid_authority=False,
+            )
+
+    # For IDs without a local immutable authority, a previously accepted
+    # durable row is the repair authority. Validate a stale local aggregate as
+    # an equivalent copy, then retain the durable vector/hash.
+    durable_ids: set[str] = set()
+    for snapshot_id in sorted(set(durable_authorities) - authoritative_ids):
+        local_copies = incoming.loc[incoming_ids.eq(snapshot_id)]
+        authority = durable_authorities[snapshot_id]
+        for _, candidate in local_copies.iterrows():
+            validate_derived_feature_copy(
+                authority,
+                candidate,
+                EXACT_141_FEATURES,
+                snapshot_id=snapshot_id,
+                authority_source="durable dash_features",
+                candidate_source="local aggregate",
+            )
+        durable_ids.add(snapshot_id)
+
+    spec = next(spec for spec in STATE_SPECS if spec.table == "dash_features")
+    merged = merge_state_frames(existing, incoming, spec)
+    merged_ids = merged.get(
+        "feature_snapshot_id", pd.Series("", index=merged.index)
+    ).fillna("").astype(str).str.strip()
+    replacement_ids = authoritative_ids | durable_ids
+    merged = merged.loc[~merged_ids.isin(replacement_ids)]
+    authorities = pd.concat([
+        incoming.loc[incoming_ids.isin(authoritative_ids)],
+        existing.loc[existing_ids.isin(durable_ids)],
+    ], ignore_index=True)
+    columns = list(dict.fromkeys([*merged.columns, *authorities.columns]))
+    result = pd.concat([
+        merged.reindex(columns=columns, fill_value=""),
+        authorities.reindex(columns=columns, fill_value=""),
+    ], ignore_index=True)
+    result = result.reindex(columns=COLS, fill_value="")
+    result.attrs["immutable_feature_ids"] = authoritative_ids
+    return result
 
 
 def _table_exists(cur, table: str) -> bool:
@@ -245,23 +366,29 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
     """Materialize authoritative live metrics through evaluation's one math path."""
     from evaluation import cohorts
     from evaluation.ledger import LIVE_COLUMNS, build_live_ledger
+    from models.inference import EXACT_141_FEATURES
 
     # Scan local immutable lineage even when the scoring cohort comes from the
     # remote+local merge. This is fail-closed on corrupt lineage and contributes
     # IDs from per-run feature files not duplicated in feature_vectors.csv.
     local_pred = cohorts.load_prediction_log(os.path.dirname(__file__))
-    verified_mask = local_pred.get(
-        "feature_snapshot_verified", pd.Series(False, index=local_pred.index)
-    ).fillna(False).astype(bool)
-    verified_ids = set(
-        local_pred.loc[verified_mask, "feature_snapshot_id"].fillna("").astype(str)
-    ) if "feature_snapshot_id" in local_pred.columns else set()
+    local_lineage = load_production_feature_lineage(
+        os.path.dirname(__file__), EXACT_141_FEATURES
+    )
+    referential_hashes = {
+        snapshot_id: set(local_lineage.referential_vector_hashes(snapshot_id))
+        for snapshot_id in local_lineage.canonical_by_id
+        if snapshot_id not in local_lineage.invalid_ids
+    }
     remote_evidence: dict[str, str] = {}
     remote_invalid: set[str] = set()
     if feature_log is not None and "feature_snapshot_id" in feature_log.columns:
         remote_evidence, remote_invalid = cohorts.verify_feature_frame(feature_log)
-        verified_ids.update(remote_evidence)
-        verified_ids.difference_update(remote_invalid)
+        for snapshot_id, vector_hash in remote_evidence.items():
+            if snapshot_id not in remote_invalid:
+                referential_hashes.setdefault(snapshot_id, {vector_hash})
+        for snapshot_id in remote_invalid:
+            referential_hashes.pop(snapshot_id, None)
 
     if pred_log is None:
         pred_log = local_pred
@@ -273,12 +400,15 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
         expected_hash = pred_log.get(
             "feature_vector_sha256", pd.Series("", index=pred_log.index)
         ).fillna("").astype(str).str.strip()
-        evidence_hash = ids.map(remote_evidence if feature_log is not None else {})
-        local_verified = ids.isin(verified_ids)
+        hash_verified = pd.Series([
+            bool(referential_hashes.get(snapshot_id))
+            and expected_feature_hash_matches(
+                expected, referential_hashes.get(snapshot_id, set())
+            )
+            for snapshot_id, expected in zip(ids, expected_hash)
+        ], index=pred_log.index)
         pred_log["feature_snapshot_verified"] = (
-            ids.ne("") & local_verified
-            & (expected_hash.eq("") | evidence_hash.fillna("").eq(expected_hash)
-               | evidence_hash.isna())
+            ids.ne("") & hash_verified
         )
     if shadow_log is None:
         shadow_log = cohorts.load_shadow_log(os.path.dirname(__file__))
@@ -354,7 +484,11 @@ def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
                     existing = read_table(cur, spec.table)
                     if not path.exists():
                         missing_files.append(str(path.relative_to(path.parents[1])))
-                    merged = merge_state_frames(existing, incoming, spec)
+                    merged = (
+                        _merge_feature_state(existing, incoming)
+                        if spec.table == "dash_features"
+                        else merge_state_frames(existing, incoming, spec)
+                    )
                     publish = add_row_keys(merged, spec)
                     publish["sync_id"] = sync_id
                     planned[spec.table] = publish

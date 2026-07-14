@@ -1,9 +1,11 @@
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
 import pandas as pd
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -166,6 +168,63 @@ def test_alternative_snapshot_is_preserved_but_never_cherry_picked(tmp_path):
     assert json.loads(row["alternative_snapshot_ids"]) == ["feat_later"]
     alternatives = json.loads(row["alternative_snapshot_provenance"])
     assert any(item.get("feature_snapshot_id") == "feat_later" for item in alternatives)
+
+
+def test_ulp_equivalent_aggregate_does_not_poison_immutable_exact_verification(tmp_path):
+    immutable = _feature("feat_ulp", "match_ulp", "Player A", "Player B", rank=100.0)
+    derived_vector = _valid_features(rank=math.nextafter(100.0, math.inf))
+    schema_hash, derived_hash, feature_count = feature_fingerprint(derived_vector)
+    prediction = _prediction(
+        "match_ulp",
+        "Player A",
+        "Player B",
+        feature_snapshot_id="feat_ulp",
+        feature_vector_sha256=immutable["feature_vector_sha256"],
+    )
+    production = _write_inputs(tmp_path, [prediction], [immutable])
+    pd.DataFrame([{
+        "p1": "Player A", "p2": "Player B", "match_date": "2026-07-10",
+        "logged_at": "2026-07-10T10:01:00Z", "run_id": "",
+        "match_uid": "match_ulp", "feature_snapshot_id": "feat_ulp",
+        "build_status": "ok", "features_complete": True,
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": derived_hash,
+        "feature_count": feature_count,
+        "features_json": json.dumps(derived_vector, separators=(",", ":")),
+    }]).to_csv(production / "logs/feature_vectors.csv", index=False)
+
+    row = replay_manifest.build_replay_manifest(production).frame.iloc[0]
+
+    assert row["replay_tier"] == "GOLD_REPLAY"
+    assert row["feature_vector_sha256"] == immutable["feature_vector_sha256"]
+    assert row["feature_vector_sha256"] != derived_hash
+    assert row["feature_source_file"] == "logs/features_20260710_100100.csv"
+
+
+def test_materially_divergent_aggregate_aborts_replay(tmp_path):
+    immutable = _feature("feat_bad_copy", "match_bad", "Player A", "Player B")
+    prediction = _prediction(
+        "match_bad",
+        "Player A",
+        "Player B",
+        feature_snapshot_id="feat_bad_copy",
+    )
+    production = _write_inputs(tmp_path, [prediction], [immutable])
+    divergent = _valid_features(rank=101.0)
+    schema_hash, vector_hash, feature_count = feature_fingerprint(divergent)
+    pd.DataFrame([{
+        "p1": "Player A", "p2": "Player B", "match_date": "2026-07-10",
+        "logged_at": "2026-07-10T10:01:00Z", "run_id": "",
+        "match_uid": "match_bad", "feature_snapshot_id": "feat_bad_copy",
+        "build_status": "ok", "features_complete": True,
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": vector_hash,
+        "feature_count": feature_count,
+        "features_json": json.dumps(divergent, separators=(",", ":")),
+    }]).to_csv(production / "logs/feature_vectors.csv", index=False)
+
+    with pytest.raises(RuntimeError, match="materially divergent derived vector"):
+        replay_manifest.build_replay_manifest(production)
 
 
 def test_rejects_fabricated_half_market_without_real_decimal_odds(tmp_path):

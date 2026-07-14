@@ -40,7 +40,10 @@ There are now two logging layers:
 Supporting run artifacts:
 
 - `logs/features_*.csv`
-  Per-run feature snapshots with stable `match_uid` and `feature_snapshot_id`
+  Per-run feature snapshots with stable `match_uid` and `feature_snapshot_id`.
+  These are immutable authority over `feature_vectors.csv`/`dash_features`;
+  see `docs/production/FEATURE_LINEAGE_AUTHORITY.md` for the round-trip and
+  duplicate-reconciliation contract.
 - `logs/performance_v1_shadow_predictions.csv`
   Forward side-model predictions for the score/stat `performance_v1`
   experiment. The live pipeline logs configured one-hot XGBoost, CatBoost,

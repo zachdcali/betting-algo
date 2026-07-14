@@ -39,6 +39,7 @@ import pandas as pd
 
 from evaluation import cohorts
 from feature_vector_log import feature_fingerprint
+from feature_lineage import load_production_feature_lineage, read_feature_csv
 from models.inference import EXACT_141_FEATURES
 from versioning import (
     DATASET_MANIFEST_VERSION,
@@ -164,7 +165,15 @@ def _source_metadata(path: Path, prod_dir: Path, rows: int) -> dict[str, Any]:
 
 def _read_csv(path: Path, prod_dir: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
     try:
-        frame = pd.read_csv(path, low_memory=False, keep_default_na=False)
+        is_feature_file = (
+            path.parent.name == "logs"
+            and (path.name == "feature_vectors.csv" or path.name.startswith("features_"))
+        )
+        frame = (
+            read_feature_csv(path)
+            if is_feature_file
+            else pd.read_csv(path, low_memory=False, keep_default_na=False)
+        )
     except Exception as exc:  # fail closed on partially readable lineage
         relative = path.resolve().relative_to(prod_dir.resolve()).as_posix()
         raise RuntimeError(f"historical replay could not read {relative}: {exc}") from exc
@@ -309,6 +318,7 @@ def _feature_candidate(
         "features_complete": _feature_complete(row, aggregate_format),
         "structurally_verified": bool(structurally_verified),
         "synthetic_verification_id": verification_id if not snapshot_id else "",
+        "is_authoritative": False,
     }
 
 
@@ -351,7 +361,7 @@ def _load_feature_evidence(
 
     all_candidates: list[dict[str, Any]] = []
     source_files: list[dict[str, Any]] = []
-    file_invalid: set[str] = set()
+    lineage = load_production_feature_lineage(prod_dir, EXACT_141_FEATURES)
     for path in paths:
         frame, source = _read_csv(path, prod_dir)
         source_files.append(source)
@@ -363,40 +373,38 @@ def _load_feature_evidence(
             raise RuntimeError(
                 f"historical replay feature verification failed for {source_file}: {exc}"
             ) from exc
-        file_invalid.update(invalid_ids)
         aggregate_format = "features_json" in frame.columns
         for position, (_, row) in enumerate(frame.iterrows(), start=2):
             synthetic_id = f"legacy::{source_file}::{position}"
-            all_candidates.append(
-                _feature_candidate(
-                    row,
-                    source_file=source_file,
-                    source_row=position,
-                    aggregate_format=aggregate_format,
-                    verified_ids=verified_ids,
-                    invalid_ids=invalid_ids,
-                    synthetic_id=synthetic_id,
-                )
+            candidate = _feature_candidate(
+                row,
+                source_file=source_file,
+                source_row=position,
+                aggregate_format=aggregate_format,
+                verified_ids=verified_ids,
+                invalid_ids=invalid_ids,
+                synthetic_id=synthetic_id,
             )
-
-    # A snapshot ID is globally valid only when every occurrence resolves to
-    # the same vector and no source file marked it invalid, matching
-    # evaluation.cohorts.load_prediction_log's fail-closed referential check.
-    hashes_by_id: dict[str, set[str]] = defaultdict(set)
-    for candidate in all_candidates:
-        snapshot_id = candidate["feature_snapshot_id"]
-        if snapshot_id and candidate["structurally_verified"]:
-            hashes_by_id[snapshot_id].add(candidate["feature_vector_sha256"])
-    globally_invalid = set(file_invalid)
-    globally_invalid.update(
-        snapshot_id
-        for snapshot_id, values in hashes_by_id.items()
-        if len(values) != 1
-    )
-    for candidate in all_candidates:
-        snapshot_id = candidate["feature_snapshot_id"]
-        if snapshot_id in globally_invalid:
-            candidate["structurally_verified"] = False
+            snapshot_id = candidate["feature_snapshot_id"]
+            if snapshot_id:
+                authority = lineage.canonical_by_id.get(snapshot_id)
+                is_authoritative = bool(
+                    authority is not None
+                    and authority.location == (source_file, position)
+                )
+                candidate["is_authoritative"] = is_authoritative
+                candidate["structurally_verified"] = bool(
+                    is_authoritative
+                    and authority is not None
+                    and authority.structurally_verified
+                )
+                if is_authoritative and authority is not None:
+                    candidate["feature_schema_sha256"] = authority.schema_sha256
+                    candidate["feature_vector_sha256"] = (
+                        authority.verified_vector_sha256
+                    )
+                    candidate["feature_count"] = authority.feature_count
+            all_candidates.append(candidate)
 
     by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_match_uid: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -416,7 +424,11 @@ def _load_feature_evidence(
             if all(key):
                 legacy_by_key[key].append(candidate)
 
-    sort_key = lambda item: (item["source_file"], item["source_row"])
+    sort_key = lambda item: (
+        not item.get("is_authoritative", False),
+        item["source_file"],
+        item["source_row"],
+    )
     for mapping in (by_id, by_match_uid, legacy_by_key):
         for candidates in mapping.values():
             candidates.sort(key=sort_key)
