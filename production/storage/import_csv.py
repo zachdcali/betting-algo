@@ -1212,6 +1212,30 @@ def _assign_deterministic_ids_and_links(
         "raw.source_fetches": ("source_fetch_id", "source_fetch"),
         "raw.source_artifacts": ("source_artifact_id", "source_artifact"),
         "ops.odds_observations": ("odds_observation_id", "odds_observation"),
+        "ops.eligibility_generations": (
+            "eligibility_generation_id", "eligibility_generation"
+        ),
+        "ops.eligibility_generation_status_events": (
+            "eligibility_generation_status_event_id",
+            "eligibility_generation_status_event",
+        ),
+        "ops.player_entities": ("player_entity_id", "player_entity"),
+        "ops.player_identity_observations": (
+            "player_identity_observation_id", "player_identity_observation"
+        ),
+        "ops.player_alias_observations": (
+            "player_alias_observation_id", "player_alias_observation"
+        ),
+        "ops.player_profile_observations": (
+            "player_profile_observation_id", "player_profile_observation"
+        ),
+        "ops.eligibility_match_round_observations": (
+            "eligibility_match_round_observation_id",
+            "eligibility_match_round_observation",
+        ),
+        "ops.eligibility_review_events": (
+            "eligibility_review_event_id", "eligibility_review_event"
+        ),
         "ml.feature_schemas": ("feature_schema_id", "feature_schema"),
         "ml.feature_snapshots": ("feature_snapshot_id", "feature_snapshot"),
         "ml.model_releases": ("model_release_id", "model_release"),
@@ -1265,22 +1289,36 @@ def _assign_deterministic_ids_and_links(
         str(record["idempotency_key"]): record
         for record in records.get("raw.source_fetches", [])
     }
+    artifacts = {
+        str(record["idempotency_key"]): record
+        for record in records.get("raw.source_artifacts", [])
+    }
 
     for table in (
         "ops.pipeline_run_stages", "raw.source_fetches",
         "ops.odds_observations", "ml.feature_snapshots",
         "ml.prediction_observations", "ops.bet_recommendations",
         "ops.settlement_attempts", "ops.settlement_events", "ops.skip_events",
+        "ops.eligibility_match_round_observations",
     ):
         for record in records.get(table, []):
             run = runs.get(_text(record.get("external_run_id")) or "")
             if run is not None:
                 record["run_id"] = run["run_id"]
 
-    for record in records.get("ops.odds_observations", []):
-        fetch = fetches.get(_text(record.get("source_fetch_key")) or "")
-        if fetch is not None:
-            record["source_fetch_id"] = fetch["source_fetch_id"]
+    for table in (
+        "raw.source_artifacts", "ops.odds_observations",
+        "ops.eligibility_match_round_observations",
+    ):
+        for record in records.get(table, []):
+            fetch = fetches.get(_text(record.get("source_fetch_key")) or "")
+            if fetch is not None:
+                record["source_fetch_id"] = fetch["source_fetch_id"]
+
+    for record in records.get("ops.eligibility_match_round_observations", []):
+        artifact = artifacts.get(_text(record.get("source_artifact_key")) or "")
+        if artifact is not None:
+            record["source_artifact_id"] = artifact["source_artifact_id"]
 
     for table in ("ml.prediction_observations", "ops.bet_recommendations"):
         for record in records.get(table, []):

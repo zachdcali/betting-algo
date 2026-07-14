@@ -6,10 +6,10 @@ It translates the values already produced by ``main.py``, ``fetch_bovada.py``,
 ``RecordBatch`` objects.  Integration should initially dual-write these batches
 inside one caller-owned transaction and retain CSV parity checks.
 
-Match metadata is written to append-only ``ops.match_metadata_observations``.
-``match_metadata_observation`` returns the typed batch, while
-``resolve_match_metadata`` defines the same monotonic field-resolution
-semantics used by the database projection.
+Legacy match metadata is written to append-only
+``ops.match_metadata_observations``. Candidate eligibility round evidence uses
+the separate ``ops.eligibility_match_round_observations`` table so the 1.2
+scaffolding cannot alter ``api.current_match_metadata`` before cutover.
 """
 
 from __future__ import annotations
@@ -21,8 +21,14 @@ from functools import lru_cache
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import NAMESPACE_URL, uuid5
+
+try:
+    from tennis_enums import ACTIVE_ROUND_CODES
+except ImportError:  # pragma: no cover - package-style execution
+    from production.tennis_enums import ACTIVE_ROUND_CODES  # type: ignore
 
 try:
     from logging_utils import (
@@ -50,10 +56,12 @@ except ImportError:  # pragma: no cover - package-style execution
         normalize_feature_vector, vector_sha256,
     )
 
+from .eligibility import normalize_uri_scheme
 from .records import RecordBatch, canonical_json, deterministic_key
 
 
 MATCH_METADATA_TABLE_REQUIRED = "ops.match_metadata_observations"
+ELIGIBILITY_MATCH_ROUND_TABLE = "ops.eligibility_match_round_observations"
 MATCH_METADATA_FIELDS = (
     "match_date", "match_start_at_utc", "tournament", "event_title",
     "round_code", "surface", "level",
@@ -291,6 +299,55 @@ class LiveRecordBuilder:
             "http_status": http_status,
             "request": canonical_json(request or {}),
             "error_message": _clean(error_message),
+        })
+
+    def source_artifact(
+        self,
+        *,
+        source_fetch_id: str,
+        artifact_kind: str,
+        storage_uri: str,
+        content_sha256: str,
+        captured_at: datetime,
+        content_type: str | None = None,
+        byte_size: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> RecordBatch:
+        """Describe a preserved private source body; never store it inline."""
+        fetch_id = _clean(source_fetch_id)
+        kind = _clean(artifact_kind)
+        uri = _clean(storage_uri)
+        digest = (_clean(content_sha256) or "").lower()
+        if not fetch_id or not kind or not uri:
+            raise ValueError("source_fetch_id, artifact_kind, and storage_uri are required")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("content_sha256 must be a lowercase SHA-256")
+        if byte_size is not None and int(byte_size) < 0:
+            raise ValueError("byte_size must be non-negative")
+        artifact_metadata = dict(metadata or {})
+        try:
+            original_uri = normalize_uri_scheme(
+                artifact_metadata.get("source_uri"),
+                "source artifact metadata source_uri",
+            )
+        except ValueError as exc:
+            raise ValueError("source artifact metadata requires source_uri") from exc
+        artifact_metadata["source_uri"] = original_uri
+        captured = _utc(captured_at, "captured_at")
+        key = deterministic_key(
+            "source_artifact", fetch_id, kind, uri, digest, captured,
+        )
+        return _record_batch("raw.source_artifacts", {
+            "source_artifact_id": _uuid("source_artifact", key),
+            "idempotency_key": key,
+            "source_fetch_id": fetch_id,
+            "artifact_kind": kind,
+            "storage_uri": uri,
+            "content_sha256": digest,
+            "content_type": _clean(content_type),
+            "byte_size": None if byte_size is None else int(byte_size),
+            "captured_at": captured,
+            "metadata": canonical_json(artifact_metadata),
         })
 
     def odds_observation(
@@ -541,6 +598,91 @@ def match_metadata_observation(
         "source_name": source_name,
         **values,
         "field_provenance": canonical_json(dict(field_provenance)),
+    })
+
+
+def eligibility_match_round_observation(
+    *,
+    identity: MatchIdentity,
+    run_id: str,
+    observed_at: datetime,
+    source_name: str,
+    round_code: str,
+    eligibility_generation_sha256: str,
+    source_artifact_id: str,
+    source_uri: str,
+    source_content_sha256: str,
+    confidence: Any,
+    initial_review_state: str,
+    expires_at: datetime,
+    source_fetch_id: str,
+    round_provenance: str = "official",
+) -> RecordBatch:
+    """Build isolated, review-gated candidate round evidence."""
+    generation = str(eligibility_generation_sha256 or "").strip().lower()
+    artifact_id = _clean(source_artifact_id)
+    fetch_id = _clean(source_fetch_id)
+    try:
+        uri = normalize_uri_scheme(source_uri)
+    except ValueError as exc:
+        raise ValueError("eligibility round evidence requires source_uri") from exc
+    digest = str(source_content_sha256 or "").strip().lower()
+    source = _clean(source_name)
+    provenance = str(round_provenance or "").strip().lower()
+    review_state = str(initial_review_state or "").strip().lower()
+    observed = _utc(observed_at, "observed_at")
+    expiry = _utc(expires_at, "expires_at")
+    if not re.fullmatch(r"[0-9a-f]{64}", generation):
+        raise ValueError("eligibility generation must be a lowercase SHA-256")
+    if not source:
+        raise ValueError("source_name is required")
+    if artifact_id is None:
+        raise ValueError("eligibility round evidence requires source_artifact_id")
+    if fetch_id is None:
+        raise ValueError("eligibility round evidence requires source_fetch_id")
+    normalized_round = str(round_code or "").strip().upper()
+    if normalized_round not in ACTIVE_ROUND_CODES:
+        raise ValueError(f"unsupported round_code: {normalized_round or '<blank>'}")
+    if provenance not in PROVENANCE_QUALITY:
+        raise ValueError("round_provenance must be a known provenance code")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("eligibility round evidence requires source_content_sha256")
+    try:
+        confidence_value = _decimal(confidence, "confidence")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("eligibility round evidence requires confidence") from exc
+    if confidence_value < 0 or confidence_value > 1:
+        raise ValueError("confidence must be within [0, 1]")
+    if review_state not in {"unreviewed", "quarantined"}:
+        raise ValueError(
+            "eligibility round evidence must start unreviewed or quarantined"
+        )
+    if expiry <= observed:
+        raise ValueError("eligibility round evidence requires a future expires_at")
+    key = deterministic_key(
+        "eligibility_match_round", generation, identity.match_anchor_key,
+        source, normalized_round, observed, digest,
+    )
+    return _record_batch(ELIGIBILITY_MATCH_ROUND_TABLE, {
+        "eligibility_match_round_observation_id": _uuid(
+            "eligibility_match_round_observation", key,
+        ),
+        "idempotency_key": key,
+        "eligibility_generation_sha256": generation,
+        "run_id": run_id,
+        "source_fetch_id": fetch_id,
+        "source_artifact_id": artifact_id,
+        "match_uid": identity.match_uid,
+        "match_anchor_key": identity.match_anchor_key,
+        "observed_at": observed,
+        "source_name": source,
+        "round_code": normalized_round,
+        "round_provenance": provenance,
+        "source_uri": uri,
+        "source_content_sha256": digest,
+        "confidence": confidence_value,
+        "initial_review_state": review_state,
+        "expires_at": expiry,
     })
 
 

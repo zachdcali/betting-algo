@@ -55,6 +55,10 @@ jobs:
           tests/test_pending_identity_remediation.py
           tests/test_pending_reconciliation.py
           tests/test_pending_reconciliation_apply.py
+          tests/test_eligibility_coverage.py
+          tests/test_eligibility_provenance.py
+          tests/test_eligibility_cache_export.py
+          tests/test_eligibility_cutover_gates.py
 
       - name: Verify artifact, replay, lineage, and dashboard boundaries
         run: >-

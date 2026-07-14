@@ -25,12 +25,17 @@ from typing import Optional
 import pandas as pd
 from bs4 import BeautifulSoup
 
+try:
+    from tennis_enums import ACTIVE_ROUND_CODES
+except ImportError:  # pragma: no cover - package-style execution
+    from production.tennis_enums import ACTIVE_ROUND_CODES  # type: ignore
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-ROUND_CODES = {"R128", "R64", "R32", "R16", "QF", "SF", "F", "Q1", "Q2", "Q3", "Q4", "RR", "ER", "BR"}
+ROUND_CODES = ACTIVE_ROUND_CODES
 
 ROUND_NAME_TO_CODE = {
     "round of 128": "R128",

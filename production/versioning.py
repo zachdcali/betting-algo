@@ -21,7 +21,7 @@ SEMVER_RE = re.compile(
 FAMILY_NAMES = {"nn", "xgboost", "random_forest"}
 ARTIFACT_ROLES = {"releases", "candidates", "archive"}
 
-OPERATIONAL_SCHEMA_VERSION = "1.1.0"
+OPERATIONAL_SCHEMA_VERSION = "1.2.0"
 OPERATIONAL_NORMALIZER_VERSION = "1.0.0"
 DATASET_MANIFEST_VERSION = "1.0.0"
 LOGGING_SCHEMA_VERSION = "prediction_log_v2"

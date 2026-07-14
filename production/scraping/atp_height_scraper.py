@@ -10,22 +10,44 @@ Strategy:
   2. Fuzzy-match the player name to find their URL.
   3. Navigate to their /bio page with Playwright (JS-rendered).
   4. Extract height in cm via regex.
-  5. Cache all results to data/atp_heights.json.
+  5. In today's default legacy mode, retain the existing JSON cache behavior.
+     After explicit eligibility cutover (ELIGIBILITY_PROVENANCE_MODE=required),
+     read only a schema/generation-pinned ops export and never write locally.
 
 Usage (standalone test):
-    python scraping/atp_height_scraper.py "Jacob Fearnley"
+    python -m production.scraping.atp_height_scraper "Jacob Fearnley"
 """
 
-from playwright.sync_api import sync_playwright
 import json
+import os
 import re
 import time
 import pandas as pd
 from pathlib import Path
 from typing import Optional
 
+try:
+    from storage.eligibility import (
+        ELIGIBILITY_GENERATION_ENV, ELIGIBILITY_PROJECTION_SEAL_ENV,
+        EligibilityContractError, EligibilityMode, eligibility_mode,
+    )
+    from eligibility_cache import (
+        VerifiedEligibilityBundle, load_verified_profile_bundle,
+    )
+except ImportError:  # pragma: no cover - package-style execution
+    from production.storage.eligibility import (  # type: ignore
+        ELIGIBILITY_GENERATION_ENV, ELIGIBILITY_PROJECTION_SEAL_ENV,
+        EligibilityContractError, EligibilityMode, eligibility_mode,
+    )
+    from production.eligibility_cache import (  # type: ignore
+        VerifiedEligibilityBundle, load_verified_profile_bundle,
+    )
+
 CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_heights.json"
 HANDS_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_hands.json"
+CACHE_MANIFEST_PATH = (
+    Path(__file__).parent.parent.parent / "data" / "eligibility_cache_manifest.json"
+)
 RANKINGS_PATH = Path(__file__).parent.parent.parent / "data" / "atp_rankings.csv"
 ATP_BASE = "https://www.atptour.com"
 
@@ -40,7 +62,24 @@ _UA = (
 # Cache helpers
 # ---------------------------------------------------------------------------
 
+def _load_required_bundle() -> Optional[VerifiedEligibilityBundle]:
+    """Load the all-or-nothing accepted bundle configured for this process."""
+    generation = os.environ.get(ELIGIBILITY_GENERATION_ENV, "").strip().lower()
+    seal = os.environ.get(ELIGIBILITY_PROJECTION_SEAL_ENV, "").strip().lower()
+    if not generation or not seal:
+        return None
+    return load_verified_profile_bundle(
+        output_dir=CACHE_MANIFEST_PATH.parent,
+        expected_generation_sha256=generation,
+        expected_projection_seal_sha256=seal,
+    )
+
+
 def _load_cache() -> dict:
+    if _provenance_required():
+        # Required mode must never expose a plain cache dictionary as accepted
+        # evidence. Public lookups consume the verified ID-bearing bundle.
+        return {}
     if CACHE_PATH.exists():
         with open(CACHE_PATH) as f:
             return json.load(f)
@@ -48,6 +87,8 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict):
+    if _provenance_required():
+        return
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CACHE_PATH, "w") as f:
         json.dump(cache, f, indent=2)
@@ -58,6 +99,8 @@ def _cache_key(name: str) -> str:
 
 
 def _load_hands_cache() -> dict:
+    if _provenance_required():
+        return {}
     if HANDS_CACHE_PATH.exists():
         with open(HANDS_CACHE_PATH) as f:
             return json.load(f)
@@ -65,9 +108,24 @@ def _load_hands_cache() -> dict:
 
 
 def _save_hands_cache(cache: dict):
+    if _provenance_required():
+        return
     HANDS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(HANDS_CACHE_PATH, "w") as f:
         json.dump(cache, f, indent=2)
+
+
+def _provenance_required() -> bool:
+    return eligibility_mode() is EligibilityMode.REQUIRED
+
+
+def _new_browser_page():
+    """Resolve BrowserSession in both package and legacy script execution."""
+    try:
+        from .browser_session import new_page
+    except ImportError:  # pragma: no cover - legacy production/ on sys.path
+        from browser_session import new_page
+    return new_page()
 
 
 # ---------------------------------------------------------------------------
@@ -170,19 +228,32 @@ def _scrape_profile(page, profile_url: str) -> Optional[int]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_height_cm(player_name: str, cache: Optional[dict] = None) -> Optional[int]:
+def get_height_cm(
+    player_name: str,
+    cache: Optional[dict | VerifiedEligibilityBundle] = None,
+) -> Optional[int]:
     """
     Return height in cm for player_name from ATP website.
     Checks cache first; only launches Playwright when needed.
     """
+    if _provenance_required():
+        if cache is not None:
+            raise EligibilityContractError(
+                "required eligibility mode rejects caller-supplied cache objects"
+            )
+        bundle = _load_required_bundle()
+        profile = None if bundle is None else bundle.profile_for(player_name)
+        value = None if profile is None else profile.get("height_cm")
+        return None if value is None else int(float(value))
+
     own_cache = cache is None
     if cache is None:
         cache = _load_cache()
+    assert isinstance(cache, dict)
 
     key = _cache_key(player_name)
     if key in cache:
         return cache[key]
-
     url_map = _load_url_map()
     bio_url = _find_profile_url(player_name, url_map)
     if not bio_url:
@@ -193,8 +264,7 @@ def get_height_cm(player_name: str, cache: Optional[dict] = None) -> Optional[in
         return None
 
     print(f"  ATP height lookup: {player_name}")
-    from browser_session import new_page
-    pg = new_page()
+    pg = _new_browser_page()
     try:
         height = _scrape_profile(pg, bio_url)
     finally:
@@ -215,10 +285,26 @@ def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
     """
     Fetch height AND handedness for multiple players, one page fetch each,
     shared browser. Returns {name: {"height_cm": int|None, "hand": 'R'/'L'/None}}.
-    Both persistent caches are updated (heights: atp_heights.json,
-    hands: atp_hands.json — hands were the Hand_U missingness gap: live
-    Hand_U ran 4x training incidence at challenger level before this).
+    Default legacy mode retains today's persistent caches. Required cutover
+    mode reads only a generation-pinned export and returns the accepted
+    canonical player ID with each profile so callers can reject identity
+    mismatches. Fresh values remain in-memory pending normalized
+    ingestion/review.
     """
+    if _provenance_required():
+        bundle = _load_required_bundle()
+        results: dict = {}
+        for name in player_names:
+            profile = None if bundle is None else bundle.profile_for(name)
+            results[name] = {
+                "canonical_player_id": (
+                    None if profile is None else profile.get("canonical_player_id")
+                ),
+                "height_cm": None if profile is None else profile.get("height_cm"),
+                "hand": None if profile is None else profile.get("hand"),
+            }
+        return results
+
     h_cache = _load_cache()
     hd_cache = _load_hands_cache()
     results: dict = {}
@@ -233,7 +319,6 @@ def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
 
     if not to_scrape:
         return results
-
     url_map = _load_url_map()
     with_url = [(n, _find_profile_url(n, url_map)) for n in to_scrape]
     needs_scraping = [(n, u) for n, u in with_url if u]
@@ -250,8 +335,7 @@ def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
     if needs_scraping:
         if verbose:
             print(f"  ATP profile scraper: fetching {len(needs_scraping)} players...")
-        from browser_session import new_page
-        pg = new_page()
+        pg = _new_browser_page()
         try:
             for name, bio_url in needs_scraping:
                 text = _fetch_profile_text(pg, bio_url)
@@ -276,8 +360,17 @@ def batch_get_heights(player_names: list, verbose: bool = True) -> dict:
     return {n: (v or {}).get("height_cm") for n, v in profs.items()}
 
 
-if __name__ == "__main__":
-    import sys
-    name = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Jacob Fearnley"
+def main(argv: Optional[list[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Resolve one ATP player height")
+    parser.add_argument("player_name", nargs="+", help="ATP player name")
+    args = parser.parse_args(argv)
+    name = " ".join(args.player_name)
     h = get_height_cm(name)
     print(f"\nResult: {name} → {h}cm" if h else f"\nResult: {name} → not found")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

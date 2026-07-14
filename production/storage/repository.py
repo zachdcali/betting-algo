@@ -81,6 +81,26 @@ TABLE_POLICIES: dict[str, TablePolicy] = {
     "ops.match_metadata_observations": TablePolicy(
         "ops.match_metadata_observations"
     ),
+    "ops.eligibility_match_round_observations": TablePolicy(
+        "ops.eligibility_match_round_observations"
+    ),
+    "ops.eligibility_generations": TablePolicy("ops.eligibility_generations"),
+    "ops.eligibility_generation_status_events": TablePolicy(
+        "ops.eligibility_generation_status_events"
+    ),
+    "ops.player_entities": TablePolicy("ops.player_entities"),
+    "ops.player_identity_observations": TablePolicy(
+        "ops.player_identity_observations"
+    ),
+    "ops.player_alias_observations": TablePolicy(
+        "ops.player_alias_observations"
+    ),
+    "ops.player_profile_observations": TablePolicy(
+        "ops.player_profile_observations"
+    ),
+    "ops.eligibility_review_events": TablePolicy(
+        "ops.eligibility_review_events"
+    ),
     "ml.feature_schemas": TablePolicy("ml.feature_schemas"),
     "ml.feature_snapshots": TablePolicy("ml.feature_snapshots"),
     "ml.model_registry_generations": TablePolicy(
@@ -99,6 +119,29 @@ TABLE_POLICIES: dict[str, TablePolicy] = {
     "ops.settlement_attempts": TablePolicy("ops.settlement_attempts"),
     "ops.settlement_events": TablePolicy("ops.settlement_events"),
     "ops.skip_events": TablePolicy("ops.skip_events"),
+}
+
+# Generation sealing makes write order part of the contract. Stable sorting
+# preserves candidate->accepted event order while preventing lexicographic
+# import plans from sealing before their facts and review decisions exist.
+ELIGIBILITY_BATCH_WRITE_PRIORITY: dict[str, int] = {
+    "ops.eligibility_generations": 10,
+    "raw.source_fetches": 20,
+    "raw.source_artifacts": 30,
+    "ops.player_entities": 40,
+    "ops.player_identity_observations": 50,
+    "ops.player_alias_observations": 50,
+    "ops.player_profile_observations": 50,
+    "ops.eligibility_match_round_observations": 50,
+    "ops.eligibility_review_events": 60,
+    "ops.eligibility_generation_status_events": 70,
+    "ops.import_batch_memberships": 100,
+}
+ELIGIBILITY_STATUS_PRIORITY = {
+    "candidate": 10,
+    "accepted": 20,
+    "rejected": 20,
+    "retired": 30,
 }
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -221,6 +264,14 @@ class OperationalRepository:
         unique = batch.unique_records
         if not unique:
             return 0
+        if batch.table == "ops.eligibility_generation_status_events":
+            unique = tuple(sorted(unique, key=lambda record: (
+                str(record.get("effective_at") or ""),
+                ELIGIBILITY_STATUS_PRIORITY.get(
+                    str(record.get("status") or "").lower(), 99,
+                ),
+                str(record.get("idempotency_key") or ""),
+            )))
 
         # Different legacy sources can expose optional fields. Grouping by the
         # exact column tuple keeps every statement typed without filling absent
@@ -244,7 +295,44 @@ class OperationalRepository:
 
     def write_batches(self, batches: Iterable[RecordBatch]) -> dict[str, int]:
         counts: dict[str, int] = defaultdict(int)
+        expanded: list[RecordBatch] = []
         for batch in batches:
+            if batch.table == "ops.eligibility_generation_status_events":
+                expanded.extend(
+                    RecordBatch(batch.table, (record,), batch.source_files)
+                    for record in batch.unique_records
+                )
+            else:
+                expanded.append(batch)
+        indexed = list(enumerate(expanded))
+        if any(
+            batch.table in ELIGIBILITY_BATCH_WRITE_PRIORITY
+            and batch.table.startswith(("ops.eligibility", "ops.player_"))
+            for _, batch in indexed
+        ):
+            def write_order(item: tuple[int, RecordBatch]) -> tuple[Any, ...]:
+                index, batch = item
+                priority = ELIGIBILITY_BATCH_WRITE_PRIORITY.get(batch.table, 90)
+                if batch.table != "ops.eligibility_generation_status_events":
+                    return (priority, "", 0, index)
+                records = batch.unique_records
+                first = min(records, key=lambda record: (
+                    str(record.get("effective_at") or ""),
+                    ELIGIBILITY_STATUS_PRIORITY.get(
+                        str(record.get("status") or "").lower(), 99,
+                    ),
+                )) if records else {}
+                return (
+                    priority,
+                    str(first.get("effective_at") or ""),
+                    ELIGIBILITY_STATUS_PRIORITY.get(
+                        str(first.get("status") or "").lower(), 99,
+                    ),
+                    index,
+                )
+
+            indexed.sort(key=write_order)
+        for _, batch in indexed:
             counts[batch.table] += self.write_batch(batch)
         return dict(counts)
 
