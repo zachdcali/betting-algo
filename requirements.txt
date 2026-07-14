@@ -1,17 +1,17 @@
 # Pinned to the local tennis_env versions — cloud must match local exactly:
 # model unpickling (RF/scalers) is sklearn-version-sensitive, and pandas
 # major-version drift already broke a cloud run (LossySetitemError).
-requests>=2.31.0
+requests>=2.34.2
 pandas==2.3.1
 numpy==2.3.2
 python-dotenv>=1.0.0
-playwright>=1.40.0
-torch==2.7.1
-scikit-learn==1.7.1
-xgboost==3.0.3
+playwright>=1.61.0
+torch==2.13.0
+scikit-learn==1.9.0
+xgboost==3.3.0
 catboost==1.2.10
 lightgbm==4.6.0
-tqdm>=4.67.0
+tqdm>=4.68.4
 psycopg[binary]>=3.1.0
-beautifulsoup4>=4.12.0
+beautifulsoup4>=4.15.0
 lxml==6.1.1
