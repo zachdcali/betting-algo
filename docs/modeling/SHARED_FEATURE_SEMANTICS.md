@@ -122,7 +122,9 @@ calculator.build_141_features(
 
 If `match_date` is already a provenance-backed timezone-naive canonical value,
 the separate keyword may be omitted. A timezone-aware `match_date` is rejected
-unless `canonical_match_date` is also supplied.
+unless `canonical_match_date` is also supplied. In either accepted form, the
+canonical day is authoritative: a Tennis Abstract tournament-start/round
+heuristic may be logged for comparison but cannot replace it.
 
 The no-argument live constructor remains on `ta_live_legacy@3.0.0`.
 

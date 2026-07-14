@@ -1361,9 +1361,21 @@ class TAFeatureCalculator:
                     _tourney_start = datetime.strptime(_ta_date_str, '%Y%m%d')
                     _day_offset = get_round_day_offset(tournament_level, draw_size, round_code or '', tourney_date=_tourney_start)
                     _ta_inferred = _tourney_start + timedelta(days=_day_offset)
-                    if match_date_is_explicit:
-                        # Bovada gave us a real date — trust it, don't override with heuristic
-                        print(f"      📅 TA inferred {_ta_inferred.date()} but using explicit Bovada date {when.date()}")
+                    if match_date_is_explicit or use_shared_semantics:
+                        # A shared-candidate date is already the required
+                        # provenance-backed canonical event-local day.  TA's
+                        # tournament-start heuristic may inform diagnostics,
+                        # but it can never replace that date (including when
+                        # canonical_match_date was supplied separately from a
+                        # timezone-aware kickoff instant).
+                        date_source = (
+                            "shared canonical event date"
+                            if use_shared_semantics else "explicit Bovada date"
+                        )
+                        print(
+                            f"      📅 TA inferred {_ta_inferred.date()} but using "
+                            f"{date_source} {when.date()}"
+                        )
                     else:
                         when = _ta_inferred
                         print(f"      📅 inferred_match_dt: {_tourney_start.date()} + {_day_offset}d ({round_code}) = {when.date()}")

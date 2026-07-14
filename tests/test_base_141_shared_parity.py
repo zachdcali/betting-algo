@@ -227,8 +227,9 @@ def _perspective_history(player_key: str, *, include_future: bool) -> pd.DataFra
 
 
 class FixtureScraper:
-    def __init__(self, *, include_future: bool = False):
+    def __init__(self, *, include_future: bool = False, upcoming=None):
         self.include_future = include_future
+        self.upcoming = upcoming
         self.by_slug = {player["slug"]: key for key, player in FIXTURE["players"].items()}
 
     def get_player_profile(self, slug, **_kwargs):
@@ -249,7 +250,7 @@ class FixtureScraper:
         return _perspective_history(self.by_slug[slug], include_future=self.include_future)
 
     def get_upcoming_match(self, *_args, **_kwargs):
-        return None
+        return self.upcoming
 
 
 def _live_vector(
@@ -257,10 +258,12 @@ def _live_vector(
     include_future: bool = False,
     match_date=AS_OF,
     canonical_match_date=None,
+    match_date_is_explicit: bool = True,
+    upcoming=None,
 ) -> dict[str, float]:
     players = FIXTURE["players"]
     calc = TAFeatureCalculator(
-        FixtureScraper(include_future=include_future),
+        FixtureScraper(include_future=include_future, upcoming=upcoming),
         feature_semantics_id=SHARED_SEMANTICS_ID,
     )
     calc.use_store = False
@@ -285,7 +288,7 @@ def _live_vector(
         force_refresh=False,
         persist=False,
         session_cache={},
-        match_date_is_explicit=True,
+        match_date_is_explicit=match_date_is_explicit,
     )
     assert features["_feature_semantics_id"] == SHARED_SEMANTICS_ID
     return {name: float(features[name]) for name in EXACT_141_FEATURES}
@@ -878,6 +881,26 @@ def test_aware_kickoff_cannot_infer_event_date_without_explicit_canonical_date()
     assert _live_vector(
         match_date=aware_utc,
         canonical_match_date=canonical,
+    ) == expected
+
+    misleading_upcoming = {
+        "date": "20260727",
+        "round": FIXTURE["context"]["round_code"],
+        "surface": FIXTURE["context"]["surface"],
+    }
+    # The shared adapter treats either accepted input form as the canonical
+    # event-local day even when the legacy caller flag remains at its default.
+    # TA's tournament-start heuristic must never move the candidate a week.
+    assert _live_vector(
+        match_date=aware_eastern,
+        canonical_match_date=canonical,
+        match_date_is_explicit=False,
+        upcoming=misleading_upcoming,
+    ) == expected
+    assert _live_vector(
+        match_date=naive_eastern_date,
+        match_date_is_explicit=False,
+        upcoming=misleading_upcoming,
     ) == expected
 
 
