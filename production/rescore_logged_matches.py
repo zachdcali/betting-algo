@@ -99,7 +99,9 @@ with open(nn_scaler_path, "rb") as f:
     scaler = pickle.load(f)
 
 nn_model = TennisNet(input_size=len(MODEL_FEATURES))
-nn_model.load_state_dict(torch.load(nn_model_path, map_location="cpu"))
+nn_model.load_state_dict(
+    torch.load(nn_model_path, map_location="cpu", weights_only=True)
+)
 nn_model.eval()
 
 X_scaled = scaler.transform(X.values)

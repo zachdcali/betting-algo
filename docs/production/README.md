@@ -22,6 +22,8 @@ Start here:
   Additive Supabase/Postgres schema, import proof, and controlled cutover gates
 - [Cutover Status — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/CUTOVER_STATUS_2026-07-14.md)
   Dated separation of branch-local proof, current live Supabase, and remaining gates
+- [Runtime Security Audit — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/SECURITY_AUDIT_2026-07-14.md)
+  Active dependency, model-release supply-chain, and legacy cloud disposition gates
 - [Historical Replay](/Users/zachdodson/Documents/betting-algo/docs/modeling/HISTORICAL_REPLAY.md)
   Exact-vector replay cohorts and same-schema promoted-artifact verification
 - [Model Ledger](/Users/zachdodson/Documents/betting-algo/docs/modeling/MODEL_LEDGER.md)

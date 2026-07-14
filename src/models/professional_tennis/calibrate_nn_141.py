@@ -119,7 +119,9 @@ def main() -> None:
     with open(SCALER_PATH, "rb") as f:
         scaler = pickle.load(f)
     model = TennisNet(scaler.n_features_in_)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.load_state_dict(
+        torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
+    )
     model.eval()
 
     wrapper = NNWrapper(model=model, scaler=scaler, device=torch.device("cpu"))

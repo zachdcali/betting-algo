@@ -205,7 +205,9 @@ class TennisPredictor:
             input_size = self.scaler.n_features_in_  # 141
             self.model = TennisNet(input_size)
 
-            state_dict = torch.load(model_path, map_location='cpu')
+            state_dict = torch.load(
+                model_path, map_location='cpu', weights_only=True
+            )
             self.model.load_state_dict(state_dict)
             self.model.eval()
 

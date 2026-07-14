@@ -611,7 +611,9 @@ if os.path.exists(ut_model_path) and os.path.exists(ut_scaler_path):
     with open(ut_scaler_path, 'rb') as f:
         scaler_ut = pickle.load(f)
     model_ut = TennisNet(len(feature_cols))
-    model_ut.load_state_dict(torch.load(ut_model_path, map_location='cpu'))
+    model_ut.load_state_dict(
+        torch.load(ut_model_path, map_location='cpu', weights_only=True)
+    )
     model_ut.eval()
 
     X_test_ut = scaler_ut.transform(X_test.values)

@@ -240,7 +240,9 @@ def calibrate_model(model_version):
     print(f" Train: {len(X_train):,} matches | Test: {len(X_test):,} matches")
     
     model = TennisNet(input_size)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(
+        torch.load(model_path, map_location=device, weights_only=True)
+    )
     model.to(device)
     model.eval()
     print(f" Model loaded: {input_size} input features")
