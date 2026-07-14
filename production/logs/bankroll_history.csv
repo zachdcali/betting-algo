@@ -156,4 +156,7 @@ timestamp,session_id,bankroll,change_amount,change_reason,total_staked,num_pendi
 2026-07-13 22:47:42,session_20260711_154114,975.1552213785708,-30.0,Settled bet: Nicolas Mejia vs Juan Pablo Varillas (LOSS),90.0,2,1
 2026-07-13 22:47:51,session_20260711_045028,1004.9121758104192,29.75695443184836,Settled bet: Adam Walton vs Alex Michelsen (WIN),36.0690356749677,1,1
 2026-07-13 22:47:51,session_20260711_045028,986.8776579729354,-18.03451783748385,Settled bet: Alexis Galarneau vs Jacob Fearnley (LOSS),36.0690356749677,0,2
-2026-07-13 22:47:51,session_20260710_081558,993.6755928972249,6.797934924289538,Settled bet: Henry Bernet vs Federico Bondioli (WIN),87.2081882834478,9,4
+2026-07-13 22:47:51,session_20260710_081558,993.6755928972248,6.797934924289538,Settled bet: Henry Bernet vs Federico Bondioli (WIN),87.2081882834478,9,4
+2026-07-14 06:28:57,session_20260714_062857,1000.0,0.0,Session started,0.0,0,0
+2026-07-14 06:31:00,session_20260710_231820,1037.5,37.5,Settled bet: Hoyoung Roh vs Martin Borisiouk (WIN),60.0,0,2
+2026-07-14 06:47:17,session_20260714_062857,1000.0,-180.0,Placed 37 bets,179.99999999999994,37,0
