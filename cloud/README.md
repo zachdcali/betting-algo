@@ -1,4 +1,12 @@
-# UTR Tennis Scraper - Cloud Deployment
+# Legacy UTR Tennis Scraper - Deployment Disabled Pending Review
+
+> **Do not deploy this directory as the betting pipeline.** The active
+> production path is the TA-based GitHub Actions workflow documented in
+> `docs/production/README.md`. This older Flask/App Engine/Cloud Run service has
+> stale vulnerable dependencies, imports a missing scraper module, exposes an
+> unauthenticated trigger in its historical configuration, and requires an
+> authenticated inventory/retirement decision. See
+> `docs/production/SECURITY_AUDIT_2026-07-14.md`.
 
 This directory contains all the necessary files to deploy your UTR tennis data scraper to Google Cloud Platform for reliable, automated data collection.
 

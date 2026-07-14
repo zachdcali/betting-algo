@@ -254,7 +254,9 @@ class SideModelShadowPredictor:
             hidden_dims=list(config.get("hidden_dims", [128, 64, 32])),
             dropouts=list(config.get("dropouts", [0.1, 0.1, 0.05])),
         )
-        state = torch.load(str(self.spec.model_path), map_location="cpu")
+        state = torch.load(
+            str(self.spec.model_path), map_location="cpu", weights_only=True
+        )
         model.load_state_dict(state)
         model.eval()
         self.model = model

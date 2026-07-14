@@ -5,6 +5,10 @@
 
 set -e  # Exit on any error
 
+echo "Legacy App Engine deployment is disabled pending the authenticated"
+echo "inventory and retirement decision in docs/production/SECURITY_AUDIT_2026-07-14.md."
+exit 1
+
 echo "🎾 UTR Tennis Scraper - Cloud Deployment"
 echo "========================================"
 

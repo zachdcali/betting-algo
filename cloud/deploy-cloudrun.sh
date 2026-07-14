@@ -3,6 +3,10 @@
 # UTR Tennis Scraper - Cloud Run Deployment Script
 set -e
 
+echo "Legacy Cloud Run deployment is disabled pending the authenticated"
+echo "inventory and retirement decision in docs/production/SECURITY_AUDIT_2026-07-14.md."
+exit 1
+
 echo "🎾 UTR Tennis Scraper - Cloud Run Deployment"
 echo "============================================="
 
