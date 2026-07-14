@@ -176,15 +176,19 @@ $2,028.0347736603512:
 
 Fifty-one rows across 22 deterministic match/side/date identities are labeled
 duplicate exposure. This is a review label, not authorization to delete or
-settle rows. The 27 exact rows have review-only candidate P&L; no automatic
-mutation path was added.
+settle rows. The 27 exact rows have review-only candidate P&L. A separate
+manual phase-one plan/apply workflow now exists only
+for exact, nonduplicate rows that pass every identity, price, session, account,
+and hash gate. It is not automatic, and no backlog row has been changed merely
+by adding that workflow.
 
-An independent review of the separate plan/apply implementation found it is
-not yet safe to merge or production-apply: recovery is not enforced for every
-shared-lock reader/writer, replay does not revalidate authoritative prediction
-outcomes, and ledger/session plus multi-session terminal-state gates remain
-incomplete. The read-only classifier above remains valid; no backlog mutation
-was performed.
+The implementation now requires the shared operational lock for hydration and
+all BetTracker reads/writes, validates every replay authority and ledger/session
+gate, and uses a preflighted four-file recovery journal that fails closed before
+any mutation. Independent review and recovery tests found no remaining P0/P1
+issue. That establishes code readiness only; production apply still requires a
+fresh reviewed plan, backups, and explicit operator execution. No backlog
+mutation was performed during implementation or review.
 
 ## Next safe production sequence
 

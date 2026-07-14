@@ -17,7 +17,8 @@ Start here:
 - [Dashboard README](/Users/zachdodson/Documents/betting-algo/dashboard/README.md)
   How to run the live operations dashboard and which CSVs it reads
 - [Pending Paper-Bet Reconciliation](/Users/zachdodson/Documents/betting-algo/docs/production/PENDING_BET_RECONCILIATION.md)
-  Read-only classification and review workflow for the pending account backlog
+  Read-only classification plus manual digest-gated plan/apply for the narrow
+  exact, nonduplicate pending-account subset
 - [Operational Database](/Users/zachdodson/Documents/betting-algo/docs/production/OPERATIONAL_DATABASE.md)
   Additive Supabase/Postgres schema, import proof, and controlled cutover gates
 - [Cutover Status — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/CUTOVER_STATUS_2026-07-14.md)
@@ -76,6 +77,11 @@ Current production principles:
 - `logs/audit/run_history.csv`, `logs/audit/skipped_live_matches.csv`, and `logs/audit/settlement_audit.csv` are the audit layer for dashboards and ops debugging.
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.
+- Pending-bet reconciliation remains read-only by default. Its optional manual
+  apply requires a deterministic reviewed plan and exact digest, holds a
+  canonical lock shared with BetTracker/hydration, and journals bets, bankroll,
+  sessions, and the canonical private apply-audit file with durable crash recovery.
+  Reconciliation itself is not wired into automatic runs.
 - `docs/index.html` is the public operations surface and reads one
   manifest-pinned Supabase generation. `dashboard/app.py` is the local,
   CSV-backed forensic surface. Model metrics on either surface must come from

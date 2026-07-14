@@ -19,6 +19,8 @@ import tempfile
 
 import pandas as pd
 
+from operations.operational_lock import operational_csv_lock
+
 
 BASE = Path(__file__).resolve().parent
 CONTROL_COLUMNS = {"dashboard_row_key", "sync_id"}
@@ -277,7 +279,9 @@ def _write_csv_atomic(path: Path, frame: pd.DataFrame) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def hydrate_operational_state(base: Path = BASE, verbose: bool = True) -> dict[str, int]:
+def _hydrate_operational_state_unlocked(
+    base: Path = BASE, verbose: bool = True
+) -> dict[str, int]:
     """Merge the durable Supabase snapshot into local CSVs before a cloud run."""
     from canonical_store import connect
     from dashboard_sync import (
@@ -381,3 +385,9 @@ def hydrate_operational_state(base: Path = BASE, verbose: bool = True) -> dict[s
                     shutil.copy2(backup, destination)
             raise
     return counts
+
+
+def hydrate_operational_state(base: Path = BASE, verbose: bool = True) -> dict[str, int]:
+    """Hydrate while excluding paper-account writers and manual reconciliation."""
+    with operational_csv_lock(base / "logs"):
+        return _hydrate_operational_state_unlocked(base=base, verbose=verbose)

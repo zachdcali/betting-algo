@@ -107,6 +107,15 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   bet logging would be risky.
 - `BetTracker.log_bets()` should skip duplicate pending bets for the same match
   and bet side, so reruns do not double-log open recommendations.
+- Pending-bet reconciliation is read-only by default. Its manual phase-one
+  apply path requires a deterministic reviewed plan, exact plan digest,
+  explicit canonical private apply-audit and lock paths, unchanged file/row hashes, and
+  strict exact UID/pair/date/side/session/account gates. Apply bets, bankroll,
+  sessions, and the separate apply audit through the canonical shared
+  `logs/.operational_csv.lock` plus the durable fsynced recovery journal;
+  BetTracker and durable hydration must use the same lock. Verified replay is a
+  no-op and every conflict fails closed. Do not wire reconciliation itself into
+  automatic startup without a separate reviewed change.
 - `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
   not an operational betting log. It can contain multiple `performance_v1`
   model families/versions and settlement scoring columns populated after the
@@ -169,6 +178,10 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 
 - Audit CSVs under `production/logs/audit/` are first-class operational data:
   `run_history.csv`, `skipped_live_matches.csv`, `settlement_audit.csv`.
+- The pending-reconciliation apply audit has one canonical private path,
+  `.private/pending_reconciliation_apply_audit.csv`, and is versioned separately
+  from `settlement_audit.csv`; never mix applied backlog mutations into the
+  source-evidence settlement-attempt log.
 - The public static dashboard reads one manifest-pinned Supabase generation;
   the local Streamlit dashboard reads production CSVs for deeper inspection.
   Neither dashboard may invent model metrics or a shadow dataset. Browser model
