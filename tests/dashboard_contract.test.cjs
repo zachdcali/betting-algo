@@ -35,6 +35,13 @@ test("deployed build changes self-heal already-open tabs", () => {
   assert.match(html, /id="dashboard-build"/);
 });
 
+test("deployment-version checks are allowed by the dashboard CSP", () => {
+  assert.match(
+    html,
+    /connect-src 'self' https:\/\/nwcayyusigznreygjlxl\.supabase\.co/,
+  );
+});
+
 test("current slate is snapshot and skipped-audit based, never canonical-latest based", () => {
   assert.match(client, /fetchAll\("dash_snapshots"[^\n]+currentRunFilter\)/);
   assert.match(client, /fetchAll\("dash_skipped_live_matches"[^\n]+currentRunFilter\)/);
