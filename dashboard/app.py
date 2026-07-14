@@ -30,6 +30,7 @@ from dashboard.data import (  # noqa: E402
     file_mtimes,
     find_feature_snapshot_row,
     load_dashboard_data,
+    latest_pipeline_run_id,
 )
 
 
@@ -386,12 +387,25 @@ def render_insight_strip(prediction_log: pd.DataFrame, live_latest: pd.DataFrame
 
     settled = prediction_log[prediction_log["is_settled"]] if not prediction_log.empty and "is_settled" in prediction_log else pd.DataFrame()
     recent = settled.sort_values("settled_at", ascending=False).head(50) if "settled_at" in settled.columns else settled.tail(50)
-    if not recent.empty and {"xgb_correct", "market_correct"}.issubset(recent.columns):
-        xgb_recent = recent["xgb_correct"].mean()
-        market_recent = recent["market_correct"].mean()
+    required = {"actual_winner", "xgb_p1_prob", "market_p1_prob"}
+    recent_common = recent.dropna(subset=list(required)) if required.issubset(recent.columns) else pd.DataFrame()
+    if not recent_common.empty:
+        winner = pd.to_numeric(recent_common["actual_winner"], errors="coerce")
+        recent_common = recent_common[winner.isin([1, 2])].copy()
+        winner = pd.to_numeric(recent_common["actual_winner"], errors="coerce")
+        xgb_correct = (
+            ((recent_common["xgb_p1_prob"] >= 0.5) & winner.eq(1))
+            | ((recent_common["xgb_p1_prob"] < 0.5) & winner.eq(2))
+        )
+        market_correct = (
+            ((recent_common["market_p1_prob"] >= 0.5) & winner.eq(1))
+            | ((recent_common["market_p1_prob"] < 0.5) & winner.eq(2))
+        )
+        xgb_recent = xgb_correct.mean()
+        market_recent = market_correct.mean()
         model_title = "Recent XGB vs market"
         model_big = pp(xgb_recent - market_recent)
-        model_note = f"{pct(xgb_recent)} model accuracy vs {pct(market_recent)} market across {len(recent):,} settled rows"
+        model_note = f"{pct(xgb_recent)} model accuracy vs {pct(market_recent)} market across {len(recent_common):,} common settled rows"
     else:
         model_title = "Recent XGB vs market"
         model_big = "n/a"
@@ -400,7 +414,7 @@ def render_insight_strip(prediction_log: pd.DataFrame, live_latest: pd.DataFrame
     if not prediction_log.empty and "latest_feature_snapshot_id" in prediction_log.columns:
         snapshot_rate = prediction_log["latest_feature_snapshot_id"].fillna("").astype(str).str.len().gt(0).mean()
         lineage_big = pct(snapshot_rate)
-        lineage_note = "Rows with exact feature snapshot ids available for drilldown."
+        lineage_note = "Rows carrying a feature snapshot ID; the ledger separately verifies referential availability."
     else:
         lineage_big = "n/a"
         lineage_note = "Feature snapshot lineage is unavailable in the active view."
@@ -589,10 +603,14 @@ def render_overview_tab(prediction_log: pd.DataFrame, family_results: pd.DataFra
     render_apples_to_apples_section(prediction_log)
 
 
-def render_live_slate_tab(live_latest: pd.DataFrame, prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
+def render_live_slate_tab(live_latest: pd.DataFrame, prediction_log: pd.DataFrame,
+                          prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame,
+                          run_id: str = "", run_status: str = ""):
     st.subheader("Live Slate")
+    if run_id:
+        st.caption(f"Pinned pipeline run: `{run_id}` · status: `{run_status or 'unknown'}`")
     if live_latest.empty:
-        st.info("No current prediction snapshots match the active filters.")
+        st.info("The pinned latest run has no current snapshots matching the active filters.")
         return
 
     lens_options = {
@@ -723,7 +741,10 @@ def render_live_slate_tab(live_latest: pd.DataFrame, prediction_log: pd.DataFram
             format_func=lambda uid: labels.get(uid, uid),
             key="live_match_select",
         )
-        render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
+        render_match_detail(
+            selected_uid, prediction_log, prediction_snapshots, odds_history,
+            chart_key="live_match_probability_timeline",
+        )
 
 
 def render_feature_snapshot_panel(feature_snapshot_id: str):
@@ -829,7 +850,14 @@ def render_feature_snapshot_panel(feature_snapshot_id: str):
         )
 
 
-def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
+def render_match_detail(
+    selected_uid: str,
+    prediction_log: pd.DataFrame,
+    prediction_snapshots: pd.DataFrame,
+    odds_history: pd.DataFrame,
+    *,
+    chart_key: str,
+):
     if not selected_uid:
         st.info("Select a match to inspect.")
         return
@@ -880,7 +908,7 @@ def render_match_detail(selected_uid: str, prediction_log: pd.DataFrame, predict
     if not odds.empty:
         probability_fig.add_trace(go.Scatter(x=odds["logged_at"], y=odds["market_p1_prob"], mode="lines+markers", name="Market"))
     probability_fig.update_layout(title="Probability Timeline", yaxis_tickformat=".0%")
-    st.plotly_chart(probability_fig, use_container_width=True)
+    st.plotly_chart(probability_fig, use_container_width=True, key=chart_key)
 
     details_cols = st.columns(2)
     with details_cols[0]:
@@ -1054,7 +1082,10 @@ def render_prediction_log_tab(prediction_log: pd.DataFrame, prediction_snapshots
         format_func=lambda uid: labels.get(uid, uid),
         key="prediction_log_match_select",
     )
-    render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
+    render_match_detail(
+        selected_uid, prediction_log, prediction_snapshots, odds_history,
+        chart_key="prediction_log_probability_timeline",
+    )
 
 
 def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots: pd.DataFrame, odds_history: pd.DataFrame):
@@ -1076,7 +1107,10 @@ def render_match_explorer_tab(prediction_log: pd.DataFrame, prediction_snapshots
         index=0 if default_uid in labels else None,
         key="generic_match_select",
     )
-    render_match_detail(selected_uid, prediction_log, prediction_snapshots, odds_history)
+    render_match_detail(
+        selected_uid, prediction_log, prediction_snapshots, odds_history,
+        chart_key="match_explorer_probability_timeline",
+    )
 
 
 def render_bets_tab(all_bets: pd.DataFrame, betting_sessions: pd.DataFrame):
@@ -1264,6 +1298,22 @@ def main():
     @st.fragment(run_every=refresh_map[refresh_label])
     def render_dashboard():
         fresh = load_data_cached(file_mtimes())
+        fixed_run_id = latest_pipeline_run_id(
+            fresh["run_history"], fresh["prediction_snapshots"]
+        )
+        fixed_run_status = ""
+        if fixed_run_id and not fresh["run_history"].empty:
+            run_ids = fresh["run_history"].get(
+                "run_id", pd.Series("", index=fresh["run_history"].index)
+            ).fillna("").astype(str)
+            run_row = fresh["run_history"][run_ids == fixed_run_id]
+            if not run_row.empty:
+                fixed_run_status = str(run_row.iloc[-1].get("status", ""))
+        run_snapshots = fresh["prediction_snapshots"]
+        if fixed_run_id and "run_id" in run_snapshots.columns:
+            run_snapshots = run_snapshots[
+                run_snapshots["run_id"].fillna("").astype(str) == fixed_run_id
+            ].copy()
         filtered_log = apply_history_filters(
             fresh["prediction_log"],
             trust_mode=trust_mode,
@@ -1276,7 +1326,7 @@ def main():
             end_date=end_date,
         )
         filtered_snaps = apply_live_filters(
-            fresh["prediction_snapshots"],
+            run_snapshots,
             trust_mode=trust_mode,
             surfaces=surfaces,
             levels=levels,
@@ -1285,7 +1335,7 @@ def main():
             start_date=start_date,
             end_date=end_date,
         )
-        live_latest = build_live_latest_snapshots(filtered_snaps)
+        live_latest = build_live_latest_snapshots(filtered_snaps, run_id=fixed_run_id)
         family_results = build_family_results(filtered_log)
         family_summary = build_family_accuracy_summary(filtered_log)
         version_summary = build_version_summary(family_results)
@@ -1323,7 +1373,11 @@ def main():
             render_prediction_log_tab(filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])
 
         with tab_live:
-            render_live_slate_tab(live_latest, filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])
+            render_live_slate_tab(
+                live_latest, filtered_log, fresh["prediction_snapshots"],
+                fresh["odds_history"], run_id=fixed_run_id,
+                run_status=fixed_run_status,
+            )
 
         with tab_match:
             render_match_explorer_tab(filtered_log, fresh["prediction_snapshots"], fresh["odds_history"])

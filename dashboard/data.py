@@ -14,6 +14,7 @@ PRODUCTION_DIR = REPO_ROOT / "production"
 if str(PRODUCTION_DIR) not in sys.path:
     sys.path.insert(0, str(PRODUCTION_DIR))
 
+from evaluation import cohorts as eval_cohorts  # noqa: E402
 from evaluation import metrics as eval_metrics  # noqa: E402
 
 AUDIT_DIR = PRODUCTION_DIR / "logs" / "audit"
@@ -73,10 +74,16 @@ def read_csv_optional(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _parse_datetime_series(values: pd.Series) -> pd.Series:
+    """Parse mixed legacy/ISO timestamps into one UTC-naive representation."""
+    parsed = pd.to_datetime(values, errors="coerce", format="mixed", utc=True)
+    return parsed.dt.tz_localize(None)
+
+
 def _parse_datetimes(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
     for col in columns:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+            df[col] = _parse_datetime_series(df[col])
     return df
 
 
@@ -100,6 +107,27 @@ def _apply_numeric(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
+
+
+def _boolean_series(df: pd.DataFrame, column: str, default: bool = False) -> pd.Series:
+    """Parse booleans without Python's ``bool('False') == True`` trap."""
+    if column not in df.columns:
+        return pd.Series(default, index=df.index, dtype=bool)
+    values = df[column]
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(default).astype(bool)
+    normalized = values.fillna("").astype(str).str.strip().str.lower()
+    return normalized.isin({"true", "1", "1.0", "t", "yes", "y"})
+
+
+def _decision_grade_series(df: pd.DataFrame) -> pd.Series:
+    """Apply the same fail-closed GOLD lineage gate as the evaluation ledger."""
+    return (
+        df.get("logging_quality", pd.Series("", index=df.index)).fillna("").eq("snapshot_v2")
+        & df.get("rescore_quality", pd.Series("", index=df.index)).fillna("").eq("exact_feature_snapshot")
+        & _boolean_series(df, "features_complete", default=False)
+        & _boolean_series(df, "feature_snapshot_verified", default=False)
+    )
 
 
 def _decorate_match_labels(df: pd.DataFrame) -> pd.DataFrame:
@@ -135,18 +163,15 @@ def normalize_prediction_log(df: pd.DataFrame) -> pd.DataFrame:
         ],
     )
 
-    df["effective_logged_at"] = pd.to_datetime(
-        _coalesce_columns(df, ["latest_logged_at", "logged_at"]),
-        errors="coerce",
+    df["effective_logged_at"] = _parse_datetime_series(
+        _coalesce_columns(df, ["latest_logged_at", "logged_at"])
     )
-    df["effective_odds_scraped_at"] = pd.to_datetime(
-        _coalesce_columns(df, ["latest_odds_scraped_at", "odds_scraped_at"]),
-        errors="coerce",
+    df["effective_odds_scraped_at"] = _parse_datetime_series(
+        _coalesce_columns(df, ["latest_odds_scraped_at", "odds_scraped_at"])
     )
     df["effective_match_start_time"] = _coalesce_columns(df, ["latest_match_start_time", "match_start_time"])
-    df["effective_match_date"] = pd.to_datetime(
-        _coalesce_columns(df, ["latest_match_date", "match_date"]),
-        errors="coerce",
+    df["effective_match_date"] = _parse_datetime_series(
+        _coalesce_columns(df, ["latest_match_date", "match_date"])
     )
     df["effective_model_version"] = _coalesce_columns(df, ["latest_model_version_seen", "model_version"])
     df["effective_nn_model_version"] = _coalesce_columns(
@@ -165,13 +190,15 @@ def normalize_prediction_log(df: pd.DataFrame) -> pd.DataFrame:
         df,
         ["latest_nn_probability_source_seen", "nn_probability_source"],
     )
-    df["decision_grade"] = (
-        df.get("logging_quality", pd.Series("", index=df.index)).fillna("").eq("snapshot_v2")
-        & df.get("rescore_quality", pd.Series("", index=df.index)).fillna("").eq("exact_feature_snapshot")
+    df["features_complete"] = _boolean_series(df, "features_complete", default=False)
+    df["feature_snapshot_verified"] = _boolean_series(
+        df, "feature_snapshot_verified", default=False
     )
-    df["is_settled"] = df.get("actual_winner", pd.Series(index=df.index, dtype=float)).notna()
-    df["market_has_pick"] = df.get("market_p1_prob", pd.Series(index=df.index, dtype=float)).round(4).ne(0.5)
-    df["features_complete"] = df.get("features_complete", pd.Series(True, index=df.index)).fillna(True).astype(bool)
+    df["decision_grade"] = _decision_grade_series(df)
+    winner = pd.to_numeric(df.get("actual_winner", pd.Series(index=df.index, dtype=float)), errors="coerce")
+    df["is_settled"] = winner.isin([1, 2])
+    # An even-money 0.5 line is still valid market evidence. Missing is not.
+    df["market_has_pick"] = df.get("market_p1_prob", pd.Series(index=df.index, dtype=float)).notna()
     df["record_status"] = df.get("record_status", pd.Series("", index=df.index)).fillna("unknown")
     df = _decorate_match_labels(df)
     return df
@@ -183,10 +210,11 @@ def normalize_prediction_snapshots(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df = _apply_numeric(df)
     df = _parse_datetimes(df, ["logged_at", "odds_scraped_at", "match_date"])
-    df["decision_grade"] = (
-        df.get("logging_quality", pd.Series("", index=df.index)).fillna("").eq("snapshot_v2")
-        & df.get("rescore_quality", pd.Series("", index=df.index)).fillna("").eq("exact_feature_snapshot")
+    df["features_complete"] = _boolean_series(df, "features_complete", default=False)
+    df["feature_snapshot_verified"] = _boolean_series(
+        df, "feature_snapshot_verified", default=False
     )
+    df["decision_grade"] = _decision_grade_series(df)
     df = _decorate_match_labels(df)
     return df
 
@@ -247,8 +275,15 @@ def normalize_betting_sessions(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_dashboard_data() -> dict[str, pd.DataFrame]:
+    try:
+        verified_prediction_log = eval_cohorts.load_prediction_log(str(PRODUCTION_DIR))
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        verified_prediction_log = pd.DataFrame()
     return {
-        "prediction_log": normalize_prediction_log(read_csv_optional(DATA_PATHS["prediction_log"])),
+        # Reuse the ledger's referential feature-snapshot verifier. Verification
+        # failures remain loud instead of quietly promoting ID-shaped strings
+        # to decision-grade evidence.
+        "prediction_log": normalize_prediction_log(verified_prediction_log),
         "prediction_snapshots": normalize_prediction_snapshots(read_csv_optional(DATA_PATHS["prediction_snapshots"])),
         "odds_history": normalize_odds_history(read_csv_optional(DATA_PATHS["odds_history"])),
         "run_history": normalize_run_history(read_csv_optional(DATA_PATHS["run_history"])),
@@ -296,15 +331,15 @@ def build_family_results(prediction_log: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     specs = [
-        ("NN", "model_correct", "model_p1_prob", "effective_nn_model_version", "effective_nn_probability_source"),
-        ("XGB", "xgb_correct", "xgb_p1_prob", "effective_xgb_model_version", None),
-        ("RF", "rf_correct", "rf_p1_prob", "effective_rf_model_version", None),
-        ("Market", "market_correct", "market_p1_prob", None, None),
+        ("NN", "model_p1_prob", "effective_nn_model_version", "effective_nn_probability_source"),
+        ("XGB", "xgb_p1_prob", "effective_xgb_model_version", None),
+        ("RF", "rf_p1_prob", "effective_rf_model_version", None),
+        ("Market", "market_p1_prob", None, None),
     ]
 
     frames: list[pd.DataFrame] = []
-    for family, correct_col, prob_col, version_col, source_col in specs:
-        if correct_col not in settled.columns or prob_col not in settled.columns:
+    for family, prob_col, version_col, source_col in specs:
+        if prob_col not in settled.columns:
             continue
 
         family_df = settled[
@@ -323,17 +358,23 @@ def build_family_results(prediction_log: pd.DataFrame) -> pd.DataFrame:
                 "effective_match_date",
                 "effective_odds_scraped_at",
                 "effective_model_version",
-                correct_col,
+                "actual_winner",
                 prob_col,
             ]
         ].copy()
-        family_df = family_df.rename(columns={correct_col: "correct", prob_col: "p1_prob"})
+        family_df = family_df.rename(columns={prob_col: "p1_prob"})
         family_df["family"] = family
         family_df["version"] = settled[version_col].values if version_col else family
         family_df["nn_probability_source"] = settled[source_col].values if source_col else ""
-        family_df["correct"] = pd.to_numeric(family_df["correct"], errors="coerce")
         family_df["p1_prob"] = pd.to_numeric(family_df["p1_prob"], errors="coerce")
-        family_df = family_df[family_df["correct"].notna() & family_df["p1_prob"].notna()]
+        family_df["actual_winner"] = pd.to_numeric(family_df["actual_winner"], errors="coerce")
+        family_df = family_df[
+            family_df["actual_winner"].isin([1, 2]) & family_df["p1_prob"].notna()
+        ]
+        family_df["correct"] = (
+            ((family_df["p1_prob"] >= 0.5) & family_df["actual_winner"].eq(1))
+            | ((family_df["p1_prob"] < 0.5) & family_df["actual_winner"].eq(2))
+        ).astype(float)
         family_df["confidence"] = np.maximum(family_df["p1_prob"], 1 - family_df["p1_prob"])
         frames.append(family_df)
 
@@ -343,52 +384,16 @@ def build_family_results(prediction_log: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_family_accuracy_summary(prediction_log: pd.DataFrame) -> pd.DataFrame:
-    if prediction_log.empty:
+    apples = build_apples_to_apples_rows(prediction_log)
+    metrics = build_metrics_summary(apples)
+    if metrics.empty:
         return pd.DataFrame()
-
-    settled = prediction_log[prediction_log["is_settled"] & prediction_log["features_complete"]].copy()
-    if settled.empty:
-        return pd.DataFrame()
-
-    rows: list[dict] = []
-    families = [
-        ("NN", "model_correct", "effective_nn_model_version"),
-        ("XGB", "xgb_correct", "effective_xgb_model_version"),
-        ("RF", "rf_correct", "effective_rf_model_version"),
-    ]
-    for family, correct_col, version_col in families:
-        if correct_col not in settled.columns:
-            continue
-        mask = settled[correct_col].notna() & settled["market_has_pick"]
-        subset = settled[mask].copy()
-        if subset.empty:
-            continue
-        rows.append(
-            {
-                "family": family,
-                "matches": int(len(subset)),
-                "accuracy": float(subset[correct_col].mean()),
-                "market_accuracy": float(subset["market_correct"].mean()),
-                "edge_vs_market": float(subset[correct_col].mean() - subset["market_correct"].mean()),
-                "versions": ", ".join(sorted(subset[version_col].dropna().astype(str).unique())) if version_col in subset.columns else "",
-            }
-        )
-
-    market_mask = settled["market_correct"].notna() & settled["market_has_pick"]
-    market_subset = settled[market_mask].copy()
-    if not market_subset.empty:
-        rows.append(
-            {
-                "family": "Market",
-                "matches": int(len(market_subset)),
-                "accuracy": float(market_subset["market_correct"].mean()),
-                "market_accuracy": float(market_subset["market_correct"].mean()),
-                "edge_vs_market": 0.0,
-                "versions": "consensus line",
-            }
-        )
-
-    return pd.DataFrame(rows).sort_values(["family"], ignore_index=True) if rows else pd.DataFrame()
+    market_rows = metrics[metrics["family"] == "Market"]
+    market_accuracy = float(market_rows.iloc[0]["accuracy"]) if not market_rows.empty else np.nan
+    result = metrics[["family", "matches", "accuracy", "versions"]].copy()
+    result["market_accuracy"] = market_accuracy
+    result["edge_vs_market"] = result["accuracy"] - market_accuracy
+    return result.sort_values("family", ignore_index=True)
 
 
 def build_version_summary(family_results: pd.DataFrame) -> pd.DataFrame:
@@ -428,17 +433,18 @@ def build_apples_to_apples_rows(prediction_log: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     required = [
-        "model_correct",
-        "xgb_correct",
-        "rf_correct",
-        "market_correct",
         "model_p1_prob",
         "xgb_p1_prob",
         "rf_p1_prob",
         "market_p1_prob",
         "actual_winner",
     ]
-    settled = prediction_log[prediction_log["is_settled"] & prediction_log["features_complete"] & prediction_log["market_has_pick"]].copy()
+    # Headline comparison uses the GOLD common cohort only.
+    settled = prediction_log[
+        prediction_log["is_settled"]
+        & prediction_log["decision_grade"]
+        & prediction_log["market_has_pick"]
+    ].copy()
     for col in required:
         if col not in settled.columns:
             return pd.DataFrame()
@@ -558,17 +564,80 @@ def build_reliability_curve_data(apples_df: pd.DataFrame, bins: int = 10) -> pd.
     return pd.DataFrame(rows)
 
 
-def build_live_latest_snapshots(prediction_snapshots: pd.DataFrame) -> pd.DataFrame:
+def latest_pipeline_run_id(run_history: pd.DataFrame,
+                           prediction_snapshots: pd.DataFrame) -> str:
+    """Choose the latest accepted prediction-bearing run before UI filters."""
+    snapshot_ids: set[str] = set()
+    if not prediction_snapshots.empty and "run_id" in prediction_snapshots.columns:
+        snapshot_ids = set(
+            value
+            for value in prediction_snapshots["run_id"].fillna("").astype(str)
+            if value
+        )
+    if not run_history.empty and "run_id" in run_history.columns:
+        candidates = run_history.copy()
+        candidates = candidates[
+            candidates["run_id"].fillna("").astype(str).str.startswith("run_")
+        ]
+        candidates = candidates[
+            candidates["run_id"].fillna("").astype(str).isin(snapshot_ids)
+        ]
+        if "run_kind" in candidates.columns:
+            kinds = candidates["run_kind"].fillna("").astype(str)
+            candidates = candidates[kinds.isin(["", "prediction_pipeline"])]
+        if "status" in candidates.columns:
+            statuses = candidates["status"].fillna("").astype(str).str.lower()
+            candidates = candidates[statuses.isin(["", "success", "partial"])]
+        if not candidates.empty:
+            if "started_at" in candidates.columns:
+                candidates = candidates.assign(
+                    _started=pd.to_datetime(
+                        candidates["started_at"], errors="coerce", utc=True,
+                        format="mixed",
+                    )
+                ).sort_values(["_started", "run_id"], kind="stable", na_position="first")
+            else:
+                candidates = candidates.sort_values("run_id", kind="stable")
+            return str(
+                candidates.iloc[-1]["run_id"]
+            )
+    if not prediction_snapshots.empty and "run_id" in prediction_snapshots.columns:
+        candidates = prediction_snapshots[
+            prediction_snapshots["run_id"].fillna("").astype(str).ne("")
+        ]
+        if not candidates.empty:
+            return str(
+                candidates.sort_values(["logged_at", "run_id"], kind="stable")
+                .iloc[-1]["run_id"]
+            )
+    return ""
+
+
+def build_live_latest_snapshots(prediction_snapshots: pd.DataFrame,
+                                run_id: str = "") -> pd.DataFrame:
     if prediction_snapshots.empty:
         return pd.DataFrame()
 
+    source = prediction_snapshots.copy()
+    if run_id and "run_id" in source.columns:
+        source = source[source["run_id"].fillna("").astype(str) == str(run_id)].copy()
+        if source.empty:
+            return pd.DataFrame()
+    elif "run_id" in source.columns and source["run_id"].fillna("").ne("").any():
+        run_order = (
+            source.groupby("run_id", dropna=False)["logged_at"].max().sort_values()
+        )
+        source = source[source["run_id"] == run_order.index[-1]].copy()
     latest = (
-        prediction_snapshots.sort_values(["logged_at", "prediction_uid"])
+        source.sort_values(["logged_at", "prediction_uid"])
         .groupby("match_uid", as_index=False)
         .tail(1)
-        .sort_values(["match_date", "logged_at", "match_label"], ascending=[True, False, True])
-        .reset_index(drop=True)
     )
+    sort_columns = [column for column in ["match_date", "logged_at", "match_label"] if column in latest]
+    ascending = {"match_date": True, "logged_at": False, "match_label": True}
+    if sort_columns:
+        latest = latest.sort_values(sort_columns, ascending=[ascending[c] for c in sort_columns])
+    latest = latest.reset_index(drop=True)
     p1_model_cols = [col for col in ["model_p1_prob", "xgb_p1_prob", "rf_p1_prob"] if col in latest.columns]
     p2_model_cols = [col for col in ["model_p2_prob", "xgb_p2_prob", "rf_p2_prob"] if col in latest.columns]
     p1_range_cols = [col for col in p1_model_cols + ["market_p1_prob"] if col in latest.columns]
@@ -683,8 +752,10 @@ def build_derived_run_history(prediction_snapshots: pd.DataFrame, odds_history: 
         else:
             merged = merged.merge(frame, on="run_id", how="outer")
 
-    merged["started_at"] = merged["started_at"].combine_first(merged.get("odds_started_at"))
-    merged["completed_at"] = merged["completed_at"].combine_first(merged.get("odds_completed_at"))
+    started = merged.get("started_at", pd.Series(pd.NaT, index=merged.index))
+    completed = merged.get("completed_at", pd.Series(pd.NaT, index=merged.index))
+    merged["started_at"] = started.combine_first(merged.get("odds_started_at", started))
+    merged["completed_at"] = completed.combine_first(merged.get("odds_completed_at", completed))
     merged["status"] = "derived_from_snapshots"
     merged["run_source"] = "derived"
     return merged.sort_values("started_at", ascending=False, ignore_index=True)
