@@ -7,7 +7,7 @@ Returns the exact 141 features expected by NN-141 model.
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import os
@@ -32,6 +32,20 @@ from history_stitch import (
     round_from_draws,
     stitch_history,
 )
+from base_141_shared import (
+    SEMANTICS_ID as SHARED_SEMANTICS_ID,
+    as_of_day,
+    feature_default as shared_feature_default,
+    h2h_features_from_frame as shared_h2h_features_from_frame,
+    normalize_player_snapshot,
+    observations_from_records,
+    player_temporal_features,
+    surface_transition_flag as shared_surface_transition_flag,
+)
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from feature_contract import normalize_feature_vector
+from versioning import LIVE_SEMANTICS_ID
 
 # Import schema contract
 import json
@@ -42,7 +56,7 @@ with open(SCHEMA_PATH) as f:
 
 
 class UnsafeToInferError(RuntimeError):
-    """Raised when the current matchup appears to have already completed on TA."""
+    """Raised when source evidence cannot support an unambiguous inference."""
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -94,8 +108,19 @@ class TAFeatureCalculator:
     Mirrors LiveFeatureEngine but uses TA as primary data source.
     """
 
-    def __init__(self, ta_scraper: Optional[TennisAbstractScraper] = None):
+    def __init__(
+        self,
+        ta_scraper: Optional[TennisAbstractScraper] = None,
+        *,
+        feature_semantics_id: str = LIVE_SEMANTICS_ID,
+    ):
+        if feature_semantics_id not in {LIVE_SEMANTICS_ID, SHARED_SEMANTICS_ID}:
+            raise ValueError(f"unsupported live feature semantics: {feature_semantics_id}")
         self.scraper = ta_scraper or TennisAbstractScraper()
+        # The shared contract is opt-in until a separately versioned model is
+        # trained and promoted.  Existing callers therefore remain on the
+        # registry-declared live legacy semantics.
+        self.feature_semantics_id = feature_semantics_id
         self.player_slug_map = self._load_player_mapping()
         self._atp_rankings = load_rankings()  # None if not yet scraped
         if self._atp_rankings is None:
@@ -706,6 +731,64 @@ class TAFeatureCalculator:
             'H2H_Recent_P1_Advantage': float(adv)
         }
 
+    def _shared_h2h_stats(
+        self,
+        p1_history: pd.DataFrame,
+        p2_display_name: str,
+        as_of: datetime,
+        p2_player_id: Optional[int] = None,
+    ) -> Dict[str, float]:
+        """Candidate P1-oriented H2H adapter over the already as-of history.
+
+        The formula is shared and source-neutral.  Store history selects by
+        stable opponent ID.  TA fallback accepts only an exact normalized full
+        name; surname-only matching is deliberately forbidden.
+        """
+
+        def _identity_key(value) -> Optional[str]:
+            if value is None or pd.isna(value):
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                numeric = float(text)
+            except (TypeError, ValueError, OverflowError):
+                return text
+            if np.isfinite(numeric) and numeric.is_integer():
+                return str(int(numeric))
+            return text
+
+        if p1_history is None or p1_history.empty:
+            meetings = pd.DataFrame()
+        elif (
+            p2_player_id is not None
+            and 'opp_id' in p1_history.columns
+            and p1_history['opp_id'].notna().any()
+        ):
+            target_id = _identity_key(p2_player_id)
+            meetings = p1_history.loc[
+                p1_history['opp_id'].map(_identity_key).eq(target_id)
+            ].copy()
+        elif 'opp_name' not in p1_history.columns:
+            meetings = pd.DataFrame()
+        else:
+            target_name = self._norm(p2_display_name)
+            mask = p1_history['opp_name'].astype(str).map(self._norm).eq(target_name)
+            meetings = p1_history.loc[mask].copy()
+            if 'opp_id' in meetings.columns:
+                opponent_ids = {
+                    identity
+                    for value in meetings['opp_id'].dropna().tolist()
+                    if (identity := _identity_key(value)) is not None
+                }
+                if len(opponent_ids) > 1:
+                    raise UnsafeToInferError(
+                        "shared_h2h_ambiguous_opponent_identity:"
+                        f"{p2_display_name} maps to {sorted(opponent_ids)}"
+                    )
+        return dict(shared_h2h_features_from_frame(meetings, as_of))
+
     # ========== One-Hot Encodings ==========
 
     @staticmethod
@@ -804,6 +887,7 @@ class TAFeatureCalculator:
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
         metadata_source: str = "resolved",
+        canonical_match_date: Optional[datetime | date | str] = None,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract data.
@@ -822,6 +906,8 @@ class TAFeatureCalculator:
                 absolute date) and should not be overridden by the TA round-offset heuristic.
             metadata_source: Source label for tournament metadata. Fallback/default sources
                 may be overridden by TA's explicit upcoming-match surface.
+            canonical_match_date: Candidate-only timezone-naive event-local
+                date. Required when ``match_date`` is timezone-aware.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -883,6 +969,7 @@ class TAFeatureCalculator:
             session_cache=session_cache,
             match_date_is_explicit=match_date_is_explicit,
             metadata_source=metadata_source,
+            canonical_match_date=canonical_match_date,
         )
 
     def build_141_features_from_slugs(
@@ -900,6 +987,7 @@ class TAFeatureCalculator:
         session_cache: Optional[Dict] = None,
         match_date_is_explicit: bool = False,
         metadata_source: str = "resolved",
+        canonical_match_date: Optional[datetime | date | str] = None,
     ) -> Dict[str, float]:
         """
         Build exactly 143 features from Tennis Abstract slugs.
@@ -914,6 +1002,8 @@ class TAFeatureCalculator:
             tournament_level: Level code (G/M/A/C/25/15)
             draw_size: Tournament draw size
             round_code: Round code (R32/QF/SF/F/etc)
+            canonical_match_date: Candidate-only timezone-naive event-local
+                date. Required when ``match_date`` is timezone-aware.
             force_refresh: If True, always fetch fresh data (default: True)
             persist: If True, read/write disk cache (default: False)
             session_cache: Dict for in-run memoization (default: None)
@@ -921,7 +1011,23 @@ class TAFeatureCalculator:
         Returns:
             Dict with exactly 143 features in correct order
         """
-        when = match_date or datetime.utcnow()
+        use_shared_semantics = self.feature_semantics_id == SHARED_SEMANTICS_ID
+        if use_shared_semantics:
+            candidate_date = (
+                canonical_match_date
+                if canonical_match_date is not None
+                else match_date
+            )
+            if candidate_date is None:
+                raise ValueError(
+                    "base_141_shared requires a provenance-backed, timezone-naive "
+                    "canonical_match_date (or canonical timezone-naive match_date)"
+                )
+            # A clock-bearing aware ``match_date`` may be retained by callers as
+            # match_start_at_utc lineage, but never determines the event day.
+            when = as_of_day(candidate_date).to_pydatetime()
+        else:
+            when = match_date or datetime.utcnow()
         surface = (surface or "Hard").strip().title()
 
         # Get profiles: store-backed by default (no TA at predict time), else
@@ -1039,8 +1145,70 @@ class TAFeatureCalculator:
 
         _semantic_defaults: list = []  # Track meaningful defaults that bypass _default_for()
 
-        def _atp_points(display_name: str, ta_rank: float, player_label: str) -> float:
+        def _identity_key(value) -> Optional[str]:
+            if value is None or pd.isna(value):
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                numeric = float(text)
+            except (TypeError, ValueError, OverflowError):
+                return text
+            if np.isfinite(numeric) and numeric.is_integer():
+                return str(int(numeric))
+            return text
+
+        def _exact_observed_points(
+            display_name: str,
+            player_id=None,
+        ) -> Optional[float]:
+            rankings = self._atp_rankings
+            if (
+                rankings is None
+                or rankings.empty
+                or 'player_name' not in rankings.columns
+                or 'points' not in rankings.columns
+            ):
+                return None
+            stable_id = _identity_key(player_id)
+            if stable_id is not None and 'player_id' in rankings.columns:
+                identity_mask = rankings['player_id'].map(_identity_key).eq(stable_id)
+            else:
+                target = self._norm(display_name)
+                identity_mask = rankings['player_name'].astype(str).map(self._norm).eq(target)
+            exact = rankings.loc[identity_mask, 'points']
+            # Identity uniqueness is decided before inspecting the points cell.
+            # Otherwise two same-name/ID rows could be accepted merely because
+            # one duplicate happened to have null or malformed points.
+            if int(identity_mask.sum()) != 1:
+                return None
+            values = pd.to_numeric(exact, errors='coerce').dropna()
+            values = values[np.isfinite(values) & (values >= 0)]
+            # Duplicate full-name rows are identity-ambiguous even when the
+            # point values happen to match. Stable-ID evidence follows the same
+            # one-current-observation rule.
+            return float(values.iloc[0]) if len(values) == 1 else None
+
+        def _atp_points(
+            display_name: str,
+            ta_rank: float,
+            player_label: str,
+            player_id=None,
+        ) -> float:
             """Look up ATP points from rankings cache with rank cross-validation."""
+            if use_shared_semantics:
+                observed = _exact_observed_points(display_name, player_id)
+                if observed is not None:
+                    return observed
+                fallback = 0.0 if ta_rank >= 999 else 500.0
+                _semantic_defaults.append(
+                    f'{player_label}_Rank_Points={int(fallback)}(shared_missing_exact)'
+                )
+                return fallback
+
+            # Frozen live-legacy behavior: permissive name lookup followed by
+            # curve interpolation when a ranked player has no matched points.
             pts = get_player_points(display_name, self._atp_rankings)
             if pts is not None:
                 atp_rank = get_player_rank(display_name, self._atp_rankings)
@@ -1128,7 +1296,12 @@ class TAFeatureCalculator:
             'hand': hand1,
             'country': profile1.get('country'),
             'rank': float(profile1['current_rank']),
-            'rank_points': _atp_points(p1_display, float(profile1['current_rank']), 'P1'),
+            'rank_points': _atp_points(
+                p1_display,
+                float(profile1['current_rank']),
+                'P1',
+                profile1.get('player_id'),
+            ),
         }
         s2 = {
             'height': h2,
@@ -1136,8 +1309,16 @@ class TAFeatureCalculator:
             'hand': hand2,
             'country': profile2.get('country'),
             'rank': float(profile2['current_rank']),
-            'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
+            'rank_points': _atp_points(
+                p2_display,
+                float(profile2['current_rank']),
+                'P2',
+                profile2.get('player_id'),
+            ),
         }
+        if use_shared_semantics:
+            s1 = normalize_player_snapshot(**s1)
+            s2 = normalize_player_snapshot(**s2)
 
         def _coerce_numeric(value, default_feature: str, note: str | None = None) -> float:
             """Coerce optional numeric stats to floats before derived arithmetic."""
@@ -1180,9 +1361,21 @@ class TAFeatureCalculator:
                     _tourney_start = datetime.strptime(_ta_date_str, '%Y%m%d')
                     _day_offset = get_round_day_offset(tournament_level, draw_size, round_code or '', tourney_date=_tourney_start)
                     _ta_inferred = _tourney_start + timedelta(days=_day_offset)
-                    if match_date_is_explicit:
-                        # Bovada gave us a real date — trust it, don't override with heuristic
-                        print(f"      📅 TA inferred {_ta_inferred.date()} but using explicit Bovada date {when.date()}")
+                    if match_date_is_explicit or use_shared_semantics:
+                        # A shared-candidate date is already the required
+                        # provenance-backed canonical event-local day.  TA's
+                        # tournament-start heuristic may inform diagnostics,
+                        # but it can never replace that date (including when
+                        # canonical_match_date was supplied separately from a
+                        # timezone-aware kickoff instant).
+                        date_source = (
+                            "shared canonical event date"
+                            if use_shared_semantics else "explicit Bovada date"
+                        )
+                        print(
+                            f"      📅 TA inferred {_ta_inferred.date()} but using "
+                            f"{date_source} {when.date()}"
+                        )
                     else:
                         when = _ta_inferred
                         print(f"      📅 inferred_match_dt: {_tourney_start.date()} + {_day_offset}d ({round_code}) = {when.date()}")
@@ -1232,33 +1425,53 @@ class TAFeatureCalculator:
         matches2 = apply_round_offsets_to_history(matches2, ref=when)
 
         # Calculate temporal features
-        def temporal(df):
-            return {
-                'matches_14d': self._count_period(df, when, 14),
-                'matches_30d': self._count_period(df, when, 30),
-                'matches_90d': self._count_period(df, when, 90),
-                'surface_matches_30d': self._count_surface(df, when, surface, 30),
-                'surface_matches_90d': self._count_surface(df, when, surface, 90),
-                'surface_experience': self._count_surface(df, when, surface, 9999),
-                'surface_winrate_90d': self._surface_winrate(df, when, surface, 90),
-                'winrate_last10_120d': self._winrate_lastN_within(df, when, 10, 120),
-                'streak': self._streak(df),
-                'form_trend_30d': self._form_trend_ewm(df, when, 30),
-                'days_since_last': (self._days_since_last_tournament(df, when) or 60),
-                'sets_14d': self._sets_14d(df, when),
-                'last_surface': str(df.iloc[0]['surface']).title() if not df.empty and pd.notna(df.iloc[0].get('surface')) else None
-            }
+        if use_shared_semantics:
+            t1 = player_temporal_features(
+                observations_from_records(matches1),
+                when,
+                surface,
+                rank_as_of=s1['rank'],
+            )
+            t2 = player_temporal_features(
+                observations_from_records(matches2),
+                when,
+                surface,
+                rank_as_of=s2['rank'],
+            )
+            p1_rc30 = t1['rank_change_30d']
+            p1_rc90 = t1['rank_change_90d']
+            p2_rc30 = t2['rank_change_30d']
+            p2_rc90 = t2['rank_change_90d']
+            p1_vol90 = t1['rank_volatility_90d']
+            p2_vol90 = t2['rank_volatility_90d']
+        else:
+            def temporal(df):
+                return {
+                    'matches_14d': self._count_period(df, when, 14),
+                    'matches_30d': self._count_period(df, when, 30),
+                    'matches_90d': self._count_period(df, when, 90),
+                    'surface_matches_30d': self._count_surface(df, when, surface, 30),
+                    'surface_matches_90d': self._count_surface(df, when, surface, 90),
+                    'surface_experience': self._count_surface(df, when, surface, 9999),
+                    'surface_winrate_90d': self._surface_winrate(df, when, surface, 90),
+                    'winrate_last10_120d': self._winrate_lastN_within(df, when, 10, 120),
+                    'streak': self._streak(df),
+                    'form_trend_30d': self._form_trend_ewm(df, when, 30),
+                    'days_since_last': (self._days_since_last_tournament(df, when) or 60),
+                    'sets_14d': self._sets_14d(df, when),
+                    'last_surface': str(df.iloc[0]['surface']).title() if not df.empty and pd.notna(df.iloc[0].get('surface')) else None
+                }
 
-        t1 = temporal(matches1)
-        t2 = temporal(matches2)
+            t1 = temporal(matches1)
+            t2 = temporal(matches2)
 
-        # Rank changes and volatility
-        p1_rc30 = self._rank_change(matches1, when, 30)
-        p1_rc90 = self._rank_change(matches1, when, 90)
-        p2_rc30 = self._rank_change(matches2, when, 30)
-        p2_rc90 = self._rank_change(matches2, when, 90)
-        p1_vol90 = self._rank_volatility(matches1, when, 90)
-        p2_vol90 = self._rank_volatility(matches2, when, 90)
+            # Rank changes and volatility
+            p1_rc30 = self._rank_change(matches1, when, 30)
+            p1_rc90 = self._rank_change(matches1, when, 90)
+            p2_rc30 = self._rank_change(matches2, when, 30)
+            p2_rc90 = self._rank_change(matches2, when, 90)
+            p1_vol90 = self._rank_volatility(matches1, when, 90)
+            p2_vol90 = self._rank_volatility(matches2, when, 90)
         p1_rc30 = _coerce_numeric(p1_rc30, 'P1_Rank_Change_30d')
         p1_rc90 = _coerce_numeric(p1_rc90, 'P1_Rank_Change_90d')
         p2_rc30 = _coerce_numeric(p2_rc30, 'P2_Rank_Change_30d')
@@ -1280,7 +1493,14 @@ class TAFeatureCalculator:
         p2_vs_lefty = self._winrate_vs_hand(matches2, 'L')
 
         # H2H stats (pass session_cache to avoid duplicate requests)
-        if self.use_store:
+        if use_shared_semantics:
+            h2h = self._shared_h2h_stats(
+                matches1,
+                p2_display,
+                when,
+                p2_player_id=profile2.get('player_id'),
+            )
+        elif self.use_store:
             h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache,
                                       _frame=_m1_prestitch, _name2=p2_display)
         else:
@@ -1300,8 +1520,13 @@ class TAFeatureCalculator:
         c2 = self._country_onehot(s2['country'], 'P2')
 
         # Surface transition flag
-        st_flag = 1 if ((t1['last_surface'] and t1['last_surface'].lower() != surface.lower()) or
-                        (t2['last_surface'] and t2['last_surface'].lower() != surface.lower())) else 0
+        if use_shared_semantics:
+            st_flag = shared_surface_transition_flag(
+                t1['last_surface'], t2['last_surface'], surface
+            )
+        else:
+            st_flag = 1 if ((t1['last_surface'] and t1['last_surface'].lower() != surface.lower()) or
+                            (t2['last_surface'] and t2['last_surface'].lower() != surface.lower())) else 0
 
         p1_height = _coerce_numeric(s1['height'], 'Player1_Height')
         p2_height = _coerce_numeric(s2['height'], 'Player2_Height')
@@ -1337,7 +1562,10 @@ class TAFeatureCalculator:
             'P1_Form_Trend_30d': t1['form_trend_30d'],
             'P1_Days_Since_Last': t1['days_since_last'],
             'P1_Sets_14d': t1['sets_14d'],
-            'P1_Rust_Flag': 1 if t1['days_since_last'] > 21 else 0,
+            'P1_Rust_Flag': (
+                t1['rust_flag'] if use_shared_semantics
+                else (1 if t1['days_since_last'] > 21 else 0)
+            ),
             'P1_Rank_Change_30d': p1_rc30,
             'P1_Rank_Change_90d': p1_rc90,
             'P1_Rank_Volatility_90d': p1_vol90,
@@ -1353,7 +1581,10 @@ class TAFeatureCalculator:
             'P2_Form_Trend_30d': t2['form_trend_30d'],
             'P2_Days_Since_Last': t2['days_since_last'],
             'P2_Sets_14d': t2['sets_14d'],
-            'P2_Rust_Flag': 1 if t2['days_since_last'] > 21 else 0,
+            'P2_Rust_Flag': (
+                t2['rust_flag'] if use_shared_semantics
+                else (1 if t2['days_since_last'] > 21 else 0)
+            ),
             'P2_Rank_Change_30d': p2_rc30,
             'P2_Rank_Change_90d': p2_rc90,
             'P2_Rank_Volatility_90d': p2_vol90,
@@ -1435,14 +1666,22 @@ class TAFeatureCalculator:
             if k in features and pd.notna(features[k]):
                 final[k] = float(features[k]) if isinstance(features[k], (int, float, np.floating)) else features[k]
             else:
-                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = (
+                    shared_feature_default(k)
+                    if use_shared_semantics
+                    else self._default_for(k, p1=s1, p2=s2, surface=surface)
+                )
                 final[k] = default_val
                 defaulted.append((k, default_val))
 
         # Guard against NaNs
         for k, v in list(final.items()):
             if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = (
+                    shared_feature_default(k)
+                    if use_shared_semantics
+                    else self._default_for(k, p1=s1, p2=s2, surface=surface)
+                )
                 final[k] = default_val
                 defaulted.append((k, default_val))
 
@@ -1484,6 +1723,14 @@ class TAFeatureCalculator:
             pass
         final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
         final['_resolved_surface'] = surface or ''
+        if use_shared_semantics:
+            _, structural_issues = normalize_feature_vector(final, EXACT_141_FEATURES)
+            if structural_issues:
+                raise ValueError(
+                    "base_141_shared live candidate produced an invalid vector: "
+                    + ",".join(structural_issues)
+                )
+            final['_feature_semantics_id'] = self.feature_semantics_id
 
         return final
 

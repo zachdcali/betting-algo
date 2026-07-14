@@ -15,6 +15,7 @@ Regime boundary: **NN v1.2.2 / XGB v1.2.1 / RF v1.2.1** (2026-07-09) = clean-fea
 | P1/P2 symmetry invariant pytest (`test_feature_symmetry.py`, all 141 mirror under swap) | asymmetric feature math | ✅ live in CI — calculator verified orientation-clean |
 | Golden-match hand verification (Sinner–Djokovic Wimbledon SF 2026-07-10: bio, context one-hots, H2H, form windows, surface rates, ranks recomputed independently from raw SQL + hand formulas) | formula errors | ✅ 24/24 PASS — sole deviation was the frozen vector's pre-fix Days_Since (regime v1.2.2 vintage, see incidents); fixed code reproduces training semantics (11) on identical history |
 | Granular aggregate recompute / window-math fixtures (`test_form_windows.py`) | window math | ✅ live in CI — Laplace constants, EWM half-life, window edges, streaks pinned to hand values |
+| Shared train/serve candidate (`test_base_141_shared_parity.py`) | disputed temporal/H2H semantics, ordering, future leakage | 🧪 opt-in candidate — synthetic ledger is field-exact across all 141 fields; activation remains blocked on source provenance and new model releases |
 | Cross-source reconciliation (`reconcile_store.py`, hourly): conflicts table, Sackmann-wins level repair, stats gap-fill | source disagreement, silent gaps | ✅ live — activates on source overlap (next Sackmann drop) |
 
 ## Known incidents (all fixed, all annotated)

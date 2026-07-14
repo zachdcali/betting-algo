@@ -67,6 +67,7 @@ jobs:
           tests/test_replay_models.py
           tests/test_feature_lineage.py
           tests/test_feature_vector_log.py
+          tests/test_base_141_shared_parity.py
           tests/test_performance_v1_backfill.py
           tests/test_dashboard_sync.py
           tests/test_dashboard_data.py
