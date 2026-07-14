@@ -24,6 +24,11 @@ Current production principles:
 - The live pipeline is Tennis Abstract based, not the legacy UTR path.
 - Prediction generation and auto-settlement are separate concerns.
 - `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the lineage layer.
+- Supabase `dash_*` tables now act as the durable recovery bridge for ephemeral
+  runners. A run hydrates local CSV state from the latest accepted manifest,
+  then publishes a complete generation transactionally. CSV is still the
+  application-facing write format during this migration; the mirror is not yet
+  the final normalized database design.
 - Predictions built with noisy/defaulted live features should still enter
   `prediction_log.csv` with `features_complete=False`; clean accuracy reports
   exclude them, but settlement and bet reconciliation should not lose the row.
@@ -33,6 +38,13 @@ Current production principles:
   settlement scoring columns. It is intentionally separate from the operational
   prediction log and does not imply promotion.
 - Old rows without immutable snapshot ids are legacy history and should be treated differently from new schema-backed rows.
+- GOLD additionally requires the feature snapshot ID to exist in persisted
+  feature lineage with matching SHA-256 fingerprints, 141 finite fields, and
+  valid one-hot groups. Unreadable or structurally invalid lineage fails metric
+  publication instead of silently changing cohort n.
+- Shadow metrics use one opening observation per match/model version with the
+  exact operational opening feature snapshot; repeated hourly observations are
+  retained as evidence but do not increase evaluation n.
 - Bovada scheduled start times and TA match-state checks are part of the safety layer: the orchestrator skips feature generation once a match is at/past the configured pre-start cutoff or appears to have already completed in TA history, so delayed runs do not drift into post-start inference.
 - Rerunning a slate should not double-log open betting recommendations:
   `BetTracker.log_bets()` dedupes pending bets by match and bet side. Use
@@ -48,4 +60,9 @@ Current production principles:
 - `logs/audit/run_history.csv`, `logs/audit/skipped_live_matches.csv`, and `logs/audit/settlement_audit.csv` are the audit layer for dashboards and ops debugging.
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.
-- `dashboard/app.py` is the first-class visibility layer for operators. It should consume the production CSVs, not invent a separate shadow dataset.
+- `docs/index.html` is the public operations surface and reads one
+  manifest-pinned Supabase generation. `dashboard/app.py` is the local,
+  CSV-backed forensic surface. Model metrics on either surface must come from
+  the shared `production/evaluation/` math path, never browser-specific formulas.
+- See [Production readiness audit](/Users/zachdodson/Documents/betting-algo/docs/production/PRODUCTION_READINESS_AUDIT_2026-07-13.md)
+  for the current retraining stop gates and remediation sequence.

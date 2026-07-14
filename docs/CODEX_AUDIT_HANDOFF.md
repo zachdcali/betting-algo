@@ -1,5 +1,11 @@
 # Independent Audit & Re-Architecture Mandate — Tennis Model Laboratory
 
+> **Audit status (2026-07-13): completed with a formal NO-GO for retraining,
+> model promotion, or new paper exposure until the named data, parity, capital,
+> recovery, and soak gates close.** Read the measured findings, implemented
+> preventive controls, remediation SQL, and acceptance checklist in the
+> [Production Readiness Audit](production/PRODUCTION_READINESS_AUDIT_2026-07-13.md).
+
 **To:** Codex (independent auditor / architect)
 **From:** the current maintainer + Claude (who has been patching this system reactively)
 **Purpose:** You are being asked to do an **independent audit** of this tennis
