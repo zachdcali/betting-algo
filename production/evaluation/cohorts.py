@@ -20,6 +20,31 @@ MODEL_PROB_COLS = {
     "market": "market_p1_prob",
 }
 SHADOW_FAMILIES = ["xgboost", "catboost", "lightgbm", "nn"]
+SCORED_COLUMNS = [
+    "match_uid", "model", "family", "p1_prob",
+    "p1_odds_decimal", "p2_odds_decimal", "y1",
+    "is_gold", "is_complete", "prediction_time",
+]
+
+
+def _coerce_probability(value) -> float | None:
+    """Return a finite probability in [0, 1], otherwise no evidence."""
+    try:
+        probability = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        return None
+    return probability
+
+
+def _coerce_decimal_odds(value) -> float:
+    """Return valid finite decimal odds, otherwise NaN so ROI skips the row."""
+    try:
+        odds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return float("nan")
+    return odds if np.isfinite(odds) and odds > 1.0 else float("nan")
 
 
 def verify_feature_frame(frame: pd.DataFrame) -> tuple[dict[str, str], set[str]]:
@@ -207,13 +232,15 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
     for model, col in MODEL_PROB_COLS.items():
         if col not in settled.columns:
             continue
-        sub = settled[settled[col].notna()]
-        for uid, r in sub.iterrows():
+        for uid, r in settled.iterrows():
+            probability = _coerce_probability(r[col])
+            if probability is None:
+                continue
             rows.append({
                 "match_uid": uid, "model": model, "family": model,
-                "p1_prob": float(r[col]),
-                "p1_odds_decimal": r.get("p1_odds_decimal"),
-                "p2_odds_decimal": r.get("p2_odds_decimal"),
+                "p1_prob": probability,
+                "p1_odds_decimal": _coerce_decimal_odds(r.get("p1_odds_decimal")),
+                "p2_odds_decimal": _coerce_decimal_odds(r.get("p2_odds_decimal")),
                 "y1": int(gt.loc[uid]),
                 "is_gold": bool(tiers.loc[uid, "is_gold"]),
                 "is_complete": bool(tiers.loc[uid, "is_complete"]),
@@ -239,7 +266,8 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
         # repeats are correlated evidence, not independent samples.
         sh = sh.drop_duplicates(["match_uid", "_model_label"], keep="first")
         for _, r in sh.iterrows():
-            if pd.isna(r.get("shadow_p1_prob")):
+            probability = _coerce_probability(r.get("shadow_p1_prob"))
+            if probability is None:
                 continue
             uid = r["match_uid"]
             in_tiers = uid in tiers.index
@@ -251,9 +279,9 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 "match_uid": uid,
                 "model": f"shadow_{label}",
                 "family": r["model_family"],
-                "p1_prob": float(r["shadow_p1_prob"]),
-                "p1_odds_decimal": r.get("p1_odds_decimal"),
-                "p2_odds_decimal": r.get("p2_odds_decimal"),
+                "p1_prob": probability,
+                "p1_odds_decimal": _coerce_decimal_odds(r.get("p1_odds_decimal")),
+                "p2_odds_decimal": _coerce_decimal_odds(r.get("p2_odds_decimal")),
                 "y1": int(gt.loc[uid]),
                 "is_gold": bool(tiers.loc[uid, "is_gold"]) if in_tiers else False,
                 "is_complete": bool(tiers.loc[uid, "is_complete"]) if in_tiers else False,
@@ -262,7 +290,12 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 ),
             })
 
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=SCORED_COLUMNS)
+    # Preserve a typed empty result so a fully invalid hydrated cohort produces
+    # an empty ledger instead of failing during boolean tier selection.
+    frame["is_gold"] = frame["is_gold"].astype(bool)
+    frame["is_complete"] = frame["is_complete"].astype(bool)
+    return frame
 
 
 def intersection_uids(scored: pd.DataFrame, models: list[str], tier_col: str) -> set:

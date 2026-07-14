@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from evaluation import cohorts
+from evaluation.ledger import build_live_ledger
 from models.inference import EXACT_141_FEATURES
 
 
@@ -88,6 +89,107 @@ def test_scored_frame_models_and_tiers():
     assert bool(m2.is_gold.iloc[0]) is False
     assert bool(m2.is_complete.iloc[0]) is True
     assert scored[(scored.match_uid == "m1") & (scored.model == "nn")].y1.iloc[0] == 1
+
+
+def test_hydrated_string_probabilities_and_odds_are_sanitized_before_metrics():
+    hydrated = pd.DataFrame([
+        dict(
+            match_uid="full", actual_winner="1", features_complete="true",
+            logging_quality="snapshot_v2", rescore_quality="exact_feature_snapshot",
+            feature_snapshot_verified="true",
+            model_p1_prob="0.0", xgb_p1_prob="1.0", rf_p1_prob="0.25",
+            market_p1_prob="0.55", p1_odds_decimal="2.0", p2_odds_decimal="2.1",
+        ),
+        dict(
+            match_uid="partial", actual_winner="2", features_complete="1",
+            logging_quality="snapshot_v2", rescore_quality="exact_feature_snapshot",
+            feature_snapshot_verified="1",
+            model_p1_prob="1.0", xgb_p1_prob="", rf_p1_prob="not-a-number",
+            market_p1_prob="0.0", p1_odds_decimal="", p2_odds_decimal="Infinity",
+        ),
+        dict(
+            match_uid="bad_odds", actual_winner="1", features_complete="true",
+            logging_quality="snapshot_v2", rescore_quality="exact_feature_snapshot",
+            feature_snapshot_verified="true",
+            model_p1_prob="0.5", xgb_p1_prob="", rf_p1_prob="",
+            market_p1_prob="", p1_odds_decimal="not-odds", p2_odds_decimal="-Infinity",
+        ),
+        dict(
+            match_uid="invalid", actual_winner="1", features_complete="true",
+            logging_quality="snapshot_v2", rescore_quality="exact_feature_snapshot",
+            feature_snapshot_verified="true",
+            model_p1_prob="NaN", xgb_p1_prob="inf", rf_p1_prob="-0.01",
+            market_p1_prob="1.01", p1_odds_decimal="garbage", p2_odds_decimal="1.0",
+        ),
+    ])
+
+    scored = cohorts.build_scored_frame(hydrated, None)
+
+    assert set(scored.loc[scored.match_uid == "full", "model"]) == {
+        "nn", "xgb", "rf", "market",
+    }
+    assert set(scored.loc[scored.match_uid == "partial", "model"]) == {"nn", "market"}
+    assert "invalid" not in set(scored["match_uid"])
+    assert set(scored["p1_prob"]) >= {0.0, 1.0}
+    partial = scored[scored.match_uid == "partial"]
+    assert partial["p1_odds_decimal"].isna().all()
+    assert partial["p2_odds_decimal"].isna().all()
+    bad_odds = scored[scored.match_uid == "bad_odds"]
+    assert bad_odds["p1_odds_decimal"].isna().all()
+    assert bad_odds["p2_odds_decimal"].isna().all()
+    assert cohorts.intersection_uids(
+        scored, ["nn", "xgb", "rf", "market"], "is_complete",
+    ) == {"full"}
+
+    # This exercises metrics and both ROI modes. The blank hydrated odds must
+    # be skipped while the valid-odds row remains a candidate.
+    ledger = build_live_ledger(scored)
+    nn_complete = ledger[(ledger.model == "nn") & (ledger.tier == "complete")].iloc[0]
+    assert int(nn_complete["n"]) == 3
+    assert int(nn_complete["n_bets_flat"]) == 1
+    assert int(nn_complete["n_bets_kelly"]) == 1
+
+
+def test_shadow_probabilities_use_the_same_fail_closed_numeric_boundary():
+    pred_log = _pred_log().iloc[:1].copy()
+    shadow = pd.DataFrame([
+        dict(match_uid="m1", model_family="xgboost", model_version="zero",
+             shadow_p1_prob="0", p1_odds_decimal="", p2_odds_decimal="2.2"),
+        dict(match_uid="m1", model_family="xgboost", model_version="one",
+             shadow_p1_prob="1.0", p1_odds_decimal="2.1", p2_odds_decimal="NaN"),
+        *[
+            dict(match_uid="m1", model_family="xgboost", model_version=f"bad_{i}",
+                 shadow_p1_prob=value, p1_odds_decimal="2.1", p2_odds_decimal="2.2")
+            for i, value in enumerate((
+                "", "NaN", "inf", "-inf", "-0.01", "1.01", "bad", 10**10000,
+            ))
+        ],
+    ])
+
+    scored = cohorts.build_scored_frame(pred_log, shadow)
+    shadows = scored[scored.model.str.startswith("shadow_")]
+
+    assert set(shadows["model"]) == {"shadow_zero", "shadow_one"}
+    assert set(shadows["p1_prob"]) == {0.0, 1.0}
+    assert pd.isna(shadows.loc[shadows.model == "shadow_zero", "p1_odds_decimal"].iloc[0])
+    assert pd.isna(shadows.loc[shadows.model == "shadow_one", "p2_odds_decimal"].iloc[0])
+
+
+def test_all_invalid_probabilities_produce_an_empty_ledger_not_an_exception():
+    hydrated = pd.DataFrame([
+        dict(
+            match_uid="invalid", actual_winner="1", features_complete="true",
+            model_p1_prob="", xgb_p1_prob="NaN", rf_p1_prob="inf",
+            market_p1_prob="-1",
+        ),
+    ])
+
+    scored = cohorts.build_scored_frame(hydrated, None)
+
+    assert scored.empty
+    assert scored["is_gold"].dtype == bool
+    assert scored["is_complete"].dtype == bool
+    assert build_live_ledger(scored).empty
 
 
 def test_shadow_models_join_to_ground_truth():
