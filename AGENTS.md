@@ -187,6 +187,16 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   Neither dashboard may invent model metrics or a shadow dataset. Browser model
   metrics come from `dash_model_metrics`, materialized through the evaluation
   ledger's metric code.
+- Pending identity remediation is registry-only until separately reviewed
+  operational materialization. A UID candidate from names/dates, odds, or
+  feature lineage is never authority. Approved decisions require retained
+  source bytes plus a typed exact-subject evidence envelope with external
+  identity, URI/checksum/time/reviewer/reason. Plan and apply must regenerate
+  the full four-source report, and registry changes must follow the stable
+  subject's explicit supersession chain. Decisions may not directly mutate
+  bets or settlement. Approval facts must also parse from the retained source
+  artifact itself and match regenerated operational source-row hashes; envelope
+  claims or opaque official/generic artifacts are supplemental only.
 
 ## Model Evaluation Ledger
 

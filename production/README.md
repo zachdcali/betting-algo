@@ -40,6 +40,10 @@ There are now two logging layers:
   The canonical private file for manual digest-gated backlog settlement events.
   It is independently derivable for crash recovery, never mixed into
   source-evidence settlement audit, and is not written by the normal pipeline.
+- `.private/pending-identity-decision-registry.json`
+  Recommended private location for explicitly reviewed orphan-UID and
+  duplicate-intent decisions. Applying a decision plan appends only to this
+  immutable registry; it does not change bets, exposure, or settlement.
 
 Supporting run artifacts:
 

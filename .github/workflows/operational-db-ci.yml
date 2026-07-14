@@ -52,6 +52,7 @@ jobs:
           tests/test_operational_postgres_integration.py
           tests/test_operational_runtime.py
           tests/test_live_records.py
+          tests/test_pending_identity_remediation.py
           tests/test_pending_reconciliation.py
           tests/test_pending_reconciliation_apply.py
 
