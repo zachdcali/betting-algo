@@ -182,6 +182,12 @@ def load_shadow_log(prod_dir: str) -> pd.DataFrame | None:
     return pd.read_csv(path, low_memory=False) if os.path.exists(path) else None
 
 
+def load_odds_history(prod_dir: str) -> pd.DataFrame | None:
+    """Load immutable market observations when the lineage file exists."""
+    path = os.path.join(prod_dir, "odds_history.csv")
+    return pd.read_csv(path, low_memory=False) if os.path.exists(path) else None
+
+
 def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
     """Authoritative match_uid -> y1 (1 if player1 won). Conflict-free, deduped."""
     winner = pd.to_numeric(pred_log["actual_winner"], errors="coerce")
@@ -228,7 +234,112 @@ def _tier_flags(pred_log: pd.DataFrame) -> pd.DataFrame:
     return f[["match_uid", "is_complete", "is_gold"]].drop_duplicates("match_uid")
 
 
-def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) -> pd.DataFrame:
+def _market_start_timestamp(row: pd.Series) -> pd.Timestamp | None:
+    """Return a UTC start, using the documented Bovada ET fallback for legacy rows."""
+    exact = str(row.get("match_start_at_utc", "") or "").strip()
+    if exact:
+        parsed = pd.to_datetime(exact, errors="coerce", utc=True, format="mixed")
+        if not pd.isna(parsed):
+            return parsed
+    legacy = str(row.get("match_start_time", "") or "").strip()
+    if not legacy:
+        return None
+    try:
+        parsed = pd.Timestamp(legacy)
+        if parsed.tzinfo is None:
+            parsed = parsed.tz_localize(
+                "America/New_York", ambiguous="NaT", nonexistent="NaT"
+            )
+        if pd.isna(parsed):
+            return None
+        return parsed.tz_convert("UTC")
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _market_timing_rows(
+    odds_history: pd.DataFrame | None,
+    gt: pd.Series,
+    tiers: pd.DataFrame,
+) -> list[dict]:
+    """Build first-observed and last-pre-start market evidence.
+
+    A closing comparison is only meaningful when at least two distinct capture
+    times exist for a match.  Legacy display times are interpreted in
+    America/New_York, the explicit Bovada contract. The observation clock uses
+    the explicitly UTC ``odds_scraped_at`` first; legacy ``logged_at`` is only a
+    fallback because older writers emitted it without a timezone offset.
+    """
+    if odds_history is None or odds_history.empty or "match_uid" not in odds_history:
+        return []
+    frame = odds_history[odds_history["match_uid"].isin(gt.index)].copy()
+    if frame.empty:
+        return []
+    logged = pd.to_datetime(
+        frame.get("logged_at", pd.Series("", index=frame.index)),
+        errors="coerce", utc=True, format="mixed",
+    )
+    scraped = pd.to_datetime(
+        frame.get("odds_scraped_at", pd.Series("", index=frame.index)),
+        errors="coerce", utc=True, format="mixed",
+    )
+    frame["_observation_at"] = scraped.fillna(logged)
+    frame["_match_start_at"] = frame.apply(_market_start_timestamp, axis=1)
+    frame["_market_probability"] = pd.to_numeric(
+        frame.get("market_p1_prob", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    )
+    frame = frame[
+        frame["_observation_at"].notna()
+        & frame["_match_start_at"].notna()
+        & frame["_market_probability"].between(0.0, 1.0)
+        & (frame["_observation_at"] < frame["_match_start_at"])
+    ].copy()
+    if frame.empty:
+        return []
+    frame = frame.sort_values(
+        ["match_uid", "_observation_at"], kind="stable"
+    ).drop_duplicates(["match_uid", "_observation_at"], keep="last")
+    observation_counts = frame.groupby("match_uid")["_observation_at"].nunique()
+    comparable = set(observation_counts[observation_counts >= 2].index)
+    frame = frame[frame["match_uid"].isin(comparable)]
+    if frame.empty:
+        return []
+
+    selected = {
+        "market_open": frame.drop_duplicates("match_uid", keep="first"),
+        "market_close": frame.drop_duplicates("match_uid", keep="last"),
+    }
+    rows: list[dict] = []
+    for model, observations in selected.items():
+        for _, observation in observations.iterrows():
+            uid = observation["match_uid"]
+            if uid not in tiers.index:
+                continue
+            rows.append({
+                "match_uid": uid,
+                "model": model,
+                "family": "market",
+                "p1_prob": float(observation["_market_probability"]),
+                "p1_odds_decimal": _coerce_decimal_odds(
+                    observation.get("p1_odds_decimal")
+                ),
+                "p2_odds_decimal": _coerce_decimal_odds(
+                    observation.get("p2_odds_decimal")
+                ),
+                "y1": int(gt.loc[uid]),
+                "is_gold": bool(tiers.loc[uid, "is_gold"]),
+                "is_complete": bool(tiers.loc[uid, "is_complete"]),
+                "prediction_time": observation["_observation_at"],
+            })
+    return rows
+
+
+def build_scored_frame(
+    pred_log: pd.DataFrame,
+    shadow_log: pd.DataFrame | None,
+    odds_history: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Long format: one row per (match_uid, model), settled rows with a non-null prob."""
     gt = build_ground_truth(pred_log)
     tiers = _tier_flags(pred_log).set_index("match_uid")
@@ -259,6 +370,8 @@ def build_scored_frame(pred_log: pd.DataFrame, shadow_log: pd.DataFrame | None) 
                 "is_complete": bool(tiers.loc[uid, "is_complete"]),
                 "prediction_time": r.get("logged_at", r.get("odds_scraped_at")),
             })
+
+    rows.extend(_market_timing_rows(odds_history, gt, tiers))
 
     if shadow_log is not None and "model_family" in shadow_log.columns:
         sh = shadow_log[shadow_log["match_uid"].isin(gt.index)].copy()

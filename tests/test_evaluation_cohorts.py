@@ -293,3 +293,138 @@ def test_intersection_excludes_partial_coverage():
     scored = cohorts.build_scored_frame(_pred_log(), None)
     inter = cohorts.intersection_uids(scored, ["nn", "xgb", "rf", "market"], "is_complete")
     assert inter == {"m1"}   # m2 lacks xgb/rf
+
+
+def test_market_timing_selects_first_and_last_strictly_pre_start_observations():
+    predictions = _pred_log().iloc[:1].copy()
+    odds_history = pd.DataFrame([
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T09:00:00Z",
+            "match_start_at_utc": "2026-07-01T10:30:00Z",
+            "market_p1_prob": 0.40, "p1_odds_decimal": 2.40,
+            "p2_odds_decimal": 1.60,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T10:00:00Z",
+            "match_start_at_utc": "2026-07-01T10:30:00Z",
+            "market_p1_prob": 0.55, "p1_odds_decimal": 1.80,
+            "p2_odds_decimal": 2.10,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T10:30:00Z",
+            "match_start_at_utc": "2026-07-01T10:30:00Z",
+            "market_p1_prob": 0.70, "p1_odds_decimal": 1.40,
+            "p2_odds_decimal": 3.00,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T11:00:00Z",
+            "match_start_at_utc": "2026-07-01T10:30:00Z",
+            "market_p1_prob": 0.90, "p1_odds_decimal": 1.10,
+            "p2_odds_decimal": 8.00,
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(predictions, None, odds_history)
+    timing = scored[scored["model"].isin(["market_open", "market_close"])]
+
+    assert timing.set_index("model")["p1_prob"].to_dict() == {
+        "market_open": 0.40,
+        "market_close": 0.55,
+    }
+    assert timing.set_index("model")["prediction_time"].to_dict() == {
+        "market_open": pd.Timestamp("2026-07-01T09:00:00Z"),
+        "market_close": pd.Timestamp("2026-07-01T10:00:00Z"),
+    }
+
+
+def test_market_timing_requires_two_distinct_pre_start_observations():
+    predictions = _pred_log().iloc[:1].copy()
+    odds_history = pd.DataFrame([
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T09:00:00Z",
+            "match_start_at_utc": "2026-07-01T10:00:00Z",
+            "market_p1_prob": 0.45,
+        },
+        # A duplicate capture timestamp and a post-start row cannot manufacture
+        # the two-observation opening/last-pre-start comparison.
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T09:00:00Z",
+            "match_start_at_utc": "2026-07-01T10:00:00Z",
+            "market_p1_prob": 0.46,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T10:01:00Z",
+            "match_start_at_utc": "2026-07-01T10:00:00Z",
+            "market_p1_prob": 0.60,
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(predictions, None, odds_history)
+
+    assert not scored["model"].isin(["market_open", "market_close"]).any()
+
+
+def test_market_timing_legacy_bovada_start_is_interpreted_in_eastern_time():
+    predictions = _pred_log().iloc[:1].copy()
+    odds_history = pd.DataFrame([
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T13:00:00Z",
+            "match_start_time": "2026-07-01 10:00:00",
+            "market_p1_prob": 0.42,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T13:59:00Z",
+            "match_start_time": "2026-07-01 10:00:00",
+            "market_p1_prob": 0.48,
+        },
+        # July is EDT, so the naive 10:00 display time is 14:00 UTC. A capture
+        # exactly at that instant is not part of immutable pre-start evidence.
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T14:00:00Z",
+            "match_start_time": "2026-07-01 10:00:00",
+            "market_p1_prob": 0.51,
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(predictions, None, odds_history)
+    timing = scored[scored["model"].isin(["market_open", "market_close"])]
+
+    assert timing.set_index("model")["p1_prob"].to_dict() == {
+        "market_open": 0.42,
+        "market_close": 0.48,
+    }
+
+
+def test_market_timing_prefers_explicit_utc_scrape_clock_over_naive_logged_at():
+    predictions = _pred_log().iloc[:1].copy()
+    odds_history = pd.DataFrame([
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T15:00:00",
+            "odds_scraped_at": "2026-07-01T13:00:00Z",
+            "match_start_at_utc": "2026-07-01T14:00:00Z",
+            "market_p1_prob": 0.43,
+        },
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T15:59:00",
+            "odds_scraped_at": "2026-07-01T13:59:00Z",
+            "match_start_at_utc": "2026-07-01T14:00:00Z",
+            "market_p1_prob": 0.49,
+        },
+        # A misleading naive logger clock looks pre-start when coerced to UTC,
+        # but the authoritative scrape clock is exactly at start and excluded.
+        {
+            "match_uid": "m1", "logged_at": "2026-07-01T12:30:00",
+            "odds_scraped_at": "2026-07-01T14:00:00Z",
+            "match_start_at_utc": "2026-07-01T14:00:00Z",
+            "market_p1_prob": 0.70,
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(predictions, None, odds_history)
+    timing = scored[scored["model"].isin(["market_open", "market_close"])]
+
+    assert timing.set_index("model")["p1_prob"].to_dict() == {
+        "market_open": 0.43,
+        "market_close": 0.49,
+    }
+    assert timing["prediction_time"].max() < pd.Timestamp("2026-07-01T14:00:00Z")

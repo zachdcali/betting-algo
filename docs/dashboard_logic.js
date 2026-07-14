@@ -393,6 +393,152 @@
     return { ok: issues.length === 0, issues };
   }
 
+  function playerDecisionRows(row) {
+    const p1Probability = numberOrNull(row && row.model_p1_prob);
+    return [1, 2].map((side) => {
+      const isPlayerOne = side === 1;
+      const oddsDecimal = numberOrNull(row && row[`p${side}_odds_decimal`]);
+      const rawBreakEven = oddsDecimal !== null && oddsDecimal > 1
+        ? 1 / oddsDecimal
+        : null;
+      const invert = (value) => {
+        const probability = numberOrNull(value);
+        return probability === null ? null : isPlayerOne ? probability : 1 - probability;
+      };
+      const nnProbability = p1Probability === null
+        ? null
+        : isPlayerOne ? p1Probability : 1 - p1Probability;
+      return {
+        side,
+        player: clean(row && row[`p${side}`]),
+        rank: numberOrNull(row && row[`p${side}_rank`]),
+        hand: clean(row && row[`p${side}_hand`]),
+        oddsDecimal,
+        rawBreakEven,
+        marketProbability: invert(row && row.market_p1_prob),
+        nnProbability,
+        xgbProbability: invert(row && row.xgb_p1_prob),
+        rfProbability: invert(row && row.rf_p1_prob),
+        edge: nnProbability === null || rawBreakEven === null
+          ? null
+          : nnProbability - rawBreakEven,
+      };
+    });
+  }
+
+  function edgeBand(edge) {
+    const value = numberOrNull(edge);
+    if (value === null) return "missing";
+    if (value < 0) return "negative";
+    if (value < 0.02) return "watch";
+    if (value < 0.05) return "positive-low";
+    if (value < 0.10) return "positive-medium";
+    return "positive-strong";
+  }
+
+  function metricSignal(metric, value, baseline = null, comparable = true) {
+    const number = numberOrNull(value);
+    if (number === null) return "neutral";
+    const key = clean(metric).toLowerCase();
+    if (["roi_flat", "roi_kelly", "pnl_flat", "pnl_kelly"].includes(key)) {
+      if (number > 1e-12) return "good";
+      if (number < -1e-12) return "bad";
+      return "neutral";
+    }
+    if (key === "cal_slope") {
+      const distance = Math.abs(number - 1);
+      if (distance <= 0.2) return "good";
+      if (distance <= 0.5) return "warning";
+      return "bad";
+    }
+    if (key === "n") return number < 250 ? "warning" : "neutral";
+    if (!comparable) return "neutral";
+    const benchmark = numberOrNull(baseline);
+    if (benchmark === null || Math.abs(number - benchmark) <= 1e-12) return "neutral";
+    if (["log_loss", "brier", "ece", "max_drawdown_kelly"].includes(key)) {
+      return number < benchmark ? "good" : "bad";
+    }
+    if (["accuracy", "auc"].includes(key)) {
+      return number > benchmark ? "good" : "bad";
+    }
+    return "neutral";
+  }
+
+  function modelPresentation(model) {
+    const exact = clean(model);
+    const shadow = exact.startsWith("shadow_");
+    const raw = shadow ? exact.slice("shadow_".length) : exact;
+    if (raw === "market") return { label: "Market at prediction", role: "benchmark", family: "market", exact };
+    if (raw === "market_open") return { label: "Market · first observed", role: "benchmark", family: "market", exact };
+    if (raw === "market_close") return { label: "Market · last pre-start", role: "benchmark", family: "market", exact };
+    if (!shadow) {
+      const core = { nn: "NN", xgb: "XGB", rf: "Random forest" };
+      return { label: core[raw] || raw, role: "promoted", family: raw, exact };
+    }
+    let label = raw
+      .replace(/^performance_v1_/, "")
+      .replace(/__\d{4}-\d{2}-\d{2}$/, "")
+      .replace(/^xgb_/, "XGB · ")
+      .replace(/^cat_/, "CatBoost · ")
+      .replace(/^lgbm_/, "LightGBM · ")
+      .replace(/^nn_/, "NN · ")
+      .replaceAll("_", " ")
+      .replace(/\bhl (\d+)y\b/i, "half-life $1y")
+      .replace(/\breg\b/i, "regularized")
+      .replace(/\s+/g, " ")
+      .trim();
+    label = label.replace(/^xgb\b/i, "XGB").replace(/^catboost\b/i, "CatBoost").replace(/^lightgbm\b/i, "LightGBM").replace(/^nn\b/i, "NN");
+    const family = /^XGB/i.test(label) ? "xgboost" : /^CatBoost/i.test(label) ? "catboost" : /^LightGBM/i.test(label) ? "lightgbm" : /^NN/i.test(label) ? "nn" : "shadow";
+    return { label, role: "shadow", family, exact };
+  }
+
+  function groupTournamentEntries(entries) {
+    const groups = new Map();
+    (entries || []).forEach((entry) => {
+      const row = entry && entry.row ? entry.row : entry || {};
+      const tournament = clean(row.tournament) || "Tournament unresolved";
+      if (!groups.has(tournament)) groups.set(tournament, { tournament, entries: [] });
+      groups.get(tournament).entries.push(entry);
+    });
+    return [...groups.values()];
+  }
+
+  function prepareOddsSeries(rows, context = {}) {
+    const contextStart = parseMatchStart(context);
+    const points = [];
+    (rows || []).forEach((row) => {
+      // odds_scraped_at is explicitly UTC. Older logged_at values can be
+      // timezone-naive host-local timestamps, so they are fallback evidence.
+      const at = parseTimestamp(row && (row.odds_scraped_at || row.logged_at));
+      const p1 = numberOrNull(row && row.market_p1_prob);
+      const rowStart = parseMatchStart(row);
+      const startAt = contextStart === null ? rowStart : contextStart;
+      if (at === null || p1 === null || p1 < 0 || p1 > 1) return;
+      if (startAt !== null && at >= startAt) return;
+      const p2Value = numberOrNull(row && row.market_p2_prob);
+      points.push({
+        at,
+        p1,
+        p2: p2Value === null ? 1 - p1 : p2Value,
+        p1OddsDecimal: numberOrNull(row && row.p1_odds_decimal),
+        p2OddsDecimal: numberOrNull(row && row.p2_odds_decimal),
+      });
+    });
+    points.sort((a, b) => a.at - b.at);
+    const deduped = [];
+    points.forEach((point) => {
+      if (deduped.length && deduped[deduped.length - 1].at === point.at) deduped[deduped.length - 1] = point;
+      else deduped.push(point);
+    });
+    return {
+      points: deduped,
+      startAt: contextStart,
+      first: deduped[0] || null,
+      last: deduped[deduped.length - 1] || null,
+      lastLabel: contextStart === null ? "latest observed" : "last pre-start",
+    };
+  }
+
   return {
     SUCCESS_STATUSES,
     FAILURE_STATUSES,
@@ -417,5 +563,11 @@
     pendingBetSlaStatus,
     nextScheduledRun,
     compareManifestCounts,
+    playerDecisionRows,
+    edgeBand,
+    metricSignal,
+    modelPresentation,
+    groupTournamentEntries,
+    prepareOddsSeries,
   };
 });

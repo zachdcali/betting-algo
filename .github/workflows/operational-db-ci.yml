@@ -71,6 +71,8 @@ jobs:
           tests/test_dashboard_smoke.py
           tests/test_operational_state.py
           tests/test_evaluation_cohorts.py
+          tests/test_evaluation_ledger.py
+          tests/test_evaluation_metrics.py
           tests/test_evaluation_roi.py
 
       - name: Verify static dashboard contracts

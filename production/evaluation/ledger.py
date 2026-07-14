@@ -1,9 +1,9 @@
 """Assemble the model evaluation ledger and write CSV + markdown outputs.
 
-Live models are scored on labeled cohort tiers (gold / complete) and on the
-core-model intersection (the cohort where nn/xgb/rf/market all predicted, so the
-"which model wins" verdict is apples-to-apples). Offline experiment metrics are
-ingested separately and never mixed with live numbers.
+Live models are scored on labeled cohort tiers (gold / complete), the core-model
+intersection, the all-current-model intersection, and the first-observed versus
+last-pre-start market cohort. Offline experiment metrics are ingested separately
+and never mixed with live numbers.
 
 CLI:
     cd production && ../tennis_env/bin/python -m evaluation.ledger \\
@@ -22,14 +22,23 @@ import numpy as np
 import pandas as pd
 
 from evaluation import cohorts, metrics, offline, roi
+from shadow.performance_v1_shadow import DEFAULT_SHADOW_MODEL_SPECS
 
 CORE_MODELS = ["nn", "xgb", "rf", "market"]
+ACTIVE_SHADOW_MODELS = [
+    f"shadow_{spec.model_version}" for spec in DEFAULT_SHADOW_MODEL_SPECS
+]
 
 LIVE_COLUMNS = [
     "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
     "cal_slope", "cal_intercept",
     "roi_flat", "n_bets_flat", "pnl_flat", "win_rate_flat",
     "roi_kelly", "n_bets_kelly", "pnl_kelly", "max_drawdown_kelly",
+]
+
+CALIBRATION_COLUMNS = [
+    "model", "tier", "bin_index", "bin_lo", "bin_hi", "mean_pred",
+    "frac_pos", "count",
 ]
 
 
@@ -49,18 +58,119 @@ def _score_block(model: str, tier: str, g: pd.DataFrame) -> dict:
     }
 
 
-def build_live_ledger(scored: pd.DataFrame, intersection_models: list[str] | None = None) -> pd.DataFrame:
+def _unrestricted_intersection_uids(scored: pd.DataFrame, models: list[str]) -> set:
+    """Return settled match IDs carrying every requested model observation."""
+    sub = scored[scored["model"].isin(models)]
+    counts = sub.groupby("match_uid")["model"].nunique()
+    return set(counts[counts == len(set(models))].index)
+
+
+def build_live_ledger(
+    scored: pd.DataFrame,
+    intersection_models: list[str] | None = None,
+    active_shadow_models: list[str] | None = None,
+) -> pd.DataFrame:
     intersection_models = intersection_models or CORE_MODELS
+    active_shadow_models = (
+        ACTIVE_SHADOW_MODELS
+        if active_shadow_models is None
+        else active_shadow_models
+    )
+    timing_models = ["market_open", "market_close"]
     rows = []
     for tier_name, tier_col in [("gold", "is_gold"), ("complete", "is_complete")]:
         tier_df = scored[scored[tier_col]]
-        for model, g in tier_df.groupby("model"):
+        generic_df = tier_df[~tier_df["model"].isin(timing_models)]
+        for model, g in generic_df.groupby("model"):
             rows.append(_score_block(model, tier_name, g))
         inter = cohorts.intersection_uids(scored, intersection_models, tier_col)
         inter_df = tier_df[tier_df["match_uid"].isin(inter) & tier_df["model"].isin(intersection_models)]
         for model, g in inter_df.groupby("model"):
             rows.append(_score_block(model, f"{tier_name}_intersection", g))
+        observed_models = set(tier_df["model"].astype(str))
+        shadow_models = [
+            model for model in active_shadow_models if model in observed_models
+        ]
+        if shadow_models:
+            all_models = [*intersection_models, *shadow_models]
+            all_inter = cohorts.intersection_uids(scored, all_models, tier_col)
+            all_inter_df = tier_df[
+                tier_df["match_uid"].isin(all_inter)
+                & tier_df["model"].isin(all_models)
+            ]
+            for model, g in all_inter_df.groupby("model"):
+                rows.append(_score_block(
+                    model, f"{tier_name}_all_model_intersection", g
+                ))
+        timing_inter = cohorts.intersection_uids(scored, timing_models, tier_col)
+        timing_df = tier_df[
+            tier_df["match_uid"].isin(timing_inter)
+            & tier_df["model"].isin(timing_models)
+        ]
+        for model, g in timing_df.groupby("model"):
+            rows.append(_score_block(
+                model, f"{tier_name}_market_timing", g
+            ))
+    settled_timing_uids = _unrestricted_intersection_uids(scored, timing_models)
+    settled_timing = scored[
+        scored["match_uid"].isin(settled_timing_uids)
+        & scored["model"].isin(timing_models)
+    ]
+    for model, g in settled_timing.groupby("model"):
+        rows.append(_score_block(model, "settled_market_timing", g))
     return pd.DataFrame(rows, columns=LIVE_COLUMNS)
+
+
+def build_calibration_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.DataFrame:
+    """Materialize reliability bins for every authoritative aggregate row."""
+    rows: list[dict] = []
+    for _, aggregate in live.iterrows():
+        model = str(aggregate["model"])
+        tier = str(aggregate["tier"])
+        if tier == "gold":
+            block = scored[scored["is_gold"] & scored["model"].eq(model)]
+        elif tier == "complete":
+            block = scored[scored["is_complete"] & scored["model"].eq(model)]
+        elif tier == "settled_market_timing":
+            common = _unrestricted_intersection_uids(
+                scored, ["market_open", "market_close"]
+            )
+            block = scored[
+                scored["model"].eq(model) & scored["match_uid"].isin(common)
+            ]
+        else:
+            base_tier = "is_gold" if tier.startswith("gold_") else "is_complete"
+            if tier.endswith("_all_model_intersection"):
+                models = sorted(
+                    value for value in live.loc[live["tier"].eq(tier), "model"]
+                )
+            elif tier.endswith("_market_timing"):
+                models = ["market_open", "market_close"]
+            else:
+                models = CORE_MODELS
+            common = cohorts.intersection_uids(scored, models, base_tier)
+            block = scored[
+                scored[base_tier]
+                & scored["model"].eq(model)
+                & scored["match_uid"].isin(common)
+            ]
+        if block.empty:
+            continue
+        reliability = metrics.reliability_table(
+            block["y1"].values, block["p1_prob"].values
+        )
+        for bin_index, bin_row in reliability.iterrows():
+            rows.append({
+                "model": model,
+                "tier": tier,
+                "bin_index": int(bin_index),
+                "bin_lo": bin_row["bin_lo"],
+                "bin_hi": bin_row["bin_hi"],
+                "mean_pred": bin_row["mean_pred"],
+                "frac_pos": bin_row["frac_pos"],
+                "count": int(bin_row["count"]),
+            })
+    return pd.DataFrame(rows, columns=CALIBRATION_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +281,9 @@ def _report_md(live: pd.DataFrame, offline_df: pd.DataFrame, run_date: str) -> s
         "- **GOLD** = settled & `snapshot_v2` & `exact_feature_snapshot` & features_complete & feature snapshot ID verified against persisted lineage (decision-grade; headline).",
         "- **COMPLETE** = settled & features_complete (~65% legacy_backfilled; context).",
         "- **\\*_intersection** = restricted to match_uids where all of nn/xgb/rf/market predicted (apples-to-apples).",
+        "- **\\*_all_model_intersection** = restricted to match_uids shared by nn/xgb/rf/market and every scored variant in the current `DEFAULT_SHADOW_MODEL_SPECS`; retired historical variants do not shrink the active comparison.",
+        "- **\\*_market_timing** = the same settled match_uids at first observed and last valid pre-start prices; requires at least two distinct pre-start captures and never treats first observed as the sportsbook's true opener.",
+        "- **settled_market_timing** = every explicit valid winner with comparable market captures, independent of feature completeness; use this for the broad standalone market-open versus market-close diagnostic.",
         "- **Shadow variants** = one deterministic opening observation per `(match_uid, model_version)`, joined to the operational opening feature snapshot; hourly repeats do not increase n.",
         "",
         "## Verdict (live, settled)",
@@ -180,7 +293,12 @@ def _report_md(live: pd.DataFrame, offline_df: pd.DataFrame, run_date: str) -> s
         "## Live model table",
         "",
     ]
-    for tier in ["gold_intersection", "gold", "complete_intersection", "complete"]:
+    for tier in [
+        "gold_intersection", "gold_all_model_intersection", "gold_market_timing",
+        "settled_market_timing", "gold",
+        "complete_intersection", "complete_all_model_intersection",
+        "complete_market_timing", "complete",
+    ]:
         block = live[live.tier == tier].sort_values("log_loss")
         if block.empty:
             continue
@@ -230,7 +348,8 @@ def main(argv=None):
     else:
         pred_log = cohorts.load_prediction_log(args.prod_dir)
         shadow_log = cohorts.load_shadow_log(args.prod_dir)
-    scored = cohorts.build_scored_frame(pred_log, shadow_log)
+    odds_history = None if args.db else cohorts.load_odds_history(args.prod_dir)
+    scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
     live = build_live_ledger(scored)
     offline_df = offline.discover_experiment_metrics(args.experiments_root)
     write_outputs(live, offline_df, args.out_dir, args.report, args.run_date)

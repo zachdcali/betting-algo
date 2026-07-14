@@ -13,6 +13,9 @@
   --teal: #0f766e;
   --green: #157347;
   --green-bg: #eaf7ef;
+  --green-soft: #dff4e7;
+  --green-medium: #bde8cc;
+  --green-strong: #0f6a3e;
   --amber: #9a5d05;
   --amber-bg: #fff7df;
   --red: #b42318;
@@ -40,6 +43,9 @@
     --teal: #5eead4;
     --green: #5dd39e;
     --green-bg: #103728;
+    --green-soft: #123f2e;
+    --green-medium: #17543c;
+    --green-strong: #80e7b8;
     --amber: #ffd166;
     --amber-bg: #3b2d0e;
     --red: #ff8e86;
@@ -388,8 +394,48 @@ h3 {
 
 .field-label { display: grid; gap: 5px; color: var(--ink-soft); font-size: 0.72rem; font-weight: 650; }
 .field-label select, .field-label input { min-width: 220px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); padding: 8px 10px; }
+.performance-controls { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .cohort-definition { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 14px 0; padding: 13px 15px; color: var(--ink-soft); font-size: 0.75rem; }
 .cohort-definition strong { color: var(--ink); font-family: var(--mono); }
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+  gap: 14px;
+  margin: 15px 0;
+}
+
+.analytics-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 17px;
+}
+
+.analytics-card h3 { margin: 0; font-size: 1.05rem; }
+.metric-chart { display: grid; gap: 9px; min-height: 120px; }
+.metric-bar-row { display: grid; grid-template-columns: minmax(130px, 1.2fr) minmax(150px, 2fr) 72px; align-items: center; gap: 9px; }
+.metric-bar-label { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 0.72rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.metric-bar-track { position: relative; height: 17px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
+.metric-bar-track.diverging::after { position: absolute; inset-block: 0; left: 50%; width: 1px; content: ""; background: var(--line-strong); }
+.metric-bar { position: absolute; inset-block: 2px; min-width: 2px; border-radius: 999px; background: var(--blue); }
+.metric-bar.good { background: var(--green); }
+.metric-bar.bad { background: var(--red); }
+.metric-bar.warning { background: var(--amber); }
+.metric-bar-value { text-align: right; font: 700 0.72rem var(--mono); }
+.calibration-chart svg, .odds-chart svg { display: block; width: 100%; height: auto; }
+.chart-axis { stroke: var(--line-strong); stroke-width: 1; }
+.chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.chart-perfect { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.chart-line-p1 { fill: none; stroke: var(--blue); stroke-width: 3; }
+.chart-line-p2 { fill: none; stroke: var(--amber); stroke-width: 3; }
+.chart-point-p1 { fill: var(--blue); stroke: var(--surface); stroke-width: 2; }
+.chart-point-p2 { fill: var(--amber); stroke: var(--surface); stroke-width: 2; }
+.chart-calibration-line { fill: none; stroke: var(--teal); stroke-width: 3; }
+.chart-calibration-point { fill: var(--teal); stroke: var(--surface); stroke-width: 2; }
+.chart-label { fill: var(--muted); font: 10px var(--mono); }
+.chart-empty { display: grid; min-height: 180px; place-items: center; border: 1px dashed var(--line-strong); border-radius: 12px; color: var(--muted); font-size: 0.76rem; text-align: center; padding: 20px; }
 
 .table-shell { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 table { width: 100%; border-collapse: collapse; }
@@ -404,10 +450,68 @@ tbody tr:hover td { background: color-mix(in srgb, var(--blue) 4%, var(--surface
 .cell-secondary { display: block; color: var(--muted); font: 0.66rem var(--mono); }
 .numeric-good { color: var(--green); }
 .numeric-bad { color: var(--red); }
+.numeric-warning { color: var(--amber); }
+.signal-good { color: var(--green); background: color-mix(in srgb, var(--green-bg) 72%, transparent); font-weight: 750; }
+.signal-bad { color: var(--red); background: color-mix(in srgb, var(--red-bg) 72%, transparent); font-weight: 750; }
+.signal-warning { color: var(--amber); background: color-mix(in srgb, var(--amber-bg) 72%, transparent); font-weight: 750; }
+.model-name { display: flex; align-items: center; gap: 7px; min-width: 190px; }
+.model-name strong { font-family: var(--sans); font-size: 0.76rem; }
+.role-badge { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 700 0.58rem var(--mono); padding: 2px 6px; text-transform: uppercase; }
+.role-badge.shadow { border-color: color-mix(in srgb, var(--teal) 45%, var(--line)); color: var(--teal); }
+.role-badge.benchmark { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); color: var(--blue); }
 .research-disclosure { margin-top: 15px; padding: 13px 15px; }
 .research-disclosure summary { cursor: pointer; font-weight: 700; }
 .research-disclosure p { margin: 9px 0 0; color: var(--muted); font-size: 0.78rem; }
 .pagination { display: flex; justify-content: center; margin-top: 14px; }
+
+.tournament-stack { display: grid; gap: 14px; }
+.tournament-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.tournament-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); background: linear-gradient(100deg, color-mix(in srgb, var(--blue) 7%, var(--surface)), var(--surface)); padding: 13px 15px; }
+.tournament-heading h4 { margin: 0; font-size: 1rem; }
+.tournament-heading p { margin: 2px 0 0; color: var(--muted); font: 0.68rem var(--mono); }
+.tournament-summary { color: var(--ink-soft); text-align: right; font: 700 0.67rem var(--mono); }
+.tournament-matches { display: grid; }
+
+.match-card { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--surface); }
+.match-card:last-child { border-bottom: 0; }
+.match-card.eligible, .match-card.blocked, .match-card.expired { border-left-width: 4px; }
+.match-card-header { background: var(--surface-soft); padding: 11px 14px 8px; }
+.match-board-shell { overflow-x: auto; }
+.match-board { min-width: 760px; table-layout: fixed; }
+.match-board th, .match-board td { padding: 8px 10px; }
+.match-board th { position: static; font-size: 0.58rem; }
+.match-board th:first-child, .match-board td:first-child { width: 29%; text-align: left; }
+.match-board th:not(:first-child), .match-board td:not(:first-child) { text-align: right; }
+.match-board tbody tr:last-child td { border-bottom: 0; }
+.player-cell { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.player-identity { min-width: 0; }
+.player-identity strong { display: block; font-family: var(--sans); font-size: 0.82rem; line-height: 1.25; }
+.player-identity span { display: block; color: var(--muted); font: 0.61rem var(--mono); }
+.player-row.edge-positive-low td { background: color-mix(in srgb, var(--green-soft) 45%, var(--surface)); }
+.player-row.edge-positive-medium td { background: color-mix(in srgb, var(--green-medium) 55%, var(--surface)); }
+.player-row.edge-positive-strong td { background: color-mix(in srgb, var(--green-medium) 82%, var(--surface)); }
+.player-row.edge-positive-strong .edge-value { color: var(--green-strong); font-weight: 850; }
+.player-row.edge-negative .edge-value { color: var(--red); }
+.player-row.edge-watch .edge-value { color: var(--amber); }
+.edge-value { display: block; font-weight: 750; }
+.edge-label { display: block; color: var(--muted); font: 0.56rem var(--mono); }
+.price-cell strong { display: block; }
+.price-cell span { display: block; color: var(--muted); font-size: 0.59rem; }
+.match-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.market-path-button { border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--blue) 7%, var(--surface)); color: var(--blue); cursor: pointer; font-size: 0.7rem; font-weight: 700; padding: 6px 9px; }
+.market-path-button:hover { background: color-mix(in srgb, var(--blue) 13%, var(--surface)); }
+
+.odds-dialog-body { padding: 18px 20px 24px; }
+.odds-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 9px; margin-bottom: 14px; }
+.odds-summary-card { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); padding: 10px; }
+.odds-summary-card span { display: block; color: var(--muted); font-size: 0.63rem; }
+.odds-summary-card strong { display: block; margin-top: 2px; font: 750 0.82rem var(--mono); }
+.chart-legend { display: flex; gap: 15px; margin: 8px 0; color: var(--ink-soft); font-size: 0.7rem; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
+.legend-dot.p2 { background: var(--amber); }
+.odds-chart { border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); padding: 10px; }
+.odds-observations { margin-top: 13px; }
 
 .inventory-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 15px 0; }
 .inventory-card { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); padding: 12px; }
@@ -453,6 +557,7 @@ footer { border-top: 1px solid var(--line); margin-top: 32px; padding-top: 17px;
   .health-times { grid-column: 1 / -1; min-width: 0; }
   .metric-grid, .metric-grid.compact { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -478,6 +583,20 @@ footer { border-top: 1px solid var(--line); margin-top: 32px; padding-top: 17px;
   .prob-cell:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .lineage-grid { grid-template-columns: 1fr; }
   .field-label, .field-label select, .field-label input { width: 100%; min-width: 0; }
+  .performance-controls { width: 100%; }
+  .metric-bar-row { grid-template-columns: minmax(105px, 1fr) minmax(100px, 1.5fr) 62px; }
+  .tournament-heading { align-items: flex-start; }
+  .tournament-summary { max-width: 42%; }
+  .match-board { min-width: 0; }
+  .match-board th, .match-board td { padding: 7px 6px; }
+  .match-board th:nth-child(3), .match-board td:nth-child(3),
+  .match-board th:nth-child(5), .match-board td:nth-child(5),
+  .match-board th:nth-child(6), .match-board td:nth-child(6) { display: none; }
+  .match-board th:first-child, .match-board td:first-child { width: 39%; }
+  .match-board th:nth-child(2), .match-board td:nth-child(2) { width: 23%; }
+  .match-board th:nth-child(4), .match-board td:nth-child(4) { width: 15%; }
+  .match-board th:nth-child(7), .match-board td:nth-child(7) { width: 23%; }
+  .odds-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .feature-groups { columns: 1; }
 }
 

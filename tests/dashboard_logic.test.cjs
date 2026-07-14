@@ -27,6 +27,13 @@ function completeSlateRow(overrides = {}) {
   };
 }
 
+function assertClose(actual, expected, message = "") {
+  assert.ok(
+    Math.abs(actual - expected) < 1e-12,
+    `${message || "values differ"}: expected ${expected}, received ${actual}`,
+  );
+}
+
 test("timezone-naive operational timestamps are interpreted as UTC", () => {
   assert.equal(
     Logic.parseTimestamp("2026-07-14T08:26:24.639361"),
@@ -233,4 +240,153 @@ test("manifest count comparison accepts explicit zero and rejects omissions or t
   const truncated = Logic.compareManifestCounts({ dash_predictions: 4 }, { dash_predictions: 3 });
   assert.equal(truncated.ok, false);
   assert.ok(truncated.issues.includes("dash_predictions expected 4, loaded 3"));
+});
+
+test("two-player decision rows preserve player orientation and invert every P1 probability", () => {
+  const rows = Logic.playerDecisionRows(completeSlateRow({
+    p1: "Alpha Server",
+    p2: "Beta Returner",
+    p1_rank: 12,
+    p2_rank: 48,
+    p1_hand: "R",
+    p2_hand: "L",
+    p1_odds_decimal: 2,
+    p2_odds_decimal: 2.5,
+    market_p1_prob: 0.57,
+    model_p1_prob: 0.64,
+    xgb_p1_prob: 0.59,
+    rf_p1_prob: 0.54,
+  }));
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map(({ side, player, rank, hand }) => ({ side, player, rank, hand })),
+    [
+      { side: 1, player: "Alpha Server", rank: 12, hand: "R" },
+      { side: 2, player: "Beta Returner", rank: 48, hand: "L" },
+    ],
+  );
+  const expectedProbabilities = [
+    { rawBreakEven: 0.5, marketProbability: 0.57, nnProbability: 0.64, xgbProbability: 0.59, rfProbability: 0.54 },
+    { rawBreakEven: 0.4, marketProbability: 0.43, nnProbability: 0.36, xgbProbability: 0.41, rfProbability: 0.46 },
+  ];
+  rows.forEach((row, index) => {
+    Object.entries(expectedProbabilities[index]).forEach(([field, expected]) => {
+      assertClose(row[field], expected, `side ${index + 1} ${field}`);
+    });
+  });
+  assertClose(rows[0].edge, 0.14, "P1 edge");
+  assertClose(rows[1].edge, -0.04, "P2 edge");
+
+  const missingDriver = Logic.playerDecisionRows(completeSlateRow({ model_p1_prob: null }));
+  assert.equal(missingDriver[0].nnProbability, null);
+  assert.equal(missingDriver[1].nnProbability, null);
+  assert.equal(missingDriver[0].edge, null);
+  assert.equal(missingDriver[1].edge, null);
+});
+
+test("EV edge bands honor the configured two-point gate and increasing intensity", () => {
+  const cases = [
+    [null, "missing"],
+    [-0.000001, "negative"],
+    [0, "watch"],
+    [0.019999, "watch"],
+    [0.02, "positive-low"],
+    [0.049999, "positive-low"],
+    [0.05, "positive-medium"],
+    [0.099999, "positive-medium"],
+    [0.1, "positive-strong"],
+  ];
+  cases.forEach(([edge, expected]) => assert.equal(Logic.edgeBand(edge), expected, String(edge)));
+});
+
+test("metric signals respect direction, comparability, and calibration's target of one", () => {
+  for (const metric of ["log_loss", "brier", "ece", "max_drawdown_kelly"]) {
+    assert.equal(Logic.metricSignal(metric, 0.2, 0.3, true), "good", `${metric} lower`);
+    assert.equal(Logic.metricSignal(metric, 0.4, 0.3, true), "bad", `${metric} higher`);
+    assert.equal(Logic.metricSignal(metric, 0.2, 0.3, false), "neutral", `${metric} incomparable`);
+  }
+  for (const metric of ["accuracy", "auc"]) {
+    assert.equal(Logic.metricSignal(metric, 0.7, 0.6, true), "good", `${metric} higher`);
+    assert.equal(Logic.metricSignal(metric, 0.5, 0.6, true), "bad", `${metric} lower`);
+  }
+  assert.equal(Logic.metricSignal("cal_slope", 1), "good");
+  assert.equal(Logic.metricSignal("cal_slope", 1.15), "good");
+  assert.equal(Logic.metricSignal("cal_slope", 0.7), "warning");
+  assert.equal(Logic.metricSignal("cal_slope", 1.6), "bad");
+  assert.equal(Logic.metricSignal("roi_kelly", 0.001), "good");
+  assert.equal(Logic.metricSignal("roi_kelly", -0.001), "bad");
+  assert.equal(Logic.metricSignal("roi_kelly", 0), "neutral");
+  assert.equal(Logic.metricSignal("n", 249), "warning");
+  assert.equal(Logic.metricSignal("n", 250), "neutral");
+});
+
+test("shadow model presentation is readable while preserving exact registry identity", () => {
+  const xgb = Logic.modelPresentation(
+    "shadow_performance_v1_xgb_depth5_recency_hl_8y__2026-04-25",
+  );
+  assert.deepEqual(xgb, {
+    label: "XGB · depth5 recency half-life 8y",
+    role: "shadow",
+    family: "xgboost",
+    exact: "shadow_performance_v1_xgb_depth5_recency_hl_8y__2026-04-25",
+  });
+  assert.equal(Logic.modelPresentation("shadow_performance_v1_cat_depth6_screening_one_hot__2026-04-25").label, "CatBoost · depth6 screening one hot");
+  assert.equal(Logic.modelPresentation("shadow_performance_v1_nn_logits_128_64_robust__2026-04-25").family, "nn");
+  assert.deepEqual(Logic.modelPresentation("market_close"), {
+    label: "Market · last pre-start",
+    role: "benchmark",
+    family: "market",
+    exact: "market_close",
+  });
+  assert.equal(xgb.label.includes("performance_v1"), false);
+  assert.equal(xgb.label.includes("_"), false);
+});
+
+test("odds series is chronological and excludes observations at or after exact start", () => {
+  const start = "2026-07-13T20:00:00Z";
+  const series = Logic.prepareOddsSeries([
+    { logged_at: "2026-07-13T20:00:01Z", market_p1_prob: 0.61, p1_odds_decimal: 1.7 },
+    { logged_at: "2026-07-13T19:30:00Z", market_p1_prob: 0.58, market_p2_prob: 0.42, p1_odds_decimal: 1.8, p2_odds_decimal: 2.05 },
+    { logged_at: "2026-07-13T18:00:00Z", market_p1_prob: 0.55, p1_odds_decimal: 1.9, p2_odds_decimal: 1.95 },
+    { logged_at: "2026-07-13T20:00:00Z", market_p1_prob: 0.6, p1_odds_decimal: 1.75 },
+    { logged_at: "2026-07-13T19:30:00Z", market_p1_prob: 0.59, p1_odds_decimal: 1.78, p2_odds_decimal: 2.1 },
+    { logged_at: "not-a-time", market_p1_prob: 0.5 },
+    { logged_at: "2026-07-13T19:45:00Z", market_p1_prob: 1.2 },
+  ], { match_start_at_utc: start });
+
+  assert.equal(series.startAt, Date.parse(start));
+  assert.equal(series.lastLabel, "last pre-start");
+  assert.deepEqual(series.points.map((point) => point.at), [
+    Date.parse("2026-07-13T18:00:00Z"),
+    Date.parse("2026-07-13T19:30:00Z"),
+  ]);
+  assert.equal(series.first.p1, 0.55);
+  assertClose(series.first.p2, 0.45, "opening P2 complement");
+  assert.equal(series.last.p1, 0.59, "same-timestamp observations deterministically keep the last row");
+  assertClose(series.last.p2, 0.41, "closing P2 complement");
+  assert.ok(series.points.every((point) => point.at < Date.parse(start)));
+
+  const legacy = Logic.prepareOddsSeries([
+    { logged_at: "2026-07-13T18:00:00Z", market_p1_prob: 0.55 },
+  ]);
+  assert.equal(legacy.lastLabel, "latest observed");
+  assert.equal(legacy.startAt, null);
+
+  const explicitUtcClock = Logic.prepareOddsSeries([
+    {
+      logged_at: "2026-07-13T20:30:00Z",
+      odds_scraped_at: "2026-07-13T19:00:00Z",
+      market_p1_prob: 0.52,
+    },
+    {
+      logged_at: "2026-07-13T19:00:00Z",
+      odds_scraped_at: "2026-07-13T20:00:00Z",
+      market_p1_prob: 0.60,
+    },
+  ], { match_start_at_utc: start });
+  assert.deepEqual(explicitUtcClock.points.map((point) => point.at), [
+    Date.parse("2026-07-13T19:00:00Z"),
+  ]);
+  assert.equal(explicitUtcClock.first.p1, 0.52);
 });
