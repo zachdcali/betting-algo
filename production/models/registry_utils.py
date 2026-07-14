@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import pickle
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -16,6 +18,14 @@ FAMILY_DIRS = {
     "xgboost": "XGBoost",
     "random_forest": "Random_Forest",
 }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_registry() -> Dict:
@@ -118,5 +128,74 @@ def validate_registry(registry: Optional[Dict] = None) -> Dict[str, list[str]]:
                     )
                     if scaler_path and not scaler_path.exists():
                         issues["missing"].append(f"{family}:{version} missing scaler file {scaler_path}")
+
+        # Promoted artifacts are execution inputs, not merely paths. Pin their
+        # bytes and prove they deserialize with the registry's feature count.
+        if not current_version:
+            continue
+        entry = block.get("models", {}).get(current_version, {})
+        expected_features = int(entry.get("features") or 0)
+        model_path = resolve_artifact_path(
+            family, "model_file", version=current_version, registry=registry
+        )
+        if entry.get("artifact_available", True) and model_path and model_path.exists():
+            expected_hash = str(entry.get("model_sha256") or "").lower()
+            if not expected_hash:
+                issues["invalid"].append(f"{family}:{current_version} missing model_sha256")
+            else:
+                actual_hash = _sha256_file(model_path)
+                if actual_hash != expected_hash:
+                    issues["invalid"].append(
+                        f"{family}:{current_version} model checksum mismatch "
+                        f"expected={expected_hash} actual={actual_hash}"
+                    )
+            try:
+                if family == "nn":
+                    import torch
+                    state = torch.load(model_path, map_location="cpu", weights_only=True)
+                    matrices = [value for value in state.values() if getattr(value, "ndim", 0) == 2]
+                    if not matrices or int(matrices[0].shape[1]) != expected_features:
+                        raise ValueError(
+                            f"first layer input={matrices[0].shape[1] if matrices else 'missing'}"
+                        )
+                elif family == "xgboost":
+                    import xgboost as xgb
+                    model = xgb.XGBClassifier()
+                    model.load_model(str(model_path))
+                    if int(model.n_features_in_) != expected_features:
+                        raise ValueError(f"model features={model.n_features_in_}")
+                elif family == "random_forest":
+                    with open(model_path, "rb") as fh:
+                        model = pickle.load(fh)
+                    if int(model.n_features_in_) != expected_features:
+                        raise ValueError(f"model features={model.n_features_in_}")
+            except Exception as exc:
+                issues["invalid"].append(
+                    f"{family}:{current_version} model load/schema validation failed: {exc}"
+                )
+
+        scaler_path = resolve_artifact_path(
+            family, "scaler_file", version=current_version, registry=registry
+        )
+        if scaler_path and scaler_path.exists():
+            expected_hash = str(entry.get("scaler_sha256") or "").lower()
+            if not expected_hash:
+                issues["invalid"].append(f"{family}:{current_version} missing scaler_sha256")
+            else:
+                actual_hash = _sha256_file(scaler_path)
+                if actual_hash != expected_hash:
+                    issues["invalid"].append(
+                        f"{family}:{current_version} scaler checksum mismatch "
+                        f"expected={expected_hash} actual={actual_hash}"
+                    )
+            try:
+                with open(scaler_path, "rb") as fh:
+                    scaler = pickle.load(fh)
+                if int(scaler.n_features_in_) != expected_features:
+                    raise ValueError(f"scaler features={scaler.n_features_in_}")
+            except Exception as exc:
+                issues["invalid"].append(
+                    f"{family}:{current_version} scaler load/schema validation failed: {exc}"
+                )
 
     return issues

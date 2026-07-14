@@ -1,177 +1,165 @@
-"""Sync pipeline outputs to Supabase dash_* tables for the live dashboard.
+"""Atomically publish additive operational state to Supabase.
 
-Runs after every pipeline run (cloud + local). The dashboard is a static page
-reading these tables via Supabase's REST API (anon key, RLS read-only), so it
-auto-updates hourly regardless of where the pipeline ran or whether the git
-repo is public or private.
-
-v1 strategy: truncate + COPY the full CSV each sync. Idempotent, no drift, and
-cheap at current sizes (~2.5k prediction rows). This also doubles as an
-off-machine backup of the log files — the 2026-07-08 git-clobber incident is
-the origin story here.
+Every dashboard table is planned first, then replaced inside one transaction.
+Remote-only rows are merged back before replacement, so a stale runner cannot
+delete settlements or immutable lineage.  A manifest identifies the accepted
+generation and its exact row counts.
 """
 from __future__ import annotations
 
+import argparse
+from datetime import datetime, timezone
+from glob import glob
 import io
+import json
+import math
 import os
 import sys
+import uuid
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
 from canonical_store import connect  # noqa: E402
-
-BASE = os.path.dirname(__file__)
-
-# (table, csv path, columns to sync — None = all)
-SYNC_SPECS = [
-    ("dash_predictions", os.path.join(BASE, "prediction_log.csv"), None),
-    ("dash_odds_history", os.path.join(BASE, "odds_history.csv"), None),
-    ("dash_shadow", os.path.join(BASE, "logs", "performance_v1_shadow_predictions.csv"), None),
-    ("dash_runs", os.path.join(BASE, "logs", "audit", "run_history.csv"), None),
-    ("dash_bets", os.path.join(BASE, "logs", "all_bets.csv"), None),
-    ("dash_snapshots", os.path.join(BASE, "prediction_snapshots.csv"), None),
-    ("dash_settlement_audit", os.path.join(BASE, "logs", "audit", "settlement_audit.csv"), None),
-    ("dash_features", os.path.join(BASE, "logs", "feature_vectors.csv"), None),
-]
-
-# Refuse to replace a table with a dramatically smaller one: a shrunken local
-# CSV (corruption, another clobber) must never propagate into the backup.
-# Override with ALLOW_DASH_SHRINK=1 only for a deliberate, understood shrink.
-SHRINK_GUARD_RATIO = 0.9
+from operational_state import (  # noqa: E402
+    STATE_SPECS, add_row_keys, hydrate_operational_state, load_csv,
+    merge_state_frames,
+)
 
 
-def _pg_type(dtype) -> str:
-    # display mirror: everything is text. Inferring numeric types from a CSV
-    # snapshot breaks the day a column's first real value is a string (the
-    # score column was created double-precision while scores were all empty,
-    # then "4-6 4-6 2-6" arrived and the whole sync failed). The dashboard
-    # parses numbers client-side.
-    return "text"
+def _json_scalar(value):
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (int, float, bool)):
+        if not isinstance(value, bool) and not math.isfinite(float(value)):
+            return None
+        return value
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    try:
+        numeric = float(text_value)
+        return numeric if math.isfinite(numeric) else None
+    except ValueError:
+        return text_value
 
 
-def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
-    cur.execute("SELECT to_regclass(%s)", (f'public."{table}"',))
-    if cur.fetchone()[0] is not None:
-        cur.execute(f'SELECT count(*) FROM "{table}"')
-        existing_n = cur.fetchone()[0]
-        if (len(df) < existing_n * SHRINK_GUARD_RATIO
-                and os.environ.get("ALLOW_DASH_SHRINK") != "1"):
-            print(f"   🚨 SHRINK GUARD: refusing to sync {table} "
-                  f"({existing_n} rows in Supabase, only {len(df)} locally) — "
-                  f"local file may be damaged; backup preserved. "
-                  f"Set ALLOW_DASH_SHRINK=1 to override deliberately.")
-            return
-        # RECENCY GUARD (predictions): never let an OLDER run's data replace the
-        # mirror's current slate. A stale source (a dev box whose prediction_log
-        # lags, or a cloud run built on a lagged git base) was regressing the
-        # slate to a days-old snapshot. Compare newest run stamps.
-        if table == "dash_predictions" and "latest_run_id" in df.columns:
-            cur.execute('SELECT max(latest_run_id) FROM dash_predictions')
-            mirror_max = cur.fetchone()[0] or ""
-            incoming_max = str(df["latest_run_id"].dropna().max() or "")
-            if mirror_max and incoming_max and incoming_max < mirror_max \
-                    and os.environ.get("ALLOW_DASH_SHRINK") != "1":
-                print(f"   🚨 RECENCY GUARD: refusing to sync dash_predictions — "
-                      f"incoming newest run {incoming_max} is OLDER than the mirror's "
-                      f"{mirror_max}. Stale source; not regressing the slate.")
-                return
-    cols = [c.strip().lower().replace(" ", "_") for c in df.columns]
-    col_defs = ", ".join(
-        f'"{c}" {_pg_type(df[orig].dtype)}' for c, orig in zip(cols, df.columns)
+def _load_feature_state(aggregate_path) -> pd.DataFrame:
+    """Build exact drill-down lineage from aggregate and immutable run files."""
+    from feature_vector_log import COLS, feature_fingerprint
+    from features.performance_v1 import PERFORMANCE_FEATURES
+    from models.inference import EXACT_141_FEATURES
+
+    aggregate = load_csv(aggregate_path).reindex(columns=COLS, fill_value="")
+    existing_ids = set(
+        value for value in aggregate["feature_snapshot_id"].fillna("").astype(str) if value
     )
-    cur.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
-    # schema drift (new CSV columns) → add as text; never silently drop data
+    rows: list[dict] = []
+    feature_names = [*EXACT_141_FEATURES, *PERFORMANCE_FEATURES]
+    for path in sorted(glob(str(aggregate_path.parent / "features_*.csv"))):
+        run_frame = pd.read_csv(path, low_memory=False)
+        if "feature_snapshot_id" not in run_frame.columns:
+            continue
+        run_frame = run_frame[
+            run_frame["feature_snapshot_id"].fillna("").astype(str).ne("")
+        ]
+        for _, source in run_frame.iterrows():
+            feature_id = str(source.get("feature_snapshot_id", "")).strip()
+            if not feature_id or feature_id in existing_ids:
+                continue
+            payload = {
+                name: _json_scalar(source.get(name))
+                for name in feature_names if name in source.index and pd.notna(source.get(name))
+            }
+            defaults = source.get("meta_defaulted_features", "")
+            payload["_defaulted_features"] = "" if pd.isna(defaults) else str(defaults)
+            build_status = str(source.get("status", "unknown") or "unknown")
+            schema_hash, vector_hash, feature_count = feature_fingerprint(payload)
+
+            def hand(prefix: str) -> str:
+                for label in ("U", "L", "R"):
+                    value = pd.to_numeric(source.get(f"{prefix}_Hand_{label}"), errors="coerce")
+                    if pd.notna(value) and float(value) == 1.0:
+                        return label
+                return ""
+
+            rows.append({
+                "p1": source.get("player1_raw", ""),
+                "p2": source.get("player2_raw", ""),
+                "match_date": source.get("meta_match_date", ""),
+                "logged_at": source.get("timestamp", source.get("run_started_at", "")),
+                "run_id": source.get("run_id", ""),
+                "match_uid": source.get("match_uid", ""),
+                "feature_snapshot_id": feature_id,
+                "build_status": build_status,
+                "features_complete": (
+                    build_status == "ok"
+                    and not payload["_defaulted_features"]
+                    and bool(vector_hash)
+                ),
+                "p1_hand": hand("P1"),
+                "p2_hand": hand("P2"),
+                "feature_schema_sha256": schema_hash,
+                "feature_vector_sha256": vector_hash,
+                "feature_count": feature_count,
+                "features_json": json.dumps(payload, separators=(",", ":"), default=str),
+            })
+            existing_ids.add(feature_id)
+    if rows:
+        aggregate = pd.concat([aggregate, pd.DataFrame(rows, columns=COLS)], ignore_index=True)
+    return aggregate.reindex(columns=COLS, fill_value="")
+
+
+def _table_exists(cur, table: str) -> bool:
+    cur.execute("SELECT to_regclass(%s)", (f'public."{table}"',))
+    return cur.fetchone()[0] is not None
+
+
+def read_table(cur, table: str) -> pd.DataFrame:
+    if not _table_exists(cur, table):
+        return pd.DataFrame()
+    cur.execute(f'SELECT * FROM "{table}"')
+    rows = cur.fetchall()
+    columns = [desc.name for desc in cur.description]
+    return pd.DataFrame(rows, columns=columns).fillna("")
+
+
+def _ensure_schema(cur, table: str, frame: pd.DataFrame) -> None:
+    columns = list(frame.columns)
+    if not _table_exists(cur, table):
+        definitions = ", ".join(f'"{column}" text' for column in columns)
+        cur.execute(f'CREATE TABLE "{table}" ({definitions})')
+        return
     cur.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s",
         (table,),
     )
-    existing = {r[0] for r in cur.fetchall()}
-    for c, orig in zip(cols, df.columns):
-        if c not in existing:
-            cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{c}" {_pg_type(df[orig].dtype)}')
+    existing = {row[0] for row in cur.fetchall()}
+    for column in columns:
+        if column not in existing:
+            cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" text')
 
-    # A SETTLEMENT IS PERMANENT. Cloud runs rebuild prediction_log from a git
-    # base that can lag (push races park logs on branches), then TRUNCATE-reload
-    # the mirror — so a run that re-settles fewer matches than a prior run was
-    # silently un-settling the mirror (settled count + cohort visibly regressed).
-    # Snapshot every settled row's outcome, reload, then restore any settlement
-    # the fresh data lacks. The mirror becomes the UNION of all runs' settlements:
-    # monotonic, never regresses. Keyed by match_uid (fallback p1|p2|date).
-    is_pred = table == "dash_predictions" and "actual_winner" in cols
-    if is_pred:
-        cur.execute("""CREATE TEMP TABLE _settled_bak ON COMMIT DROP AS
-            SELECT COALESCE(NULLIF(match_uid,''), lower(p1)||'|'||lower(p2)||'|'||left(match_date,10)) AS k,
-                   actual_winner, score, settled_at, record_status,
-                   model_correct, market_correct, xgb_correct, rf_correct
-            FROM dash_predictions WHERE actual_winner IS NOT NULL AND actual_winner <> ''""")
-        # A RESOLVED ROUND / COMPLETE PREDICTION IS STICKY. Same disease: a run
-        # whose ATP draw/schedule fetch failed re-derives a match with round=None
-        # and no model prob, and — being newer — clobbers a prior run that had it
-        # fully resolved and bettable (Bastad went 11/11 bettable -> 0 this way).
-        # Snapshot each still-pending match that IS complete+scored, and after the
-        # reload restore that frozen prediction onto any copy that came back
-        # incomplete. First-complete-wins, enforced at the mirror since the
-        # runner's stale git base has no memory of the prior success.
-        cur.execute("""CREATE TEMP TABLE _complete_bak ON COMMIT DROP AS
-            SELECT COALESCE(NULLIF(match_uid,''), lower(p1)||'|'||lower(p2)||'|'||left(match_date,10)) AS k,
-                   round, features_complete, defaulted_features,
-                   model_p1_prob, xgb_p1_prob, rf_p1_prob, market_p1_prob,
-                   p1_odds_decimal, p2_odds_decimal, edge_p1, surface, level, p1_rank, p2_rank
-            FROM dash_predictions
-            WHERE (actual_winner IS NULL OR actual_winner='')
-              AND features_complete='True' AND model_p1_prob IS NOT NULL AND model_p1_prob<>''""")
 
+def _replace_table(cur, table: str, frame: pd.DataFrame) -> None:
+    _ensure_schema(cur, table, frame)
     cur.execute(f'TRUNCATE "{table}"')
-    buf = io.StringIO()
-    df.to_csv(buf, index=False, header=False)
-    buf.seek(0)
-    col_list = ", ".join(f'"{c}"' for c in cols)
+    if frame.empty:
+        return
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False, header=False)
+    buffer.seek(0)
+    column_list = ", ".join(f'"{column}"' for column in frame.columns)
     with cur.copy(
-        f'COPY "{table}" ({col_list}) FROM STDIN WITH (FORMAT csv, NULL \'\')'
+        f'COPY "{table}" ({column_list}) FROM STDIN WITH (FORMAT csv, NULL \'\')'
     ) as copy:
-        while chunk := buf.read(65536):
+        while chunk := buffer.read(65536):
             copy.write(chunk)
-
-    if is_pred:
-        # restore settlements the fresh reload is missing (never overwrite a
-        # settlement the fresh data already has — that one is at least as new)
-        cur.execute("""UPDATE dash_predictions d SET
-                actual_winner=b.actual_winner, score=b.score, settled_at=b.settled_at,
-                record_status=COALESCE(NULLIF(d.record_status,''), b.record_status),
-                model_correct=b.model_correct, market_correct=b.market_correct,
-                xgb_correct=b.xgb_correct, rf_correct=b.rf_correct
-            FROM _settled_bak b
-            WHERE COALESCE(NULLIF(d.match_uid,''), lower(d.p1)||'|'||lower(d.p2)||'|'||left(d.match_date,10)) = b.k
-              AND (d.actual_winner IS NULL OR d.actual_winner = '')""")
-        restored = cur.rowcount
-        if restored:
-            print(f"   🛟 preserved {restored} settlement(s) the reload was missing (mirror is monotonic)")
-        # restore complete predictions the reload downgraded to incomplete
-        # (round resolved -> None from a failed fetch). Only touch rows that came
-        # back NOT complete AND are still unsettled — never overwrite a fresh
-        # complete build or a settled result.
-        cur.execute("""UPDATE dash_predictions d SET
-                round=b.round, features_complete=b.features_complete,
-                defaulted_features=b.defaulted_features,
-                model_p1_prob=b.model_p1_prob, xgb_p1_prob=b.xgb_p1_prob,
-                rf_p1_prob=b.rf_p1_prob, market_p1_prob=b.market_p1_prob,
-                p1_odds_decimal=b.p1_odds_decimal, p2_odds_decimal=b.p2_odds_decimal,
-                edge_p1=b.edge_p1, surface=b.surface, level=b.level,
-                p1_rank=b.p1_rank, p2_rank=b.p2_rank
-            FROM _complete_bak b
-            WHERE COALESCE(NULLIF(d.match_uid,''), lower(d.p1)||'|'||lower(d.p2)||'|'||left(d.match_date,10)) = b.k
-              AND (d.actual_winner IS NULL OR d.actual_winner='')
-              AND (d.features_complete IS DISTINCT FROM 'True' OR d.model_p1_prob IS NULL OR d.model_p1_prob='')""")
-        rescued = cur.rowcount
-        if rescued:
-            print(f"   🛟 restored {rescued} complete prediction(s) a failed fetch had downgraded to round-pending")
 
 
 def _enable_public_read(cur, table: str) -> None:
     cur.execute(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
     cur.execute(
-        "SELECT 1 FROM pg_policies WHERE tablename = %s AND policyname = 'dash_read'",
+        "SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename=%s AND policyname='dash_read'",
         (table,),
     )
     if not cur.fetchone():
@@ -179,28 +167,251 @@ def _enable_public_read(cur, table: str) -> None:
     cur.execute(f'GRANT SELECT ON "{table}" TO anon')
 
 
-def sync_dashboard_tables(verbose: bool = True) -> dict:
-    """Push all dashboard tables. Returns {table: row_count}."""
-    counts = {}
-    with connect() as conn:
-        with conn.cursor() as cur:
-            for table, path, cols in SYNC_SPECS:
-                if not os.path.exists(path):
-                    if verbose:
-                        print(f"   ⚠️ dashboard sync: {path} missing — skipped")
-                    continue
-                df = pd.read_csv(path, low_memory=False)
-                if cols:
-                    df = df[[c for c in cols if c in df.columns]]
-                _sync_table(cur, table, df)
-                _enable_public_read(cur, table)
-                counts[table] = len(df)
-        conn.commit()
+def _latest_run_id(frame: pd.DataFrame) -> str:
+    if frame.empty or "run_id" not in frame.columns:
+        return ""
+    candidates = frame.copy()
+    values = candidates["run_id"].fillna("").astype(str)
+    candidates = candidates[values.str.startswith("run_")]
+    if "run_kind" in candidates.columns:
+        kinds = candidates["run_kind"].fillna("").astype(str)
+        candidates = candidates[kinds.isin(["", "prediction_pipeline"])]
+    if candidates.empty:
+        return ""
+    if "started_at" in candidates.columns:
+        candidates = candidates.assign(
+            _started=pd.to_datetime(
+                candidates["started_at"], errors="coerce", utc=True, format="mixed"
+            )
+        ).sort_values(["_started", "run_id"], kind="stable", na_position="first")
+        return str(candidates.iloc[-1]["run_id"])
+    return str(candidates["run_id"].max())
+
+
+def _accepted_prediction_run_id(run_frame: pd.DataFrame,
+                                snapshot_frame: pd.DataFrame) -> str:
+    """Newest terminal prediction-bearing run, distinct from latest attempt."""
+    if snapshot_frame.empty or "run_id" not in snapshot_frame.columns:
+        return ""
+    snapshot_ids = set(
+        value for value in snapshot_frame["run_id"].fillna("").astype(str) if value
+    )
+    if not run_frame.empty and "run_id" in run_frame.columns:
+        candidates = run_frame[
+            run_frame["run_id"].fillna("").astype(str).isin(snapshot_ids)
+        ].copy()
+        if "run_kind" in candidates.columns:
+            kinds = candidates["run_kind"].fillna("").astype(str)
+            candidates = candidates[kinds.isin(["", "prediction_pipeline"])]
+        if "status" in candidates.columns:
+            statuses = candidates["status"].fillna("").astype(str).str.lower()
+            candidates = candidates[statuses.isin(["success", "partial"])]
+        if not candidates.empty:
+            return _latest_run_id(candidates)
+
+    # Bootstrap old mirrors whose lifecycle rows were never terminally updated.
+    # Explicit failed/no-data terminal rows are never prediction sources merely
+    # because they happened to write a snapshot before failing.
+    fallback = snapshot_frame[
+        snapshot_frame["run_id"].fillna("").astype(str).isin(snapshot_ids)
+    ].copy()
+    if (not run_frame.empty and "run_id" in run_frame.columns
+            and "status" in run_frame.columns):
+        lifecycle = run_frame[
+            run_frame["run_id"].fillna("").astype(str).isin(snapshot_ids)
+        ].copy()
+        known_ids = set(lifecycle["run_id"].fillna("").astype(str))
+        bootstrap_ids = set(
+            lifecycle.loc[
+                lifecycle["status"].fillna("").astype(str).str.lower().isin(["", "running"]),
+                "run_id",
+            ].fillna("").astype(str)
+        )
+        bootstrap_ids.update(snapshot_ids - known_ids)
+        fallback = fallback[
+            fallback["run_id"].fillna("").astype(str).isin(bootstrap_ids)
+        ]
+    if "logged_at" in fallback.columns:
+        fallback["_logged"] = pd.to_datetime(
+            fallback["logged_at"], errors="coerce", utc=True, format="mixed"
+        )
+        fallback = fallback.sort_values(["_logged", "run_id"], kind="stable")
+    return str(fallback.iloc[-1]["run_id"]) if not fallback.empty else ""
+
+
+def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
+                         shadow_log: pd.DataFrame | None = None,
+                         feature_log: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Materialize authoritative live metrics through evaluation's one math path."""
+    from evaluation import cohorts
+    from evaluation.ledger import LIVE_COLUMNS, build_live_ledger
+
+    # Scan local immutable lineage even when the scoring cohort comes from the
+    # remote+local merge. This is fail-closed on corrupt lineage and contributes
+    # IDs from per-run feature files not duplicated in feature_vectors.csv.
+    local_pred = cohorts.load_prediction_log(os.path.dirname(__file__))
+    verified_mask = local_pred.get(
+        "feature_snapshot_verified", pd.Series(False, index=local_pred.index)
+    ).fillna(False).astype(bool)
+    verified_ids = set(
+        local_pred.loc[verified_mask, "feature_snapshot_id"].fillna("").astype(str)
+    ) if "feature_snapshot_id" in local_pred.columns else set()
+    remote_evidence: dict[str, str] = {}
+    remote_invalid: set[str] = set()
+    if feature_log is not None and "feature_snapshot_id" in feature_log.columns:
+        remote_evidence, remote_invalid = cohorts.verify_feature_frame(feature_log)
+        verified_ids.update(remote_evidence)
+        verified_ids.difference_update(remote_invalid)
+
+    if pred_log is None:
+        pred_log = local_pred
+    else:
+        pred_log = pred_log.copy()
+        ids = pred_log.get(
+            "feature_snapshot_id", pd.Series("", index=pred_log.index)
+        ).fillna("").astype(str)
+        expected_hash = pred_log.get(
+            "feature_vector_sha256", pd.Series("", index=pred_log.index)
+        ).fillna("").astype(str).str.strip()
+        evidence_hash = ids.map(remote_evidence if feature_log is not None else {})
+        local_verified = ids.isin(verified_ids)
+        pred_log["feature_snapshot_verified"] = (
+            ids.ne("") & local_verified
+            & (expected_hash.eq("") | evidence_hash.fillna("").eq(expected_hash)
+               | evidence_hash.isna())
+        )
+    if shadow_log is None:
+        shadow_log = cohorts.load_shadow_log(os.path.dirname(__file__))
+    scored = cohorts.build_scored_frame(pred_log, shadow_log)
+    frame = build_live_ledger(scored)
+    if frame.empty:
+        frame = pd.DataFrame(columns=LIVE_COLUMNS)
+    frame["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    frame["metric_source"] = "production.evaluation.ledger"
+    frame["dashboard_row_key"] = (
+        frame.get("tier", pd.Series("", index=frame.index)).astype(str)
+        + ":"
+        + frame.get("model", pd.Series("", index=frame.index)).astype(str)
+    )
+    frame["sync_id"] = sync_id
+    return frame
+
+
+def _write_manifest(cur, *, sync_id: str, status: str,
+                    latest_attempt_run_id: str, accepted_prediction_run_id: str,
+                    counts: dict[str, int], missing_files: list[str], error: str = "") -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dash_sync_manifest (
+            sync_id text PRIMARY KEY,
+            published_at text NOT NULL,
+            status text NOT NULL,
+            pipeline_run_id text,
+            table_counts_json text NOT NULL,
+            missing_files_json text NOT NULL,
+            error_message text
+        )
+    """)
+    cur.execute("ALTER TABLE dash_sync_manifest ADD COLUMN IF NOT EXISTS latest_attempt_run_id text")
+    cur.execute("ALTER TABLE dash_sync_manifest ADD COLUMN IF NOT EXISTS accepted_prediction_run_id text")
+    cur.execute(
+        """INSERT INTO dash_sync_manifest
+           (sync_id,published_at,status,pipeline_run_id,latest_attempt_run_id,
+            accepted_prediction_run_id,table_counts_json,missing_files_json,error_message)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (
+            sync_id, datetime.now(timezone.utc).isoformat(timespec="microseconds"), status,
+            accepted_prediction_run_id, latest_attempt_run_id,
+            accepted_prediction_run_id, json.dumps(counts, sort_keys=True),
+            json.dumps(missing_files), error,
+        ),
+    )
+    _enable_public_read(cur, "dash_sync_manifest")
+
+
+def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
+    """Publish one additive, all-or-nothing dashboard generation."""
+    sync_id = f"sync_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+    planned: dict[str, pd.DataFrame] = {}
+    missing_files: list[str] = []
+    counts: dict[str, int] = {}
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                # Two overlapping runners may both plan from the same old
+                # snapshot. Serialize the read/merge/replace transaction so the
+                # second publisher includes the first publisher's new rows.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                            ("betting-algo-operational-state",))
+                # Plan every table before mutating any of them. Any exception
+                # rolls back the complete publication, preventing mixed eras.
+                for spec in STATE_SPECS:
+                    path = spec.path()
+                    incoming = (
+                        _load_feature_state(path)
+                        if spec.table == "dash_features"
+                        else load_csv(path)
+                    )
+                    existing = read_table(cur, spec.table)
+                    if not path.exists():
+                        missing_files.append(str(path.relative_to(path.parents[1])))
+                    merged = merge_state_frames(existing, incoming, spec)
+                    publish = add_row_keys(merged, spec)
+                    publish["sync_id"] = sync_id
+                    planned[spec.table] = publish
+                    counts[spec.table] = len(publish)
+
+                # Performance is derived, not independently calculated in the
+                # browser. This table uses evaluation.metrics/roi via the ledger.
+                model_metrics = _build_model_metrics(
+                    sync_id,
+                    pred_log=planned.get("dash_predictions"),
+                    shadow_log=planned.get("dash_shadow"),
+                    feature_log=planned.get("dash_features"),
+                )
+                planned["dash_model_metrics"] = model_metrics
+                counts["dash_model_metrics"] = len(model_metrics)
+
+                for table, frame in planned.items():
+                    _replace_table(cur, table, frame)
+                    _enable_public_read(cur, table)
+
+                run_frame = planned.get("dash_runs", pd.DataFrame())
+                snapshot_frame = planned.get("dash_snapshots", pd.DataFrame())
+                status = "degraded" if missing_files else "success"
+                _write_manifest(
+                    cur, sync_id=sync_id, status=status,
+                    latest_attempt_run_id=_latest_run_id(run_frame),
+                    accepted_prediction_run_id=_accepted_prediction_run_id(
+                        run_frame, snapshot_frame
+                    ),
+                    counts=counts,
+                    missing_files=missing_files,
+                )
+            conn.commit()
+    except Exception:
+        # The accepted generation remains unchanged because the transaction is
+        # atomic. Absence of a new manifest is itself an honest stale signal.
+        raise
+
     if verbose:
-        summary = ", ".join(f"{t}={n}" for t, n in counts.items())
-        print(f"   📊 Dashboard sync → Supabase: {summary}")
+        summary = ", ".join(f"{table}={count}" for table, count in counts.items())
+        state = "degraded" if missing_files else "accepted"
+        print(f"   📊 Dashboard sync {state} ({sync_id}): {summary}")
+        if missing_files:
+            print(f"   ⚠️ missing local state files: {', '.join(missing_files)}")
     return counts
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--hydrate", action="store_true",
+                        help="merge durable dashboard state into local CSVs before a runner starts")
+    args = parser.parse_args()
+    if args.hydrate:
+        hydrate_operational_state()
+    else:
+        sync_dashboard_tables()
+
+
 if __name__ == "__main__":
-    sync_dashboard_tables()
+    main()

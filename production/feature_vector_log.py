@@ -1,29 +1,107 @@
-"""Persist each match's full feature vector for the dashboard's detail view.
+"""Persist immutable feature snapshots for dashboard and audit drill-down.
 
-One row per (p1, p2, match_date) — the same join key the dashboard uses.
-Write-once, with a single upgrade: an incomplete vector is replaced by the
-first complete one (mirroring the prediction log's first-complete-wins rule),
-then frozen. Keeps the file at one row per match, not one per run.
+New rows are keyed by ``feature_snapshot_id`` so the dashboard can display the
+exact vector used by a prediction. Legacy rows without an immutable id retain
+the old one-row-per-match upgrade behaviour.
 """
 from __future__ import annotations
 
 import json
 import os
+from hashlib import sha256
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
 
 PATH = os.path.join(os.path.dirname(__file__), "logs", "feature_vectors.csv")
-COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "features_complete",
-        "p1_hand", "p2_hand", "features_json"]
+COLS = ["p1", "p2", "match_date", "logged_at", "run_id", "match_uid",
+        "feature_snapshot_id", "build_status", "features_complete", "p1_hand", "p2_hand",
+        "feature_schema_sha256", "feature_vector_sha256", "feature_count",
+        "features_json"]
+
+
+def feature_validation_issues(features: dict) -> list[str]:
+    """Hard schema/domain checks required before promoted-model inference."""
+    from models.inference import EXACT_141_FEATURES
+
+    missing = [name for name in EXACT_141_FEATURES if name not in features]
+    if missing:
+        return [f"missing:{','.join(missing)}"]
+
+    numeric: dict[str, float] = {}
+    for name in EXACT_141_FEATURES:
+        try:
+            value = float(features[name])
+        except (TypeError, ValueError, OverflowError):
+            return [f"nonnumeric:{name}"]
+        if not math.isfinite(value):
+            return [f"nonfinite:{name}"]
+        numeric[name] = value
+
+    groups = {
+        "surface": [name for name in EXACT_141_FEATURES if name.startswith("Surface_")
+                    and name != "Surface_Transition_Flag"],
+        "level": [name for name in EXACT_141_FEATURES if name.startswith("Level_")],
+        "round": [name for name in EXACT_141_FEATURES if name.startswith("Round_")],
+        "p1_hand": [name for name in EXACT_141_FEATURES if name.startswith("P1_Hand_")],
+        "p2_hand": [name for name in EXACT_141_FEATURES if name.startswith("P2_Hand_")],
+        "p1_country": [name for name in EXACT_141_FEATURES if name.startswith("P1_Country_")],
+        "p2_country": [name for name in EXACT_141_FEATURES if name.startswith("P2_Country_")],
+        "hand_matchup": [name for name in EXACT_141_FEATURES
+                         if name.startswith("Handedness_Matchup_")],
+    }
+    issues: list[str] = []
+    for label, names in groups.items():
+        values = [numeric[name] for name in names]
+        if any(value not in {0.0, 1.0} for value in values):
+            issues.append(f"one_hot_nonbinary:{label}")
+            continue
+        total = sum(values)
+        if label == "hand_matchup":
+            if total not in {0.0, 1.0}:
+                issues.append(f"one_hot_cardinality:{label}:{total:g}")
+        elif total != 1.0:
+            issues.append(f"one_hot_cardinality:{label}:{total:g}")
+    return issues
+
+
+def feature_fingerprint(features: dict) -> tuple[str, str, int]:
+    """Return deterministic schema/content fingerprints for the live 141-vector.
+
+    A lineage ID says which run produced a row; this hash says what the model
+    actually received. Missing or non-finite values intentionally produce an
+    empty content hash so structural failures cannot be presented as exact.
+    """
+    from models.inference import EXACT_141_FEATURES
+
+    schema_hash = sha256("\x1f".join(EXACT_141_FEATURES).encode("utf-8")).hexdigest()
+    if feature_validation_issues(features):
+        return schema_hash, "", len(EXACT_141_FEATURES)
+    vector: list[list[object]] = []
+    try:
+        for name in EXACT_141_FEATURES:
+            if name not in features:
+                return schema_hash, "", len(EXACT_141_FEATURES)
+            value = float(features[name])
+            if not math.isfinite(value):
+                return schema_hash, "", len(EXACT_141_FEATURES)
+            vector.append([name, value])
+        payload = json.dumps(vector, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        return schema_hash, "", len(EXACT_141_FEATURES)
+    return schema_hash, sha256(payload.encode("utf-8")).hexdigest(), len(vector)
 
 
 def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
-                        features: dict, features_complete: bool) -> None:
+                        features: dict, features_complete: bool,
+                        match_uid: str = "", feature_snapshot_id: str = "",
+                        build_status: str = "ok") -> None:
     payload = {k: v for k, v in features.items() if not str(k).startswith("_")}
     payload["_defaulted_features"] = features.get("_defaulted_features", "") or ""
     for dbg in ("_build_ref", "_hist_tail_p1", "_hist_tail_p2", "_regime"):
         if features.get(dbg): payload[dbg] = features[dbg]
+    schema_hash, vector_hash, feature_count = feature_fingerprint(features)
     # surface handedness as first-class columns (dashboard slate badges unknown
     # hand — a missingness proxy the models lean on; see FEATURE_AUDIT.md)
     def _hand(pref):
@@ -35,15 +113,42 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
         "p1": str(p1).strip(), "p2": str(p2).strip(),
         "match_date": str(match_date)[:10],
         "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "run_id": run_id,
-        "features_complete": bool(features_complete),
+        "run_id": run_id, "match_uid": match_uid or "",
+        "feature_snapshot_id": feature_snapshot_id or "",
+        "build_status": build_status or "unknown",
+        # A guard/error row can legitimately have no default labels because no
+        # feature vector was built. Never let that absence masquerade as a
+        # complete, decision-grade snapshot.
+        "features_complete": bool(
+            features_complete and build_status == "ok" and vector_hash
+        ),
         "p1_hand": _hand("P1"), "p2_hand": _hand("P2"),
+        "feature_schema_sha256": schema_hash,
+        "feature_vector_sha256": vector_hash,
+        "feature_count": feature_count,
         "features_json": json.dumps(payload, default=str),
     }
     if os.path.exists(PATH):
         df = pd.read_csv(PATH, dtype=str)
     else:
         df = pd.DataFrame(columns=COLS)
+    for column in COLS:
+        if column not in df.columns:
+            df[column] = ""
+
+    if feature_snapshot_id:
+        # Immutable lineage: a retry of the same run is idempotent, while a
+        # later run receives a new id and remains independently inspectable.
+        if (df["feature_snapshot_id"].fillna("") == feature_snapshot_id).any():
+            return
+        df = pd.concat(
+            [df[COLS], pd.DataFrame([{c: str(row[c]) for c in COLS}])],
+            ignore_index=True,
+        )
+        df.to_csv(PATH, index=False)
+        return
+
+    # Compatibility path for legacy callers without immutable lineage ids.
     mask = (df["p1"] == row["p1"]) & (df["p2"] == row["p2"]) & (df["match_date"] == row["match_date"])
     if mask.any():
         already_complete = str(df.loc[mask, "features_complete"].iloc[0]) in ("True", "true", "1")
@@ -62,5 +167,5 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
         # height stays missing — the panel must show current truth, not the first
         # snapshot); they freeze only once a complete build arrives
         df = df[~mask]
-    df = pd.concat([df, pd.DataFrame([{c: str(row[c]) for c in COLS}])], ignore_index=True)
+    df = pd.concat([df[COLS], pd.DataFrame([{c: str(row[c]) for c in COLS}])], ignore_index=True)
     df.to_csv(PATH, index=False)

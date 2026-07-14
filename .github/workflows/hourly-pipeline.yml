@@ -1,9 +1,9 @@
 name: Hourly betting pipeline
 
 # Paper-trading autonomy: every run logs predictions for the current Bovada
-# slate (features from the canonical Supabase store — no Tennis Abstract),
-# settles pending matches, and commits the updated logs back to the repo so
-# nothing is lost on the ephemeral runner. Odds age is bounded by the cadence.
+# slate (active TA-based features plus canonical-store history), settles
+# pending matches, and publishes an additive durable-state generation before
+# the ephemeral runner exits. Git remains a secondary audit/checkpoint path.
 on:
   workflow_dispatch:
   schedule:
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: results/professional_tennis
-          key: models-v1
+          key: models-v1-${{ hashFiles('production/models/model_registry.json') }}
 
       - name: Download model artifacts (cache miss)
         if: steps.models.outputs.cache-hit != 'true'
@@ -53,11 +53,25 @@ jobs:
           tar -xzf /tmp/models.tar.gz
           rm /tmp/models.tar.gz
 
+      - name: Validate promoted model registry and artifacts
+        # Prevent an immutable Actions cache or stale release asset from
+        # silently serving a different artifact set after a registry change.
+        run: python production/models/validate_registry.py
+
       - name: Configure store credentials
         run: echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env.supabase
 
+      - name: Hydrate durable operational state
+        # A prior run may have synced successfully but lost its git push race.
+        # Merge that durable state before settlement/dedupe decisions begin.
+        run: python production/dashboard_sync.py --hydrate
+
       - name: Run pipeline (paper mode, store-backed features)
         working-directory: production
+        env:
+          # A green cloud run must have published its durable state. Local runs
+          # remain permissive unless this flag is explicitly enabled.
+          REQUIRE_DURABLE_STATE: "1"
         # full paper mode: bets are CSV rows (no real money) and settlement must
         # WRITE results. ITF unskipped 2026-07-09 (store-mode + ITF caching changed
         # the budget math — 35/52 of the board was ITF); revert if runs exceed ~40m
@@ -71,8 +85,18 @@ jobs:
           # -f: production/logs is gitignored locally, but cloud runs MUST persist
           # the shadow predictions + audit trail or they die with the runner VM
           git add -A -f production/prediction_log.csv production/prediction_snapshots.csv \
-                        production/odds_history.csv production/logs data/atp_rankings.csv \
-                        data/atp_heights.json || true
+                        production/odds_history.csv production/logs \
+                        ':(exclude)production/logs/betting.db' data/atp_rankings.csv \
+                        data/atp_heights.json data/atp_hands.json || true
+          # SQLite is a derived local read model. Committing its binary churn
+          # causes avoidable rebase conflicts and it is rebuilt from CSV logs.
+          git restore --worktree production/logs/betting.db || true
+          UNSTAGED=$(git diff --name-only)
+          if [ -n "$UNSTAGED" ]; then
+            echo "::error::unexpected tracked runtime mutations were not checkpointed"
+            echo "$UNSTAGED"
+            exit 1
+          fi
           git diff --cached --quiet && echo "no log changes" && exit 0
           git commit -m "Hourly run: logs $(date -u +%Y-%m-%dT%H:%MZ)"
           # Race-resilient push: a concurrent push (dev session) can conflict the
@@ -94,3 +118,6 @@ jobs:
           BRANCH="runner-logs-$(date -u +%Y%m%dT%H%M%SZ)"
           echo "::warning::push race unresolved after 3 attempts — parking logs on $BRANCH"
           git push origin "HEAD:$BRANCH"
+          # The data is recoverable, but main did not advance. Never paint this
+          # operational failure green.
+          exit 1

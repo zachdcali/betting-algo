@@ -25,6 +25,7 @@ BETS_COLUMNS = [
 
 BANKROLL_COLUMNS = [
     'timestamp', 'session_id', 'bankroll', 'change_amount', 'change_reason',
+    'account_equity', 'pending_exposure', 'available_bankroll',
     'total_staked', 'num_pending_bets', 'num_settled_bets'
 ]
 
@@ -37,8 +38,9 @@ SESSION_COLUMNS = [
 class BetTracker:
     """Track bets, settle results, and maintain bankroll history"""
     
-    def __init__(self, logs_dir: str = "./logs"):
+    def __init__(self, logs_dir: str = "./logs", initial_bankroll: float = 1000.0):
         self.logs_dir = Path(logs_dir)
+        self.initial_bankroll = float(initial_bankroll)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
         # File paths
@@ -57,7 +59,7 @@ class BetTracker:
     
     def start_session(self, initial_bankroll: float, kelly_multiplier: float, notes: str = "") -> str:
         """Start a new betting session"""
-        session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # Add to sessions file
@@ -90,6 +92,35 @@ class BetTracker:
         print(f"   Kelly multiplier: {kelly_multiplier:.1%}")
         
         return session_id
+
+    def discard_empty_session(self, session_id: str) -> bool:
+        """Remove a just-created session when dedupe produced zero new bets.
+
+        This keeps sessions and bankroll events aligned with actual paper
+        exposure. Refuse to remove anything once a bet references the session.
+        """
+        bets = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        if (bets.get('session_id', pd.Series('', index=bets.index)).fillna('').astype(str)
+                == str(session_id)).any():
+            return False
+
+        sessions = ensure_csv_columns(self.session_file, SESSION_COLUMNS)
+        session_mask = (
+            sessions.get('session_id', pd.Series('', index=sessions.index))
+            .fillna('').astype(str) == str(session_id)
+        )
+        if not session_mask.any():
+            return False
+        sessions.loc[~session_mask].to_csv(self.session_file, index=False)
+
+        bankroll = ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS)
+        bankroll_mask = (
+            bankroll.get('session_id', pd.Series('', index=bankroll.index))
+            .fillna('').astype(str) == str(session_id)
+        )
+        bankroll.loc[~bankroll_mask].to_csv(self.bankroll_file, index=False)
+        print(f"🧹 Removed empty betting session: {session_id}")
+        return True
     
     def log_bets(self, bet_slips_df: pd.DataFrame, session_id: str, current_bankroll: float):
         """Log new bets from bet slips"""
@@ -179,17 +210,33 @@ class BetTracker:
             print(f"📝 No new bets logged ({skipped_duplicates} duplicate pending bet(s) skipped)")
             self._refresh_session_record(session_id)
             return 0
+
+        # Enforce the portfolio invariant at the write boundary as well as in
+        # the allocator. This closes the gap for direct callers and fails the
+        # whole batch rather than partially recording a differently sized book.
+        requested_exposure = sum(float(bet['stake']) for bet in bet_records)
+        available_capital = self.get_available_bankroll()
+        if (not np.isfinite(requested_exposure) or requested_exposure <= 0
+                or requested_exposure > available_capital + 1e-9):
+            print(
+                f"🛑 Refusing bet batch: requested ${requested_exposure:.2f}, "
+                f"only ${available_capital:.2f} unreserved"
+            )
+            self._refresh_session_record(session_id)
+            return 0
         
         # Append to all bets file
         new_bets_df = pd.DataFrame(bet_records)
         all_bets_df = pd.concat([all_bets_df, new_bets_df], ignore_index=True)
         all_bets_df.to_csv(self.bets_file, index=False)
         
-        # Update bankroll with total staked
-        total_staked = sum(bet['stake'] for bet in bet_records)
-        new_bankroll = current_bankroll  # Bankroll doesn't decrease until bet settles
-        self.log_bankroll_change(session_id, new_bankroll, -total_staked, 
-                                f"Placed {len(bet_records)} bets")
+        # Placement reserves exposure but does not change account equity.
+        total_staked = requested_exposure
+        account_equity = self.get_current_bankroll()
+        self.log_bankroll_change(
+            session_id, account_equity, 0.0,
+            f"Reserved ${total_staked:.2f} for {len(bet_records)} pending bets",
+        )
         self._refresh_session_record(session_id)
         
         print(f"📝 Logged {len(bet_records)} new bets")
@@ -226,6 +273,10 @@ class BetTracker:
             actual_profit = -bet['stake']
             outcome = 'loss'
         
+        # Capture equity before changing the row to settled. Once saved,
+        # get_current_bankroll() will already include this result.
+        equity_before = self.get_current_bankroll()
+
         # Update bet record
         all_bets_df.loc[idx, 'status'] = 'settled'
         all_bets_df.loc[idx, 'outcome'] = outcome
@@ -234,8 +285,7 @@ class BetTracker:
         all_bets_df.loc[idx, 'notes'] = notes
         
         # Calculate new bankroll
-        current_bankroll = self.get_current_bankroll()
-        new_bankroll = current_bankroll + actual_profit
+        new_bankroll = equity_before + actual_profit
         all_bets_df.loc[idx, 'bankroll_after'] = new_bankroll
         
         # Save updated bets
@@ -269,19 +319,28 @@ class BetTracker:
         """Log a bankroll change"""
         bankroll_df = pd.read_csv(self.bankroll_file)
         
-        # Count pending and settled bets
-        all_bets_df = pd.read_csv(self.bets_file)
-        session_bets = all_bets_df[all_bets_df['session_id'] == session_id]
-        num_pending = len(session_bets[session_bets['status'] == 'pending'])
-        num_settled = len(session_bets[session_bets['status'] == 'settled'])
-        total_staked = session_bets['stake'].sum()
+        # Account fields are global across sessions; sessions are reporting
+        # slices, not independent bankroll resets.
+        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        status = all_bets_df['status'].fillna('').astype(str).str.lower()
+        pending = all_bets_df[status == 'pending']
+        settled = all_bets_df[status == 'settled']
+        pending_exposure = pd.to_numeric(pending['stake'], errors='coerce').fillna(0).sum()
+        account_equity = self.get_current_bankroll()
+        available = max(0.0, account_equity - float(pending_exposure))
+        num_pending = len(pending)
+        num_settled = len(settled)
+        total_staked = pd.to_numeric(all_bets_df['stake'], errors='coerce').fillna(0).sum()
         
         bankroll_record = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'session_id': session_id,
-            'bankroll': new_bankroll,
+            'bankroll': account_equity,
             'change_amount': change_amount,
             'change_reason': reason,
+            'account_equity': account_equity,
+            'pending_exposure': pending_exposure,
+            'available_bankroll': available,
             'total_staked': total_staked,
             'num_pending_bets': num_pending,
             'num_settled_bets': num_settled
@@ -291,16 +350,30 @@ class BetTracker:
         bankroll_df.to_csv(self.bankroll_file, index=False)
     
     def get_current_bankroll(self) -> float:
-        """Get the current bankroll amount"""
-        bankroll_df = pd.read_csv(self.bankroll_file)
-        if bankroll_df.empty:
-            return 1000.0  # Default
-        return float(bankroll_df.iloc[-1]['bankroll'])
+        """Return account equity from initial capital plus settled net P&L."""
+        bets = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        if bets.empty:
+            return self.initial_bankroll
+        status = bets['status'].fillna('').astype(str).str.lower()
+        settled_profit = pd.to_numeric(
+            bets.loc[status == 'settled', 'actual_profit'], errors='coerce'
+        ).fillna(0).sum()
+        return self.initial_bankroll + float(settled_profit)
+
+    def get_pending_exposure(self) -> float:
+        pending = self.get_pending_bets()
+        if pending.empty:
+            return 0.0
+        return float(pd.to_numeric(pending['stake'], errors='coerce').fillna(0).sum())
+
+    def get_available_bankroll(self) -> float:
+        return max(0.0, self.get_current_bankroll() - self.get_pending_exposure())
     
     def get_pending_bets(self) -> pd.DataFrame:
         """Get all pending bets"""
-        all_bets_df = pd.read_csv(self.bets_file)
-        return all_bets_df[all_bets_df['status'] == 'pending']
+        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        status = all_bets_df['status'].fillna('').astype(str).str.strip().str.lower()
+        return all_bets_df[status == 'pending']
     
     def get_session_summary(self, session_id: str) -> Dict:
         """Get summary statistics for a session"""
@@ -393,8 +466,17 @@ class BetTracker:
 
         settled = 0
         auto_note = notes or "Auto-settled from Tennis Abstract"
+        def _as_bool(value) -> bool:
+            if isinstance(value, (bool, np.bool_)):
+                return bool(value)
+            return str(value).strip().lower() in {'true', '1', 'yes', 'y'}
+
         for _, bet in candidates.iterrows():
-            won = bool((actual_winner == 1 and bool(bet['bet_on_player1'])) or (actual_winner == 2 and not bool(bet['bet_on_player1'])))
+            bet_on_player1 = _as_bool(bet['bet_on_player1'])
+            won = bool(
+                (actual_winner == 1 and bet_on_player1)
+                or (actual_winner == 2 and not bet_on_player1)
+            )
             self.settle_bet(bet['bet_id'], won=won, notes=auto_note)
             settled += 1
 

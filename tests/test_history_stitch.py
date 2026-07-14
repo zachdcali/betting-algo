@@ -12,7 +12,9 @@ import pytest
 from features.history_stitch import (
     activity_to_ta_schema,
     active_event_for,
+    cache_event_ingest_metadata,
     event_results_to_ta_schema,
+    get_active_events,
     needs_stitching,
     stitch_history,
 )
@@ -119,6 +121,102 @@ def test_needs_stitching_thresholds():
 def test_active_event_window():
     assert active_event_for("2026-07-05")["event"] == "Wimbledon"
     assert active_event_for("2026-08-20") is None
+
+
+def test_monday_guessed_event_date_is_quarantined_from_canonical_ingest(monkeypatch):
+    """A stale live-hub event may still help resolve a round, but its ref-week
+    Monday must not be exposed through the metadata cache consumed by ingest."""
+    # history_stitch supports both package and production-script import modes;
+    # patch the same module alias it will resolve in this test process.
+    import importlib
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    url = "https://www.atptour.com/en/scores/current/wimbledon/540/results"
+    monkeypatch.setattr(
+        atp_results_scraper,
+        "discover_active_events",
+        lambda: [{"event": "Wimbledon", "slug": "wimbledon", "id": "540",
+                  "url": url, "level": "A", "surface": ""}],
+    )
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame()},
+    }
+
+    [event] = get_active_events("2026-07-14", cache)
+
+    assert event["start_date"] == "2026-07-13"
+    assert event["date_verified"] is False
+    assert event["date_source"] == "ref_week_monday_guess"
+    assert cache_event_ingest_metadata(cache, event) is False
+    assert url not in cache["atp_event_meta"]
+    assert cache["atp_event_meta_quarantine"][url]["start_date"] == "2026-07-13"
+
+
+def test_calendar_date_upgrades_discovered_event_for_canonical_ingest(monkeypatch):
+    import importlib
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    url = "https://www.atptour.com/en/scores/current/example/999/results"
+    monkeypatch.setattr(
+        atp_results_scraper,
+        "discover_active_events",
+        lambda: [{"event": "Example Open", "slug": "example", "id": "999",
+                  "url": url, "level": "C", "surface": "Hard"}],
+    )
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame([{
+            "event": "Example Open", "slug": "example", "id": "999", "url": url,
+            "start_date": "2026-07-13",
+        }])},
+        "atp_tour_calendar": {"df": pd.DataFrame()},
+    }
+
+    [event] = get_active_events("2026-07-14", cache)
+
+    assert event["date_verified"] is True
+    assert event["date_source"] == "challenger_calendar"
+    assert cache_event_ingest_metadata(cache, event) is True
+    assert cache["atp_event_meta"][url]["start_date"] == "2026-07-13"
+    assert url not in cache["atp_event_meta_quarantine"]
+
+
+def test_tour_calendar_replaces_hub_monday_guess(monkeypatch):
+    import importlib
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    url = "https://www.atptour.com/en/scores/current/example/999/results"
+    monkeypatch.setattr(
+        atp_results_scraper,
+        "discover_active_events",
+        lambda: [{"event": "Example Open", "slug": "example", "id": "999",
+                  "url": url, "level": "A", "surface": ""}],
+    )
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame([{
+            "event": "Example Open", "slug": "example", "id": "999", "url": url,
+            "start_date": "2026-07-12", "surface": "Hard",
+        }])},
+    }
+
+    [event] = get_active_events("2026-07-14", cache)
+
+    assert event["start_date"] == "2026-07-12"
+    assert event["surface"] == "Hard"
+    assert event["date_verified"] is True
+    assert event["date_source"] == "tour_calendar"
+    assert cache_event_ingest_metadata(cache, event) is True
+    assert cache["atp_event_meta"][url]["start_date"] == "2026-07-12"
 
 
 def test_infer_next_round():

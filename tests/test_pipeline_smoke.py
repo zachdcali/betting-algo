@@ -10,6 +10,7 @@ and staking methods directly rather than run_full_pipeline).
 Settlement is validated separately by the live run, since enriching from
 Tennis Abstract requires network access.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -56,8 +57,19 @@ def _canned_odds() -> pd.DataFrame:
 
 
 @pytest.fixture(scope="module")
-def orchestrator():
-    return LiveBettingOrchestrator()
+def orchestrator(tmp_path_factory):
+    """Keep constructor-time schema migration away from operational logs."""
+    temp_dir = tmp_path_factory.mktemp("pipeline_smoke")
+    config_path = temp_dir / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "logs_dir": str(temp_dir / "logs"),
+            "data_dir": str(REPO_ROOT / "data"),
+            "performance_shadow_enabled": False,
+        }),
+        encoding="utf-8",
+    )
+    return LiveBettingOrchestrator(str(config_path))
 
 
 def test_all_three_models_load_and_predict(orchestrator):
@@ -99,7 +111,10 @@ def test_incomplete_feature_matches_are_never_bet(orchestrator):
         dict(player1_raw="Incomplete B", player2_raw="Opp Beta", player1_odds_decimal=2.0, player2_odds_decimal=2.0,
              player1_implied_prob=0.5, player2_implied_prob=0.5, event="Test Open", match_time="2026-06-30 10:00"),
     ])
-    slips = orchestrator.calculate_edges_and_stakes(preds, odds)
+    # Isolate feature eligibility from the real local paper-account backlog.
+    slips = orchestrator.calculate_edges_and_stakes(
+        preds, odds, bankroll=1000.0, available_bankroll=1000.0,
+    )
     blob = slips.to_csv(index=False) if not slips.empty else ""
     # complete match (strong edge) is bet; incomplete match is excluded entirely
     assert "Complete A" in blob, "complete-feature match should be bettable"

@@ -45,7 +45,8 @@ COLUMNS = [
     'logging_schema_version', 'logging_quality', 'rescore_quality',
     'record_status', 'record_note',
     'features_complete', 'defaulted_features',
-    'odds_scraped_at', 'match_start_time',
+    'feature_schema_sha256', 'feature_vector_sha256',
+    'odds_scraped_at', 'match_start_time', 'match_start_at_utc',
     'p1_hand', 'p2_hand',
     'actual_winner', 'score', 'settled_at', 'model_correct', 'market_correct',
     'xgb_correct',
@@ -57,7 +58,7 @@ COLUMNS = [
     'latest_logged_at', 'latest_model_version_seen',
     'latest_nn_model_version_seen', 'latest_xgb_model_version_seen', 'latest_rf_model_version_seen',
     'latest_nn_probability_source_seen',
-    'latest_odds_scraped_at', 'latest_match_start_time', 'latest_match_date',
+    'latest_odds_scraped_at', 'latest_match_start_time', 'latest_match_start_at_utc', 'latest_match_date',
 ]
 
 SNAPSHOT_COLUMNS = [
@@ -79,7 +80,8 @@ SNAPSHOT_COLUMNS = [
     'logging_schema_version', 'logging_quality', 'rescore_quality',
     'record_status', 'record_note',
     'features_complete', 'defaulted_features',
-    'odds_scraped_at', 'match_start_time',
+    'feature_schema_sha256', 'feature_vector_sha256',
+    'odds_scraped_at', 'match_start_time', 'match_start_at_utc',
     'actual_winner', 'score', 'settled_at', 'model_correct', 'market_correct',
     'xgb_correct', 'rf_correct',
     'snapshot_role',
@@ -99,6 +101,7 @@ ODDS_HISTORY_COLUMNS = [
     'p2',
     'odds_scraped_at',
     'match_start_time',
+    'match_start_at_utc',
     'market_p1_prob',
     'market_p2_prob',
     'p1_odds_american',
@@ -167,7 +170,10 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
     snapshot-based rows from older fallback-only history.
     """
     target = path or Path(LOG_PATH)
-    df = ensure_csv_columns(target, COLUMNS)
+    # The log mixes numeric and textual columns. Use object storage while
+    # upgrading so filling newly-added identifiers/status strings cannot rely
+    # on pandas' deprecated implicit dtype widening.
+    df = ensure_csv_columns(target, COLUMNS).astype(object)
 
     nn_current, xgb_current, rf_current = _load_registry_versions()
 
@@ -242,7 +248,8 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
             age_days = (pd.Timestamp.now() - effective_dt).days
 
         has_model_prediction = pd.notna(row.get('model_p1_prob'))
-        is_settled = pd.notna(row.get('actual_winner'))
+        winner = pd.to_numeric(row.get('actual_winner'), errors='coerce')
+        is_settled = winner in (1, 2)
         if is_settled:
             status = 'settled'
             note = ''
@@ -286,6 +293,8 @@ def upgrade_prediction_log(path: Path | None = None, stale_days: int = 7, write:
             df.at[idx, 'latest_odds_scraped_at'] = row.get('odds_scraped_at', '')
         if not _clean_text(row.get('latest_match_start_time', '')):
             df.at[idx, 'latest_match_start_time'] = row.get('match_start_time', '')
+        if not _clean_text(row.get('latest_match_start_at_utc', '')):
+            df.at[idx, 'latest_match_start_at_utc'] = row.get('match_start_at_utc', '')
 
     if 'features_complete' in df.columns:
         df['features_complete'] = _coerce_bool_series(df['features_complete'], default=False)
@@ -318,11 +327,14 @@ def log_prediction(
     nn_probability_source: str = None,
     odds_scraped_at: str = None,
     match_start_time: str = None,
+    match_start_at_utc: str = None,
     actual_winner: int = None, score: str = None,
     features_complete: bool = False,
     p1_hand: str = '',
     p2_hand: str = '',
     defaulted_features: str = '',
+    feature_schema_sha256: str = '',
+    feature_vector_sha256: str = '',
     allow_update: bool = True,
 ):
     """
@@ -355,17 +367,19 @@ def log_prediction(
     logged_at = datetime.now().isoformat()
     prediction_uid = build_prediction_uid(match_uid or '', model_version, logged_at, p1, p2)
 
-    settled_at = datetime.now().isoformat() if actual_winner is not None else None
+    valid_winner = actual_winner in (1, 2)
+    settled_at = datetime.now().isoformat() if valid_winner else None
     model_correct = None
     market_correct = None
     xgb_correct = None
     rf_correct = None
-    if actual_winner is not None and model_p1_prob is not None:
+    if valid_winner and model_p1_prob is not None:
         model_correct = int((actual_winner == 1) == (model_p1_prob > 0.5))
-        market_correct = int((actual_winner == 1) == (market_p1_prob > 0.5))
-    if actual_winner is not None and xgb_p1_prob is not None:
+        if market_p1_prob is not None:
+            market_correct = int((actual_winner == 1) == (market_p1_prob > 0.5))
+    if valid_winner and xgb_p1_prob is not None:
         xgb_correct = int((actual_winner == 1) == (xgb_p1_prob > 0.5))
-    if actual_winner is not None and rf_p1_prob is not None:
+    if valid_winner and rf_p1_prob is not None:
         rf_correct = int((actual_winner == 1) == (rf_p1_prob > 0.5))
 
     row = {
@@ -406,14 +420,17 @@ def log_prediction(
         'logging_schema_version': SCHEMA_VERSION if (run_id and feature_snapshot_id) else 'legacy_v1',
         'logging_quality': 'snapshot_v2' if (run_id and feature_snapshot_id) else 'legacy_backfilled',
         'rescore_quality': 'exact_feature_snapshot' if feature_snapshot_id else 'legacy_fallback_match',
-        'record_status': 'settled' if actual_winner is not None else 'pending',
+        'record_status': 'settled' if valid_winner else 'pending',
         'record_note': '',
         'features_complete': features_complete,
         'p1_hand': p1_hand,
         'p2_hand': p2_hand,
         'defaulted_features': defaulted_features or '',
+        'feature_schema_sha256': feature_schema_sha256 or '',
+        'feature_vector_sha256': feature_vector_sha256 or '',
         'odds_scraped_at': odds_scraped_at,
         'match_start_time': match_start_time,
+        'match_start_at_utc': match_start_at_utc,
         'actual_winner': actual_winner,
         'score': score,
         'settled_at': settled_at,
@@ -436,6 +453,7 @@ def log_prediction(
         'latest_nn_probability_source_seen': nn_probability_source or '',
         'latest_odds_scraped_at': odds_scraped_at,
         'latest_match_start_time': match_start_time,
+        'latest_match_start_at_utc': match_start_at_utc,
         'latest_match_date': match_date_str,
     }
 
@@ -478,6 +496,7 @@ def log_prediction(
             'p2': p2,
             'odds_scraped_at': odds_scraped_at,
             'match_start_time': match_start_time,
+            'match_start_at_utc': match_start_at_utc,
             'market_p1_prob': round(market_p1_prob, 4) if market_p1_prob is not None else None,
             'market_p2_prob': round(market_p2_prob, 4) if market_p2_prob is not None else None,
             'p1_odds_american': p1_odds_american,
@@ -562,7 +581,7 @@ def log_prediction(
                                    'edge_p1', 'primary_model_family', 'model_version', 'nn_model_version',
                                    'xgb_model_version', 'rf_model_version', 'nn_probability_source',
                                    'p1_rank', 'p2_rank',
-                                   'odds_scraped_at', 'match_start_time',
+                                   'odds_scraped_at', 'match_start_time', 'match_start_at_utc',
                                    'run_id', 'feature_snapshot_id', 'prediction_uid'}
                 if existing_complete and not upgrading_to_complete and not regime_refresh:
                     # Row is frozen at its first COMPLETE prediction. A later run
@@ -588,8 +607,9 @@ def log_prediction(
                 df.at[idx, 'latest_prediction_uid'] = prediction_uid
                 df.at[idx, 'latest_odds_scraped_at'] = odds_scraped_at
                 df.at[idx, 'latest_match_start_time'] = match_start_time
+                df.at[idx, 'latest_match_start_at_utc'] = match_start_at_utc
                 df.at[idx, 'latest_match_date'] = match_date_str
-                df.at[idx, 'record_status'] = 'settled' if actual_winner is not None else 'pending'
+                df.at[idx, 'record_status'] = 'settled' if valid_winner else 'pending'
                 if feature_snapshot_id:
                     df.at[idx, 'logging_schema_version'] = SCHEMA_VERSION
                     df.at[idx, 'logging_quality'] = 'snapshot_v2'

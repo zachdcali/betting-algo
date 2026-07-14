@@ -75,7 +75,13 @@ def build_database(prod_dir: str, db_path: str) -> dict:
             if not os.path.exists(path):
                 summary[table] = 0
                 continue
-            df = pd.read_csv(path, low_memory=False)
+            if table == "predictions":
+                # Enrich GOLD lineage with referential feature-snapshot
+                # verification so CSV and SQLite ledger paths stay identical.
+                from evaluation.cohorts import load_prediction_log
+                df = load_prediction_log(prod_dir)
+            else:
+                df = pd.read_csv(path, low_memory=False)
             _load_table(conn, table, df, key)
             summary[table] = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
     finally:

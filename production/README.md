@@ -15,6 +15,7 @@ The active production path is:
 5. Calculate Kelly stakes with `utils/stake_calculator.py`
 6. Log predictions and odds history with `prediction_logger.py`
 7. Auto-settle results from Tennis Abstract with `auto_settle.py`
+8. Publish a manifest-versioned durable state generation with `dashboard_sync.py`
 
 ## Logging Model
 
@@ -57,6 +58,20 @@ Supporting run artifacts:
   Bankroll changes over time
 - `logs/betting_sessions.csv`
   Session summaries
+
+Durability and presentation:
+
+- Supabase `dash_*` tables are an additive recovery bridge for the ephemeral
+  runner. `dashboard_sync.py --hydrate` runs before the pipeline; terminal
+  state is published transactionally afterward. `dash_sync_manifest` identifies
+  the accepted generation and exact row counts.
+- `logs/betting.db` is a derived SQLite read model, not hot persistence and not
+  an hourly commit artifact.
+- Paper sizing uses persistent account equity (starting capital plus settled
+  P&L), reserves every pending stake across sessions, and caps new exposure at
+  5% per bet, 18% per run, and remaining available capital.
+- `docs/index.html` is the public dashboard. It pins every request to one
+  manifest generation. `dashboard/app.py` remains the local forensic dashboard.
 
 ## Model Artifacts
 
@@ -108,3 +123,6 @@ tennis_env/bin/streamlit run dashboard/app.py
   `opponent_not_found`.
 - The dashboard under `dashboard/` reads `prediction_log.csv` for settled performance, `prediction_snapshots.csv` and `odds_history.csv` for live lineage, and the audit CSVs when they exist.
 - `performance_v1` shadow logging is allowed as experiment evidence, but it stays outside the production registry and outside the operational betting log until explicitly promoted.
+- Retraining/promotion is currently gated on reviewed canonical-history and
+  player-identity cleanup plus exact train/serve feature parity. See the
+  production readiness audit before building 2025/2026 artifacts.

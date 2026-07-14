@@ -11,7 +11,8 @@ from collections import Counter
 import pandas as pd
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import os
 
 # Add production modules to path
@@ -44,6 +45,21 @@ from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
 from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 
+BOVADA_TIMEZONE = ZoneInfo("America/New_York")
+
+
+def prediction_terminal_status(predictions: pd.DataFrame) -> tuple[str, int, int]:
+    """Return terminal health plus success/error counts for inference output."""
+    total = len(predictions)
+    if total == 0:
+        return "no_predictions", 0, 0
+    if "prediction_status" not in predictions.columns:
+        return "success", total, 0
+    success = int((predictions["prediction_status"] == "success").sum())
+    errors = total - success
+    if success == 0:
+        return "no_predictions", 0, errors
+    return ("partial" if errors else "success"), success, errors
 
 
 def _atp_live_surface(event_label: str, session_cache: dict):
@@ -104,10 +120,15 @@ class LiveBettingOrchestrator:
         )
         self.logs_dir = Path(self.config.get('logs_dir', './logs'))
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.bet_tracker = BetTracker(str(self.logs_dir))
+        self.bet_tracker = BetTracker(
+            str(self.logs_dir), initial_bankroll=self.config.get('bankroll', 1000.0)
+        )
         self.feature_engine = TAFeatureCalculator()
         self.performance_shadow_enabled = bool(self.config.get('performance_shadow_enabled', True))
         self.performance_shadow_predictor = PerformanceV1ShadowEnsemble()
+        # One cache per run.  Prefetch warms this before feature extraction;
+        # extract_features must reuse it rather than replacing it.
+        self._session_cache = {}
         self.run_id = None
         self.run_started_at = None
         self.run_metrics = {}
@@ -122,6 +143,7 @@ class LiveBettingOrchestrator:
         started = utc_now()
         self.run_id = make_run_id(started)
         self.run_started_at = started.replace(microsecond=0).isoformat()
+        self._session_cache = {}
         self.run_metrics = {
             'run_id': self.run_id,
             'run_kind': 'prediction_pipeline',
@@ -149,6 +171,17 @@ class LiveBettingOrchestrator:
             'settlement_newly_settled': 0,
             'settlement_auto_settled_bets': 0,
             'settlement_reason_summary': {},
+            'auto_settle_status': 'not_started',
+            'auto_settle_error': '',
+            'canonical_ingest_status': 'not_started',
+            'canonical_ingest_rows': 0,
+            'canonical_ingest_error': '',
+            'reconcile_status': 'not_started',
+            'reconcile_error': '',
+            'account_equity': 0,
+            'pending_exposure': 0,
+            'available_bankroll': 0,
+            'exposure_gate_status': 'not_checked',
             'performance_shadow_attempts': 0,
             'performance_shadow_logged': 0,
             'performance_shadow_models_loaded': 0,
@@ -172,6 +205,17 @@ class LiveBettingOrchestrator:
             payload['completed_at'] = completed_at
             self.run_metrics['completed_at'] = completed_at
         upsert_run_history(payload)
+
+    def _persist_run_state(self, status: str | None = None, error_message: str = ""):
+        """Write run metadata before publishing the state snapshot.
+
+        The old order synced the dashboard first and only then marked the run
+        complete, leaving every mirrored run stuck at ``running`` with its
+        initial zero counters.  This ordering also provides an explicit
+        checkpoint after settlement, before slower scraping starts.
+        """
+        self._flush_run_history(status=status, error_message=error_message)
+        self._refresh_database()
 
     @staticmethod
     def parse_match_date(match_time_str: str) -> datetime:
@@ -197,7 +241,12 @@ class LiveBettingOrchestrator:
         if not match_time_str or match_time_str == "Unknown":
             return None
 
-        now = now or datetime.now()
+        # The browser is pinned to America/New_York, so relative labels and
+        # absolute clocks must be interpreted in that same display zone on
+        # every machine (including UTC GitHub runners).
+        now = now or datetime.now(BOVADA_TIMEZONE).replace(tzinfo=None)
+        if now.tzinfo is not None:
+            now = now.astimezone(BOVADA_TIMEZONE).replace(tzinfo=None)
         text = str(match_time_str).strip()
 
         for fmt in ("%m/%d/%y %I:%M %p", "%m/%d/%Y %I:%M %p", "%m/%d/%y", "%m/%d/%Y"):
@@ -268,6 +317,14 @@ class LiveBettingOrchestrator:
 
         return None
 
+    @staticmethod
+    def match_start_at_utc(match_time_str: str) -> str:
+        parsed = LiveBettingOrchestrator.parse_match_start_datetime(match_time_str)
+        if parsed is None:
+            return ""
+        eastern = parsed.replace(tzinfo=BOVADA_TIMEZONE)
+        return eastern.astimezone(timezone.utc).isoformat(timespec="seconds")
+
     def get_inference_guard_reason(self, match_time_str: str) -> tuple[datetime | None, str]:
         """
         Return a skip reason when a match is too close to start or already in progress.
@@ -277,11 +334,14 @@ class LiveBettingOrchestrator:
         """
         start_dt = self.parse_match_start_datetime(match_time_str)
         if start_dt is None:
-            return None, ""
+            # Without a scheduled start we cannot prove this is pre-match.
+            # Skip before touching player history so a completed/current match
+            # can never leak into its own feature vector.
+            return None, "match_start_time_missing"
 
         buffer_minutes = int(self.config.get('pre_match_inference_buffer_minutes', 5))
         cutoff = start_dt - timedelta(minutes=buffer_minutes)
-        now = datetime.now()
+        now = datetime.now(BOVADA_TIMEZONE).replace(tzinfo=None)
         if now >= start_dt:
             return start_dt, "scheduled_start_passed"
         if now >= cutoff:
@@ -388,11 +448,10 @@ class LiveBettingOrchestrator:
 
         print("🔧 Extracting features from Tennis Abstract...")
 
-        # Shared session cache: avoids duplicate TA requests within a single run.
-        # Kept on self so post-run hooks can ingest fetched event results into
-        # the canonical store without refetching.
-        session_cache = {}
-        self._session_cache = session_cache
+        # Shared session cache: prefetch has already warmed this object.  Keep
+        # it on self so post-run hooks can ingest fetched event results without
+        # refetching.
+        session_cache = self._session_cache
 
         # Filter out futures/outrights before feature extraction
         odds_df = odds_df[~odds_df.apply(
@@ -530,13 +589,21 @@ class LiveBettingOrchestrator:
                     # A match with no identifiable tournament can't have its
                     # surface/level verified — never silently bettable (JJ Wolf
                     # was showing complete with tournament=None).
-                    if not str(row.get('event', '')).strip() and not str(tournament or '').strip():
+                    event_label = row.get('event', '')
+                    if pd.isna(event_label) or not str(event_label).strip():
                         _d = features.get('_defaulted_features') or ''
                         features['_defaulted_features'] = (_d + ',' if _d else '') + 'tournament=missing'
+                    if match_start_dt is None:
+                        _d = features.get('_defaulted_features') or ''
+                        features['_defaulted_features'] = (_d + ',' if _d else '') + 'match_start_time=missing'
                     # features_complete=False if ANY meaningful feature was defaulted
                     # (includes ATP points fallback, round=None, structural defaults)
                     has_defaulted = bool(features.get('_defaulted_features', ''))
-                    status = "ok"
+                    if match_start_dt is None:
+                        status = "skip"
+                        status_detail = "match_start_time_missing"
+                    else:
+                        status = "ok"
             except UnsafeToInferError as e:
                 print(f"      ⏭️  Skipping pre-match inference for {p1} vs {p2} — {e}")
                 features = {}
@@ -558,6 +625,22 @@ class LiveBettingOrchestrator:
                 features['_defaulted_features'] = f"{existing_defaults},{missing_str}" if existing_defaults else missing_str
                 has_defaulted = True
             ordered_features = {k: features.get(k, 0.0) for k in EXACT_141_FEATURES}
+            from feature_vector_log import feature_fingerprint, feature_validation_issues
+            structural_issues = feature_validation_issues(ordered_features)
+            if status == "ok" and structural_issues:
+                status = "skip"
+                status_detail = "feature_schema_invalid:" + ";".join(structural_issues)
+                has_defaulted = True
+                existing_defaults = features.get('_defaulted_features', '')
+                marker = "structural_validation"
+                features['_defaulted_features'] = (
+                    f"{existing_defaults},{marker}" if existing_defaults else marker
+                )
+            feature_schema_sha256, feature_vector_sha256, feature_count = (
+                feature_fingerprint(ordered_features)
+                if status == "ok"
+                else ("", "", len(EXACT_141_FEATURES))
+            )
 
             resolved_round = features.get('_resolved_round_code') or round_code or ''
             resolved_match_date = features.get('_resolved_match_date') or ''
@@ -635,6 +718,9 @@ class LiveBettingOrchestrator:
                 'match_id': idx,
                 'match_uid': match_uid,
                 'feature_snapshot_id': feature_snapshot_id,
+                'feature_schema_sha256': feature_schema_sha256,
+                'feature_vector_sha256': feature_vector_sha256,
+                'feature_count': feature_count,
                 'player1_raw': row.get('player1_raw', p1),
                 'player2_raw': row.get('player2_raw', p2),
                 'event': row.get('event', ''),
@@ -668,6 +754,7 @@ class LiveBettingOrchestrator:
                     match_date=resolved_match_date,
                     match_start_time=row.get('match_time', ''),
                     match_start_dt_local=match_start_dt.isoformat() if match_start_dt else '',
+                    match_start_at_utc=self.match_start_at_utc(row.get('match_time', '')),
                     odds_scraped_at=row.get('scrape_time_utc', '') or row.get('timestamp', ''),
                     tournament=row.get('tourney_name', '') or row.get('event', ''),
                     event_title=row.get('event', ''),
@@ -680,17 +767,21 @@ class LiveBettingOrchestrator:
                     defaulted_features=features.get('_defaulted_features', '') or '',
                 )
 
-            try:
-                from feature_audit import validate_features
-                validate_features(features, p1, p2, self.run_metrics.get('run_id', ''))
-            except Exception as _fa_exc:
-                print(f"      ⚠️ feature audit failed (non-fatal): {_fa_exc}")
+            if status == "ok":
+                try:
+                    from feature_audit import validate_features
+                    validate_features(features, p1, p2, self.run_metrics.get('run_id', ''))
+                except Exception as _fa_exc:
+                    print(f"      ⚠️ feature audit failed (non-fatal): {_fa_exc}")
             try:
                 from feature_vector_log import save_feature_vector
                 features['_regime'] = MODEL_VERSION  # regime bump unfreezes complete vectors
-                save_feature_vector(p1, p2, match_date, self.run_metrics.get('run_id', ''),
+                save_feature_vector(p1, p2, resolved_match_date, self.run_metrics.get('run_id', ''),
                                     features,
-                                    not bool(features.get('_defaulted_features', '')))
+                                    status == "ok" and not bool(features.get('_defaulted_features', '')),
+                                    match_uid=match_uid,
+                                    feature_snapshot_id=feature_snapshot_id,
+                                    build_status=status)
             except Exception as _fv_exc:
                 print(f"      ⚠️ feature-vector log failed (non-fatal): {_fv_exc}")
 
@@ -772,7 +863,10 @@ class LiveBettingOrchestrator:
 
         return predictions_df
     
-    def calculate_edges_and_stakes(self, predictions_df: pd.DataFrame, odds_df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_edges_and_stakes(self, predictions_df: pd.DataFrame,
+                                   odds_df: pd.DataFrame,
+                                   bankroll: float = None,
+                                   available_bankroll: float = None) -> pd.DataFrame:
         """Calculate betting edges and stakes"""
         if predictions_df.empty or odds_df.empty:
             return pd.DataFrame()
@@ -816,8 +910,22 @@ class LiveBettingOrchestrator:
             return pd.DataFrame()
         
         # Calculate stakes
-        bankroll = self.config.get('bankroll', 1000.0)
-        stakes_df = self.calculator.allocate_block_stakes(opportunities_df, bankroll)
+        bankroll = float(
+            bankroll if bankroll is not None else self.bet_tracker.get_current_bankroll()
+        )
+        available_bankroll = float(
+            available_bankroll
+            if available_bankroll is not None
+            else self.bet_tracker.get_available_bankroll()
+        )
+        if available_bankroll < self.config.get('min_stake_dollars', 1.0):
+            print(f"🛑 Portfolio exposure gate: ${available_bankroll:.2f} unreserved; no new bets")
+            return pd.DataFrame()
+        stakes_df = self.calculator.allocate_block_stakes(
+            opportunities_df,
+            bankroll,
+            available_bankroll=available_bankroll,
+        )
         
         # Generate bet slips
         bet_slips_df = self.calculator.generate_bet_slips(stakes_df)
@@ -851,7 +959,7 @@ class LiveBettingOrchestrator:
         
         total_stake = bet_slips_df['stake'].sum()
         total_potential_profit = bet_slips_df['potential_profit'].sum()
-        bankroll = self.config.get('bankroll', 1000.0)
+        bankroll = self.bet_tracker.get_current_bankroll()
         
         print(f"Bankroll: ${bankroll:.2f}")
         print(f"Total stakes: ${total_stake:.2f} ({total_stake/bankroll:.1%} of bankroll)")
@@ -926,12 +1034,15 @@ class LiveBettingOrchestrator:
                 ]
                 if not match_odds.empty:
                     o_row = match_odds.iloc[0]
-                    mkt_p1_raw = float(o_row.get('player1_implied_prob', 0.5))
-                    mkt_p2_raw = float(o_row.get('player2_implied_prob', 0.5))
+                    mkt_p1_raw = pd.to_numeric(o_row.get('player1_implied_prob'), errors='coerce')
+                    mkt_p2_raw = pd.to_numeric(o_row.get('player2_implied_prob'), errors='coerce')
                     # De-vig: normalize so probs sum to 1.0
                     mkt_total = mkt_p1_raw + mkt_p2_raw
-                    mkt_p1 = mkt_p1_raw / mkt_total if mkt_total > 0 else 0.5
-                    mkt_p2 = mkt_p2_raw / mkt_total if mkt_total > 0 else 0.5
+                    if pd.notna(mkt_p1_raw) and pd.notna(mkt_p2_raw) and mkt_total > 0:
+                        mkt_p1 = float(mkt_p1_raw / mkt_total)
+                        mkt_p2 = float(mkt_p2_raw / mkt_total)
+                    else:
+                        mkt_p1 = mkt_p2 = None
                     o1 = o_row.get('player1_odds_american')
                     o2 = o_row.get('player2_odds_american')
                     od1 = o_row.get('player1_odds_decimal')
@@ -948,7 +1059,9 @@ class LiveBettingOrchestrator:
                     match_time = o_row.get('match_time', '')
                     odds_scraped_at = o_row.get('scrape_time_utc', '') or o_row.get('timestamp', '')
                 else:
-                    mkt_p1, mkt_p2, o1, o2 = 0.5, 0.5, None, None
+                    # Missing market evidence is null, never a synthetic 50/50.
+                    # A real even-money price remains a valid observed 0.5.
+                    mkt_p1, mkt_p2, o1, o2 = None, None, None, None
                     od1, od2 = None, None
                     sph, sp1, sp2 = None, None, None
                     tg, tov, tun = None, None, None
@@ -1016,8 +1129,11 @@ class LiveBettingOrchestrator:
                     nn_probability_source=nn_probability_source,
                     odds_scraped_at=odds_scraped_at,
                     match_start_time=match_time,
+                    match_start_at_utc=self.match_start_at_utc(match_time),
                     features_complete=features_complete,
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
+                    feature_schema_sha256=pred_row.get('feature_schema_sha256', ''),
+                    feature_vector_sha256=pred_row.get('feature_vector_sha256', ''),
                     # data-quality caveats surfaced on the slate (still bettable,
                     # but visible): handedness and unranked status are honest
                     # values the model uses, not defaults — the user should see them
@@ -1028,8 +1144,11 @@ class LiveBettingOrchestrator:
                 elif action == 'updated':
                     stats['updated'] += 1
         except Exception as e:
-            print(f"  ⚠️ Prediction logging failed (non-fatal): {e}")
+            required = os.environ.get('REQUIRE_DURABLE_STATE') == '1'
+            print(f"  ⚠️ Prediction logging failed ({'fatal' if required else 'non-fatal'}): {e}")
             import traceback; traceback.print_exc()
+            if required:
+                raise RuntimeError(f"prediction lineage logging failed: {e}") from e
         return stats
 
     def _find_odds_row(self, p1: str, p2: str, odds_df: pd.DataFrame):
@@ -1109,10 +1228,11 @@ class LiveBettingOrchestrator:
             print("  ⚠️  No live or cached rankings available — Rank_Points will default to 500 this run")
 
     def _refresh_database(self):
-        """Mirror the CSV logs into the SQLite DB after a run (additive, non-fatal).
+        """Refresh local SQL and publish the durable remote state generation.
 
-        The live pipeline still writes CSVs; this keeps logs/betting.db current so
-        the ledger/dashboard can query SQL. A failure here must never fail the run.
+        SQLite is a local convenience and remains non-fatal. In cloud operation
+        ``REQUIRE_DURABLE_STATE=1`` makes remote publication a correctness gate:
+        Actions must not report success after losing the runner's state.
         """
         try:
             import db as _db
@@ -1121,13 +1241,18 @@ class LiveBettingOrchestrator:
             summary = _db.build_database(prod_dir, db_path)
             print(f"  🗄️  SQLite refreshed: {summary.get('predictions', 0)} predictions, "
                   f"{summary.get('shadow_predictions', 0)} shadow rows → logs/betting.db")
-            try:
-                from dashboard_sync import sync_dashboard_tables
-                sync_dashboard_tables()
-            except Exception as dash_exc:
-                print(f"  ⚠️ Dashboard sync failed (non-fatal): {dash_exc}")
         except Exception as e:
             print(f"  ⚠️  SQLite refresh skipped (non-fatal): {e}")
+
+        try:
+            from dashboard_sync import sync_dashboard_tables
+            sync_dashboard_tables()
+        except Exception as dash_exc:
+            required = os.environ.get('REQUIRE_DURABLE_STATE') == '1'
+            severity = "fatal" if required else "non-fatal"
+            print(f"  ⚠️ Durable state sync failed ({severity}): {dash_exc}")
+            if required:
+                raise RuntimeError(f"durable state publication failed: {dash_exc}") from dash_exc
 
     def _ingest_store_events(self):
         """Append this run's fetched event results into the canonical Supabase
@@ -1135,7 +1260,11 @@ class LiveBettingOrchestrator:
         cache = getattr(self, "_session_cache", None) or {}
         frames = cache.get("atp_event_results") or {}
         metas = cache.get("atp_event_meta") or {}
-        if not frames:
+        itf_frames = cache.get("itf_event_matches") or {}
+        itf_cal = cache.get("itf_calendar")
+        if not frames and not itf_frames:
+            self.run_metrics['canonical_ingest_status'] = 'no_event_frames'
+            self.run_metrics['reconcile_status'] = 'not_attempted'
             return
         try:
             import canonical_store as cs
@@ -1156,8 +1285,6 @@ class LiveBettingOrchestrator:
                 # ITF events fetched this run (rounds/history) carry completed
                 # results too — persist them so ITF histories accumulate weekly
                 # instead of freezing at Sackmann's last drop
-                itf_frames = cache.get("itf_event_matches") or {}
-                itf_cal = cache.get("itf_calendar")
                 if itf_frames and itf_cal is not None and not itf_cal.empty:
                     for key, em in itf_frames.items():
                         if em is None or em.empty:
@@ -1175,6 +1302,8 @@ class LiveBettingOrchestrator:
                             )
                         total += r["inserted"]
                 print(f"  🗄️  Canonical store: +{total} event-result rows ingested")
+                self.run_metrics['canonical_ingest_status'] = 'success'
+                self.run_metrics['canonical_ingest_rows'] = total
                 # cross-source reconciliation: conflicts loud, curated-level
                 # repair, capped stats gap-fill for the active registry events
                 try:
@@ -1184,10 +1313,31 @@ class LiveBettingOrchestrator:
                     urls = [ev["url"] for ev in CURRENT_EVENT_REGISTRY
                             if _pd.Timestamp(ev["window"][0]) <= _pd.Timestamp.now() <= _pd.Timestamp(ev["window"][1])]
                     rcs.run(conn=conn, since_days=75, stats_urls=urls, stats_cap=10)
+                    self.run_metrics['reconcile_status'] = 'success'
                 except Exception as _rc_exc:
+                    self.run_metrics['reconcile_status'] = 'error'
+                    self.run_metrics['reconcile_error'] = str(_rc_exc)
                     print(f"  ⚠️  reconcile skipped (non-fatal): {_rc_exc}")
         except Exception as e:
+            self.run_metrics['canonical_ingest_status'] = 'error'
+            self.run_metrics['canonical_ingest_error'] = str(e)
+            if self.run_metrics.get('reconcile_status') == 'not_started':
+                self.run_metrics['reconcile_status'] = 'not_attempted'
             print(f"  ⚠️  Canonical store ingest skipped (non-fatal): {e}")
+
+    def _stage_adjusted_terminal_status(self, status: str) -> str:
+        if status != 'success':
+            return status
+        error_fields = (
+            self.run_metrics.get('auto_settle_status'),
+            self.run_metrics.get('canonical_ingest_status'),
+            self.run_metrics.get('reconcile_status'),
+        )
+        if 'error' in error_fields:
+            return 'partial'
+        if self.run_metrics.get('exposure_gate_status') == 'blocked_pending_exposure':
+            return 'partial'
+        return status
 
     def _previous_run_status(self) -> str:
         """Status of the run before this one, from the Supabase run mirror
@@ -1216,19 +1366,19 @@ class LiveBettingOrchestrator:
             self.run_metrics['rankings_refresh_enabled'] = bool(self.rankings_refresh_enabled)
             print("🚀 Starting live tennis betting pipeline...")
             kelly_mult = self.config.get('kelly_multiplier', 0.18)
-            bankroll = self.config.get('bankroll', 1000.0)
+            configured_bankroll = self.config.get('bankroll', 1000.0)
+            bankroll = self.bet_tracker.get_current_bankroll()
+            pending_exposure = self.bet_tracker.get_pending_exposure()
+            available_bankroll = self.bet_tracker.get_available_bankroll()
             
             print(f"⚙️  Kelly multiplier: {kelly_mult:.1%}")
             print(f"⚙️  Edge threshold: {self.config.get('edge_threshold', 0.02):.1%}")
-            print(f"⚙️  Bankroll: ${bankroll:.2f}")
+            print(f"⚙️  Account equity: ${bankroll:.2f} "
+                  f"(configured start ${configured_bankroll:.2f})")
+            print(f"⚙️  Pending exposure: ${pending_exposure:.2f}; "
+                  f"available: ${available_bankroll:.2f}")
             if dry_run:
                 print("🧪 Dry run: no betting session or tracked bets will be written")
-            
-            # Start betting session
-            if start_session:
-                session_id = self.bet_tracker.start_session(
-                    bankroll, kelly_mult, f"Auto session {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                )
             
             # Step 0a: Auto-settle any pending predictions with known results
             if auto_settle:
@@ -1241,11 +1391,35 @@ class LiveBettingOrchestrator:
                         self.run_metrics['settlement_newly_settled'] = settle_summary.get('settlement_newly_settled', 0)
                         self.run_metrics['settlement_auto_settled_bets'] = settle_summary.get('settlement_auto_settled_bets', 0)
                         self.run_metrics['settlement_reason_summary'] = settle_summary.get('settlement_reason_summary', {})
+                    self.run_metrics['auto_settle_status'] = 'success'
                 except Exception as e:
                     print(f"  ⚠️  Auto-settle failed (non-fatal): {e}")
                     self.run_metrics['settlement_reason_summary'] = {'auto_settle_error': 1}
+                    self.run_metrics['auto_settle_status'] = 'error'
+                    self.run_metrics['auto_settle_error'] = str(e)
             else:
                 print("\n⏭️  Auto-settle skipped for this run")
+                self.run_metrics['auto_settle_status'] = 'skipped'
+
+            # Settlement may release exposure or change account equity. All
+            # sizing below uses this reconciled account state, never a fresh
+            # $1,000 session reset.
+            bankroll = self.bet_tracker.get_current_bankroll()
+            pending_exposure = self.bet_tracker.get_pending_exposure()
+            available_bankroll = self.bet_tracker.get_available_bankroll()
+            self.run_metrics['account_equity'] = bankroll
+            self.run_metrics['pending_exposure'] = pending_exposure
+            self.run_metrics['available_bankroll'] = available_bankroll
+            self.run_metrics['exposure_gate_status'] = (
+                'blocked_pending_exposure'
+                if available_bankroll < self.config.get('min_stake_dollars', 1.0)
+                else 'open'
+            )
+
+            # Settlement is durable before rankings/scraping begins.  A later
+            # cancellation or source timeout must not erase completed work.
+            if not dry_run:
+                self._persist_run_state()
 
             # Step 0b: Refresh ATP rankings (rank + points)
             self._refresh_atp_rankings()
@@ -1257,13 +1431,13 @@ class LiveBettingOrchestrator:
                 # health: a parsed-but-empty board is a genuine no-odds hour;
                 # a fetch crash is tolerated once (transient) and hard-fails
                 # on the second consecutive occurrence so real breakage alerts.
-                self._refresh_database()
-                self._ingest_store_events()
                 if not getattr(self, '_odds_fetch_failed', False):
                     print("⚠️  Board parsed but empty — closing out as a no-odds hour")
-                    self._flush_run_history(status='no_odds')
+                    self._ingest_store_events()
+                    self._persist_run_state(status='no_odds')
                     return True
-                self._flush_run_history(status='odds_fetch_error')
+                self._ingest_store_events()
+                self._persist_run_state(status='odds_fetch_error')
                 if self._previous_run_status() == 'odds_fetch_error':
                     print("💥 Second consecutive odds-fetch failure — failing loudly")
                     return False
@@ -1283,25 +1457,29 @@ class LiveBettingOrchestrator:
             features_df = self.extract_features(odds_df)
             if features_df.empty:
                 print("⚠️  Feature extraction failed, stopping pipeline")
-                self._flush_run_history(status='no_features')
+                self._ingest_store_events()
+                self._persist_run_state(status='no_features')
                 return False
             
             # Step 3: Generate predictions
             predictions_df = self.generate_predictions(features_df)
             self.run_metrics['prediction_rows_total'] = len(predictions_df)
-            if 'prediction_status' in predictions_df.columns:
-                success_count = int((predictions_df['prediction_status'] == 'success').sum())
-            else:
-                success_count = len(predictions_df)
+            terminal_status, success_count, error_count = prediction_terminal_status(predictions_df)
             self.run_metrics['prediction_rows_success'] = success_count
-            self.run_metrics['prediction_rows_error'] = len(predictions_df) - success_count
-            if predictions_df.empty:
+            self.run_metrics['prediction_rows_error'] = error_count
+            if terminal_status == 'no_predictions':
                 print("⚠️  Prediction generation failed, stopping pipeline")
-                self._flush_run_history(status='no_predictions')
+                self._ingest_store_events()
+                self._persist_run_state(status='no_predictions')
                 return False
             
             # Step 4: Calculate stakes
-            bet_slips_df = self.calculate_edges_and_stakes(predictions_df, odds_df)
+            bet_slips_df = self.calculate_edges_and_stakes(
+                predictions_df,
+                odds_df,
+                bankroll=bankroll,
+                available_bankroll=available_bankroll,
+            )
 
             # Step 4b: Log all predictions (regardless of edge threshold)
             prediction_log_stats = self._log_all_predictions(predictions_df, odds_df, features_df)
@@ -1318,10 +1496,34 @@ class LiveBettingOrchestrator:
             # Step 5: Save, log, and display results
             if not bet_slips_df.empty:
                 self.save_bet_slips(bet_slips_df)
+
+                # A session represents actual paper exposure, not merely a
+                # pipeline attempt.  Create it only when bets will be logged.
+                if start_session and not dry_run:
+                    session_id = self.bet_tracker.start_session(
+                        bankroll, kelly_mult,
+                        f"Auto session {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    )
                 
                 # Log bets to tracking system
                 if session_id:
                     self.run_metrics['bets_logged'] = self.bet_tracker.log_bets(bet_slips_df, session_id, bankroll)
+                    if self.run_metrics['bets_logged'] == 0:
+                        self.bet_tracker.discard_empty_session(session_id)
+                        session_id = None
+
+                # Placement changes reserved capital, not account equity. Make
+                # the terminal run row reflect the post-placement state that
+                # the next hourly run will inherit.
+                self.run_metrics['account_equity'] = self.bet_tracker.get_current_bankroll()
+                self.run_metrics['pending_exposure'] = self.bet_tracker.get_pending_exposure()
+                self.run_metrics['available_bankroll'] = self.bet_tracker.get_available_bankroll()
+                self.run_metrics['exposure_gate_status'] = (
+                    'blocked_pending_exposure'
+                    if self.run_metrics['available_bankroll']
+                    < self.config.get('min_stake_dollars', 1.0)
+                    else 'open'
+                )
                 
                 self.print_summary(bet_slips_df)
                 
@@ -1333,15 +1535,17 @@ class LiveBettingOrchestrator:
                     print(f"   Total pending bets: {len(pending_bets)}")
                     print(f"   Use 'python settle_bets.py {session_id}' to settle results later")
                 
-                self._refresh_database()
                 self._ingest_store_events()
-                self._flush_run_history(status='success')
+                self._persist_run_state(
+                    status=self._stage_adjusted_terminal_status(terminal_status)
+                )
                 return True
             else:
                 print("📊 No profitable betting opportunities found")
-                self._refresh_database()
                 self._ingest_store_events()
-                self._flush_run_history(status='success')
+                self._persist_run_state(
+                    status=self._stage_adjusted_terminal_status(terminal_status)
+                )
                 # a no-bets hour is a HEALTHY run — exit 0 or the cloud job
                 # reports failure and skips committing this run's logs
                 return True
@@ -1350,7 +1554,16 @@ class LiveBettingOrchestrator:
             print(f"💥 Pipeline error: {e}")
             import traceback
             traceback.print_exc()
-            self._flush_run_history(status='failed', error_message=str(e))
+            try:
+                self._persist_run_state(status='failed', error_message=str(e))
+            except Exception as persist_exc:
+                # Preserve the terminal row locally for the always-run git
+                # checkpoint even when the remote store itself is unavailable.
+                self._flush_run_history(
+                    status='failed',
+                    error_message=f"{e}; terminal publication failed: {persist_exc}",
+                )
+                print(f"💥 Terminal durable-state publication also failed: {persist_exc}")
             return False
 
 def main():
@@ -1370,12 +1583,15 @@ def main():
     orchestrator = LiveBettingOrchestrator(args.config)
 
     # Apply command line overrides
-    if args.bankroll:
+    if args.bankroll is not None:
         orchestrator.config['bankroll'] = args.bankroll
-    if args.kelly_multiplier:
+        orchestrator.bet_tracker.initial_bankroll = float(args.bankroll)
+    if args.kelly_multiplier is not None:
         orchestrator.config['kelly_multiplier'] = args.kelly_multiplier
-    if args.edge_threshold:
+        orchestrator.calculator.kelly_multiplier = float(args.kelly_multiplier)
+    if args.edge_threshold is not None:
         orchestrator.config['edge_threshold'] = args.edge_threshold
+        orchestrator.calculator.edge_threshold = float(args.edge_threshold)
     # Patch refresh flag onto orchestrator
     if args.skip_rankings_refresh:
         orchestrator.rankings_refresh_enabled = False

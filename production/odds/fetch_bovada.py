@@ -124,9 +124,9 @@ def normalize_name(name_str: str) -> str:
     name = re.sub(r"\s+", " ", name)
     return name
 
-def american_to_decimal(odds_str: Optional[str]) -> float:
+def american_to_decimal(odds_str: Optional[str]) -> Optional[float]:
     if not odds_str:
-        return 2.0
+        return None
     s = str(odds_str).strip().upper()
     if s in {"EVEN", "PK", "PICK", "PICK'EM"}:
         return 2.0
@@ -136,7 +136,7 @@ def american_to_decimal(odds_str: Optional[str]) -> float:
         american = int(float(s))
         return 1 + (american / 100.0) if american > 0 else 1 + (100.0 / abs(american))
     except Exception:
-        return 2.0
+        return None
 
 def parse_match_time(text: str) -> str:
     if not text:
@@ -500,6 +500,7 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                             "Chrome/118.0.0.0 Safari/537.36"),
                 java_script_enabled=True,
                 locale="en-US",
+                timezone_id="America/New_York",
             )
             try:
                 page = context.new_page()
@@ -545,6 +546,10 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                     drain_bottom_show_more(page, max_passes=SHOW_MORE_PASSES, pause_ms=SHOW_MORE_PAUSE_MS)
                     hdr_count = stabilize_headers(page, min_headers=10)
                     print(f"   After reload: {hdr_count} tournament headers")
+                if hdr_count < 10:
+                    raise RuntimeError(
+                        f"Bovada scrape unhealthy: only {hdr_count} tournament headers after reload"
+                    )
 
                 # STEP 2: Expand allowed headers
                 print("🎾 Expanding all tournament headers...")
@@ -728,6 +733,9 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                         if markets["WIN"] is not None:
                             o1, o2 = markets["WIN"]
                             d1, d2 = american_to_decimal(o1), american_to_decimal(o2)
+                            if d1 is None or d2 is None:
+                                print(f"   ⚠️ rejecting malformed two-sided price for {p1} vs {p2}: {o1!r}/{o2!r}")
+                                continue
 
                         spread_val = spread_o1 = spread_o2 = None
                         total_val = total_o1 = total_o2 = None
@@ -851,6 +859,18 @@ def fetch_bovada_tennis_odds(headless: bool = True, max_retries: int = 3) -> pd.
                         dbl = bucket_stats[t]["doubles_detected"]
                         adj = bucket_stats[t]["expected_adjusted"]
                         print(f"   • {t}: found {d['found']}/{adj} (raw {raw}, minus doubles {dbl})")
+
+                # A heavily partial page is a source failure, not a healthy
+                # smaller slate. Surface it to the orchestrator instead of
+                # publishing fabricated completeness.
+                if sum_expected_adjusted >= 10:
+                    coverage = len(out_rows) / sum_expected_adjusted
+                    if coverage < 0.70:
+                        raise RuntimeError(
+                            "Bovada scrape unhealthy: "
+                            f"captured {len(out_rows)}/{sum_expected_adjusted} expected singles "
+                            f"({coverage:.0%})"
+                        )
 
                 return pd.DataFrame(out_rows)
             finally:

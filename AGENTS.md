@@ -28,6 +28,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   3. update [production/models/model_registry.json](/Users/zachdodson/Documents/betting-algo/production/models/model_registry.json)
   4. update [docs/production/MODEL_RELEASES.md](/Users/zachdodson/Documents/betting-algo/docs/production/MODEL_RELEASES.md)
 - Use [production/models/validate_registry.py](/Users/zachdodson/Documents/betting-algo/production/models/validate_registry.py) after registry changes.
+- Current promoted artifact entries must pin model/scaler SHA-256 values and
+  pass checksum, deserialization, and feature-count validation before cloud
+  inference.
 - A changed train/validation/test protocol warrants at least a minor version bump.
 - Probability calibration for the NN should be tracked separately from the base NN artifact version.
 
@@ -59,6 +62,15 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 
 - `prediction_log.csv` is the operational log.
 - `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the immutable lineage layer.
+- Supabase `dash_*` tables are an additive durable recovery bridge while CSV
+  remains the application-facing write format. Every cloud run hydrates from
+  the latest accepted generation before settlement/dedupe, then publishes all
+  dashboard tables in one transaction with a `dash_sync_manifest` generation.
+  A cloud run is not successful if durable publication fails. Do not treat a
+  git push, SQLite read model, or an individual `dash_*` table as an independent
+  source of truth.
+- `logs/betting.db` is derived from the CSV logs and must not be committed as
+  hourly binary churn.
 - `python main.py --dry-run` should not start a betting session or write
   `logs/all_bets.csv`; use it for pipeline smoke checks when duplicate live
   bet logging would be risky.
@@ -75,6 +87,22 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Live predictions with noisy/defaulted features should still be logged with
   `features_complete=False` rather than skipped; clean accuracy excludes them,
   but settlement and bet reconciliation need the operational row.
+- A skipped/error feature build must persist `build_status` and can never be
+  labeled `features_complete=True` merely because no default list was emitted.
+- Exact feature lineage stores the ordered 141-feature schema SHA-256 and vector
+  SHA-256. Inference and GOLD verification require a structurally valid, finite
+  persisted vector with valid binary/cardinality one-hot groups; a corrupt file,
+  mismatched hash, or ambiguous duplicate ID fails closed.
+- Bovada display times are interpreted in `America/New_York`; immutable
+  prediction/odds lineage also stores `match_start_at_utc`.
+- Missing odds evidence is null, never a fabricated 50/50 market probability.
+  A genuine observed even-money market remains a valid 0.5.
+- Only `actual_winner in {1, 2}` is settled model ground truth. Voids and
+  cancellations are excluded/refunded rather than coerced into a player-two win.
+- Paper-account equity is configured starting capital plus realized settled
+  P&L. Pending stake reserves capital across every session. New allocation is
+  capped at 5% of equity per bet, 18% across the whole run, and the remaining
+  available capital; zero availability is a hard no-new-exposure gate.
 - Settlement should enrich existing predictions; it should not recompute historical inference.
 - Settlement uses a conservative TA identity score across opponent, date
   window, tournament, surface, and round. Ambiguous/low-confidence matches
@@ -92,7 +120,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 
 - Audit CSVs under `production/logs/audit/` are first-class operational data:
   `run_history.csv`, `skipped_live_matches.csv`, `settlement_audit.csv`.
-- The dashboard should read production CSVs directly and should not invent a shadow dataset.
+- The public static dashboard reads one manifest-pinned Supabase generation;
+  the local Streamlit dashboard reads production CSVs for deeper inspection.
+  Neither dashboard may invent model metrics or a shadow dataset. Browser model
+  metrics come from `dash_model_metrics`, materialized through the evaluation
+  ledger's metric code.
 
 ## Model Evaluation Ledger
 
@@ -110,22 +142,44 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `match_uid -> actual_winner` map from `prediction_log.csv`, never from
   pre-computed `*_correct` columns (which are stale or absent for several models).
 - Cohort tiers are always reported with their label and n, never silently mixed:
-  - GOLD = settled & `snapshot_v2` & `exact_feature_snapshot` & features_complete (decision-grade; headline).
+  - GOLD = settled & `snapshot_v2` & `exact_feature_snapshot` &
+    features_complete & feature snapshot ID verified against persisted lineage
+    (decision-grade; headline).
   - COMPLETE = settled & features_complete (~65% `legacy_backfilled`; context only).
   - `*_intersection` = restricted to match_uids where all of nn/xgb/rf/market
     predicted; the cross-model "which model wins" verdict uses this, to avoid
     coverage bias (nn has broader settled coverage than xgb/rf).
-- ROI is a counterfactual backtest at the odds logged at prediction time (de-vig
-  recomputed from logged decimal odds), reported in both flat-stake and live-Kelly
-  (multiplier 0.18, edge threshold 0.02, cap 0.05) modes. ROI break-even = beating the vig.
+- ROI is a counterfactual backtest at the odds logged at prediction time. Bet
+  qualification matches live execution: model probability must clear the
+  offered price's raw break-even probability by 0.02; de-vigged market
+  probability remains the fair-market model baseline. Report both flat-stake
+  and live-Kelly (multiplier 0.18, edge threshold 0.02, cap 0.05) modes.
+  ROI break-even = beating the vig.
 - Rank models by probabilistic quality first (log loss / Brier / ECE /
   calibration slope), accuracy last — consistent with the calibration + Kelly strategy.
 - `performance_v1` shadow variants (10 as of 2026-06-29, defined in
   `DEFAULT_SHADOW_MODEL_SPECS`) are logged every run and scored in the ledger
-  keyed by `model_version` (so same-family variants stay distinct). Each is scored
-  on its own settled coverage; newly-added variants only accumulate live,
-  settleable data as future slates settle. `native_cat` variants are not yet
-  trackable (native-categorical live inference is unwired).
+  keyed by `model_version` (so same-family variants stay distinct). Evaluation
+  uses one deterministic opening observation per `(match_uid, model_version)`
+  joined to the operational opening feature snapshot; hourly repeats do not
+  increase n. Each variant is scored on its own settled coverage; newly-added
+  variants only accumulate live, settleable data as future slates settle.
+  `native_cat` variants are not yet trackable (native-categorical live inference
+  is unwired).
+
+## Retraining Readiness Stop Gates
+
+- Do not retrain or promote from the 2025/2026 extension until the canonical
+  shifted-result duplicates and ambiguous player identities have been reviewed
+  and remediated with backups and explicit mappings.
+- Historical preprocessing and live serving currently have proven semantic
+  differences in H2H orientation, set/activity windows, form trend, rank
+  movement/volatility, first-surface defaults, and recent-H2H smoothing. Move
+  those formulas into shared pure code and require field-exact chronological
+  golden-fixture parity before new artifacts are considered valid.
+- Never promote an inferred Monday/event date into canonical history. Rows
+  without verified date provenance stay in quarantine until an official or
+  otherwise explicit source confirms them.
 
 ## Commit Hygiene
 

@@ -54,6 +54,40 @@ def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: s
     return surface, False
 
 
+def apply_round_offsets_to_history(df: pd.DataFrame, ref: datetime = None) -> pd.DataFrame:
+    """Apply training's round offsets and quarantine non-historical rows.
+
+    A history row whose inferred timestamp is at or after the upcoming match is
+    not valid evidence for that prediction.  Older code moved such rows to one
+    second before ``ref``; that converted wrong-week/future dates into maximally
+    recent form.  Drop them instead so malformed store rows cannot leak into
+    streak, activity, or form features.
+    """
+    if df.empty or "round" not in df.columns or "date" not in df.columns:
+        return df
+
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+
+    def _infer_date(row):
+        level = str(row.get("level", "")) if pd.notna(row.get("level")) else ""
+        event = str(row.get("event", "")) if pd.notna(row.get("event")) else ""
+        draw = infer_draw_size(event, level)
+        round_code = str(row.get("round", ""))
+        offset = get_round_day_offset(level, draw, round_code, tourney_date=row["date"])
+        return row["date"] + pd.Timedelta(days=offset) if pd.notna(row["date"]) else pd.NaT
+
+    out["date"] = out.apply(_infer_date, axis=1)
+    quarantined = out["date"].isna()
+    if ref is not None:
+        quarantined = quarantined | (out["date"] >= pd.Timestamp(ref))
+    count = int(quarantined.sum())
+    if count:
+        out = out.loc[~quarantined].copy()
+    out.attrs["future_history_rows_quarantined"] = count
+    return out
+
+
 class TAFeatureCalculator:
     """
     Calculate the exact 143 features from Tennis Abstract data.
@@ -1194,35 +1228,8 @@ class TAFeatureCalculator:
         # Training (preprocess.py) used inferred_match_dt = tourney_date + ROUND_DAY_OFFSET[round]
         # for every match before computing temporal windows. TA stores tournament START DATE for
         # all rounds (same as Sackmann), so without this step live features diverge from training.
-        def _apply_round_offsets(df: pd.DataFrame, ref: datetime = None) -> pd.DataFrame:
-            """Apply level+draw-aware round offsets to historical match dates.
-
-            If ref is provided (Bovada date), cap inferred dates to just before ref.
-            All historical matches happened before the upcoming match — any overshoot
-            (e.g. same-tournament R64 inferred to same day as R32) is a heuristic
-            artifact that should be corrected.
-            """
-            if df.empty or 'round' not in df.columns or 'date' not in df.columns:
-                return df
-            df = df.copy()
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            ref_cap = pd.Timestamp(ref) - pd.Timedelta(seconds=1) if ref else None
-            def _infer_date(row):
-                lvl = str(row.get('level', '')) if pd.notna(row.get('level')) else ''
-                evt = str(row.get('event', '')) if pd.notna(row.get('event')) else ''
-                draw = infer_draw_size(evt, lvl)
-                rnd = str(row.get('round', ''))
-                offset = get_round_day_offset(lvl, draw, rnd, tourney_date=row['date'])
-                inferred = row['date'] + pd.Timedelta(days=offset) if pd.notna(row['date']) else row['date']
-                # Cap: historical match can't be at or after the upcoming match
-                if ref_cap is not None and pd.notna(inferred) and inferred >= ref_cap:
-                    return ref_cap
-                return inferred
-            df['date'] = df.apply(_infer_date, axis=1)
-            return df
-
-        matches1 = _apply_round_offsets(matches1, ref=when)
-        matches2 = _apply_round_offsets(matches2, ref=when)
+        matches1 = apply_round_offsets_to_history(matches1, ref=when)
+        matches2 = apply_round_offsets_to_history(matches2, ref=when)
 
         # Calculate temporal features
         def temporal(df):
