@@ -34,13 +34,16 @@ from history_stitch import (
 )
 from base_141_shared import (
     SEMANTICS_ID as SHARED_SEMANTICS_ID,
+    feature_default as shared_feature_default,
     h2h_features_from_frame as shared_h2h_features_from_frame,
+    normalize_player_snapshot,
     observations_from_records,
     player_temporal_features,
     surface_transition_flag as shared_surface_transition_flag,
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from feature_contract import normalize_feature_vector
 from versioning import LIVE_SEMANTICS_ID
 
 # Import schema contract
@@ -52,7 +55,7 @@ with open(SCHEMA_PATH) as f:
 
 
 class UnsafeToInferError(RuntimeError):
-    """Raised when the current matchup appears to have already completed on TA."""
+    """Raised when source evidence cannot support an unambiguous inference."""
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -732,21 +735,57 @@ class TAFeatureCalculator:
         p1_history: pd.DataFrame,
         p2_display_name: str,
         as_of: datetime,
+        p2_player_id: Optional[int] = None,
     ) -> Dict[str, float]:
         """Candidate P1-oriented H2H adapter over the already as-of history.
 
-        The formula is shared and source-neutral.  Opponent selection remains
-        an adapter concern; store rows should eventually use stable opponent
-        IDs, while the TA fallback is still limited to name evidence.
+        The formula is shared and source-neutral.  Store history selects by
+        stable opponent ID.  TA fallback accepts only an exact normalized full
+        name; surname-only matching is deliberately forbidden.
         """
 
-        if p1_history is None or p1_history.empty or 'opp_name' not in p1_history.columns:
+        def _identity_key(value) -> Optional[str]:
+            if value is None or pd.isna(value):
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                numeric = float(text)
+            except (TypeError, ValueError, OverflowError):
+                return text
+            if np.isfinite(numeric) and numeric.is_integer():
+                return str(int(numeric))
+            return text
+
+        if p1_history is None or p1_history.empty:
+            meetings = pd.DataFrame()
+        elif (
+            p2_player_id is not None
+            and 'opp_id' in p1_history.columns
+            and p1_history['opp_id'].notna().any()
+        ):
+            target_id = _identity_key(p2_player_id)
+            meetings = p1_history.loc[
+                p1_history['opp_id'].map(_identity_key).eq(target_id)
+            ].copy()
+        elif 'opp_name' not in p1_history.columns:
             meetings = pd.DataFrame()
         else:
-            mask = p1_history['opp_name'].astype(str).apply(
-                lambda candidate: self._opponent_name_matches(candidate, p2_display_name)
-            )
+            target_name = self._norm(p2_display_name)
+            mask = p1_history['opp_name'].astype(str).map(self._norm).eq(target_name)
             meetings = p1_history.loc[mask].copy()
+            if 'opp_id' in meetings.columns:
+                opponent_ids = {
+                    identity
+                    for value in meetings['opp_id'].dropna().tolist()
+                    if (identity := _identity_key(value)) is not None
+                }
+                if len(opponent_ids) > 1:
+                    raise UnsafeToInferError(
+                        "shared_h2h_ambiguous_opponent_identity:"
+                        f"{p2_display_name} maps to {sorted(opponent_ids)}"
+                    )
         return dict(shared_h2h_features_from_frame(meetings, as_of))
 
     # ========== One-Hot Encodings ==========
@@ -966,6 +1005,7 @@ class TAFeatureCalculator:
         """
         when = match_date or datetime.utcnow()
         surface = (surface or "Hard").strip().title()
+        use_shared_semantics = self.feature_semantics_id == SHARED_SEMANTICS_ID
 
         # Get profiles: store-backed by default (no TA at predict time), else
         # Tennis Abstract. Store outage -> loud TA fallback for the whole run.
@@ -1181,6 +1221,9 @@ class TAFeatureCalculator:
             'rank': float(profile2['current_rank']),
             'rank_points': _atp_points(p2_display, float(profile2['current_rank']), 'P2'),
         }
+        if use_shared_semantics:
+            s1 = normalize_player_snapshot(**s1)
+            s2 = normalize_player_snapshot(**s2)
 
         def _coerce_numeric(value, default_feature: str, note: str | None = None) -> float:
             """Coerce optional numeric stats to floats before derived arithmetic."""
@@ -1275,7 +1318,6 @@ class TAFeatureCalculator:
         matches2 = apply_round_offsets_to_history(matches2, ref=when)
 
         # Calculate temporal features
-        use_shared_semantics = self.feature_semantics_id == SHARED_SEMANTICS_ID
         if use_shared_semantics:
             t1 = player_temporal_features(
                 observations_from_records(matches1),
@@ -1289,11 +1331,6 @@ class TAFeatureCalculator:
                 surface,
                 rank_as_of=s2['rank'],
             )
-            # First-history behavior stays explicit and field-compatible.
-            if t1['days_since_last'] is None:
-                t1['days_since_last'] = 60
-            if t2['days_since_last'] is None:
-                t2['days_since_last'] = 60
             p1_rc30 = t1['rank_change_30d']
             p1_rc90 = t1['rank_change_90d']
             p2_rc30 = t2['rank_change_30d']
@@ -1350,7 +1387,12 @@ class TAFeatureCalculator:
 
         # H2H stats (pass session_cache to avoid duplicate requests)
         if use_shared_semantics:
-            h2h = self._shared_h2h_stats(matches1, p2_display, when)
+            h2h = self._shared_h2h_stats(
+                matches1,
+                p2_display,
+                when,
+                p2_player_id=profile2.get('player_id'),
+            )
         elif self.use_store:
             h2h = self._get_h2h_stats(slug1, slug2, session_cache=session_cache,
                                       _frame=_m1_prestitch, _name2=p2_display)
@@ -1413,7 +1455,10 @@ class TAFeatureCalculator:
             'P1_Form_Trend_30d': t1['form_trend_30d'],
             'P1_Days_Since_Last': t1['days_since_last'],
             'P1_Sets_14d': t1['sets_14d'],
-            'P1_Rust_Flag': 1 if t1['days_since_last'] > 21 else 0,
+            'P1_Rust_Flag': (
+                t1['rust_flag'] if use_shared_semantics
+                else (1 if t1['days_since_last'] > 21 else 0)
+            ),
             'P1_Rank_Change_30d': p1_rc30,
             'P1_Rank_Change_90d': p1_rc90,
             'P1_Rank_Volatility_90d': p1_vol90,
@@ -1429,7 +1474,10 @@ class TAFeatureCalculator:
             'P2_Form_Trend_30d': t2['form_trend_30d'],
             'P2_Days_Since_Last': t2['days_since_last'],
             'P2_Sets_14d': t2['sets_14d'],
-            'P2_Rust_Flag': 1 if t2['days_since_last'] > 21 else 0,
+            'P2_Rust_Flag': (
+                t2['rust_flag'] if use_shared_semantics
+                else (1 if t2['days_since_last'] > 21 else 0)
+            ),
             'P2_Rank_Change_30d': p2_rc30,
             'P2_Rank_Change_90d': p2_rc90,
             'P2_Rank_Volatility_90d': p2_vol90,
@@ -1511,14 +1559,22 @@ class TAFeatureCalculator:
             if k in features and pd.notna(features[k]):
                 final[k] = float(features[k]) if isinstance(features[k], (int, float, np.floating)) else features[k]
             else:
-                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = (
+                    shared_feature_default(k)
+                    if use_shared_semantics
+                    else self._default_for(k, p1=s1, p2=s2, surface=surface)
+                )
                 final[k] = default_val
                 defaulted.append((k, default_val))
 
         # Guard against NaNs
         for k, v in list(final.items()):
             if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-                default_val = self._default_for(k, p1=s1, p2=s2, surface=surface)
+                default_val = (
+                    shared_feature_default(k)
+                    if use_shared_semantics
+                    else self._default_for(k, p1=s1, p2=s2, surface=surface)
+                )
                 final[k] = default_val
                 defaulted.append((k, default_val))
 
@@ -1561,6 +1617,12 @@ class TAFeatureCalculator:
         final['_resolved_match_date'] = when.strftime('%Y-%m-%d')
         final['_resolved_surface'] = surface or ''
         if use_shared_semantics:
+            _, structural_issues = normalize_feature_vector(final, EXACT_141_FEATURES)
+            if structural_issues:
+                raise ValueError(
+                    "base_141_shared live candidate produced an invalid vector: "
+                    + ",".join(structural_issues)
+                )
             final['_feature_semantics_id'] = self.feature_semantics_id
 
         return final

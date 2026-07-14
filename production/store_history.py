@@ -155,7 +155,10 @@ def get_history_frame(conn, player_id: int) -> pd.DataFrame:
     # same real match can exist under two event labels (hub vs calendar
     # discovery) — one row per (date, opponent, round) or form windows double-count
     df = df.drop_duplicates(subset=["date", "opp_id", "round"], keep="first")
-    return df.drop(columns=["round_ord", "opp_id", "match_id", "match_source"])
+    # Keep ``opp_id``: shared candidate H2H selection must prefer stable
+    # identity over display-name matching.  The additive column is ignored by
+    # legacy calculators.
+    return df.drop(columns=["round_ord", "match_id", "match_source"])
 
 
 def get_profile(conn, name: str) -> Optional[dict]:

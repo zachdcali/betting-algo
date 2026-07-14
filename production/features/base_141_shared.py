@@ -24,9 +24,11 @@ import pandas as pd
 
 
 SEMANTICS_ID = "base_141_shared@1.0.0"
+TIME_GRANULARITY = "calendar_day"
 LAPLACE_ALPHA = 3.0
 FORM_DECAY_DAYS = 15.0
 UNSCORED_MATCH_SET_ESTIMATE = 2.5
+FIRST_HISTORY_DAYS_SINCE_DEFAULT = 60
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class MatchObservation:
     score: Optional[str] = None
     rank: Optional[float] = None
     opponent: Any = None
+    order: float = 0.0
 
 
 def _present(value: Any) -> bool:
@@ -61,6 +64,18 @@ def _timestamp(value: Any) -> Optional[pd.Timestamp]:
         return None
     if stamp.tzinfo is not None:
         stamp = stamp.tz_convert("UTC").tz_localize(None)
+    # Sackmann history is date-granular.  The candidate therefore compares
+    # both adapters at calendar-day granularity and never lets a same-day row
+    # become evidence merely because the live kickoff carries a clock time.
+    return stamp.normalize()
+
+
+def as_of_day(value: Any) -> pd.Timestamp:
+    """Return the shared candidate's normalized calendar-day timestamp."""
+
+    stamp = _timestamp(value)
+    if stamp is None:
+        raise ValueError(f"invalid candidate timestamp: {value!r}")
     return stamp
 
 
@@ -87,6 +102,69 @@ def _rank(value: Any) -> Optional[float]:
     except (TypeError, ValueError, OverflowError):
         return None
     return numeric if math.isfinite(numeric) and numeric > 0 else None
+
+
+def _finite(value: Any, default: float, *, minimum: Optional[float] = None) -> float:
+    if _present(value):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            numeric = float("nan")
+        if math.isfinite(numeric) and (minimum is None or numeric >= minimum):
+            return numeric
+    return float(default)
+
+
+def normalize_player_snapshot(
+    *,
+    height: Any,
+    age: Any,
+    rank: Any,
+    rank_points: Any,
+    hand: Any,
+    country: Any,
+) -> dict[str, Any]:
+    """Shared finite defaults for profile fields used by derived features."""
+
+    normalized_rank = _rank(rank)
+    rank_was_missing = normalized_rank is None
+    if rank_was_missing:
+        normalized_rank = 999.0
+    points_default = 0.0 if rank_was_missing or normalized_rank >= 999 else 500.0
+    normalized_hand = str(hand).strip().upper() if _present(hand) else "U"
+    if normalized_hand not in {"R", "L", "U", "A"}:
+        normalized_hand = "U"
+    normalized_country = str(country).strip().upper() if _present(country) else "OTHER"
+    if not normalized_country:
+        normalized_country = "OTHER"
+    return {
+        "height": _finite(height, 180.0, minimum=1.0),
+        "age": _finite(age, 25.0, minimum=0.0),
+        "rank": float(normalized_rank),
+        "rank_points": _finite(rank_points, points_default, minimum=0.0),
+        "hand": normalized_hand,
+        "country": normalized_country,
+    }
+
+
+def feature_default(feature_name: str) -> float:
+    """Finite last-resort default shared by both candidate adapters."""
+
+    if "Rank" in feature_name and "Points" not in feature_name:
+        return 100.0
+    if "Points" in feature_name:
+        return 500.0
+    if "Age" in feature_name:
+        return 25.0
+    if "Height" in feature_name:
+        return 180.0
+    if "WinRate" in feature_name:
+        return 0.5
+    return 0.0
+
+
+def _order(value: Any) -> float:
+    return _finite(value, 0.0)
 
 
 def observations_from_records(
@@ -128,6 +206,9 @@ def observations_from_records(
                 score=str(score).strip() if _present(score) else None,
                 rank=_rank(row.get("rank")),
                 opponent=opponent if _present(opponent) else None,
+                order=_order(
+                    row.get("order", row.get("match_order", row.get("match_num")))
+                ),
             )
         )
     return tuple(normalized)
@@ -141,7 +222,13 @@ def history_before(
     ref = _timestamp(as_of)
     if ref is None:
         raise ValueError(f"invalid as_of timestamp: {as_of!r}")
-    return tuple(sorted((row for row in history if row.date < ref), key=lambda row: row.date, reverse=True))
+    return tuple(
+        sorted(
+            (row for row in history if row.date < ref),
+            key=lambda row: (row.date, row.order),
+            reverse=True,
+        )
+    )
 
 
 def laplace(wins: int, total: int, alpha: float = LAPLACE_ALPHA) -> float:
@@ -215,7 +302,11 @@ def recent_win_rate(
 
 
 def current_streak(history: Sequence[MatchObservation]) -> int:
-    rows = sorted((row for row in history if row.won is not None), key=lambda row: row.date, reverse=True)
+    rows = sorted(
+        (row for row in history if row.won is not None),
+        key=lambda row: (row.date, row.order),
+        reverse=True,
+    )
     if not rows:
         return 0
     first = rows[0].won
@@ -340,7 +431,7 @@ def rank_change(
     anchors = [row for row in ranked if row.date <= cutoff]
     if not anchors:
         return 0.0
-    anchor = max(anchors, key=lambda row: row.date)
+    anchor = max(anchors, key=lambda row: (row.date, row.order))
     if (cutoff - anchor.date).total_seconds() > (days / 2.0) * 86_400.0:
         return 0.0
     return float(anchor.rank) - float(current)
@@ -388,7 +479,11 @@ def player_temporal_features(
     """Calculate the candidate's disputed player-temporal fields."""
 
     prior = history_before(history, as_of)
-    days_since = days_since_last_tournament(prior, as_of)
+    observed_days_since = days_since_last_tournament(prior, as_of)
+    days_since = (
+        FIRST_HISTORY_DAYS_SINCE_DEFAULT
+        if observed_days_since is None else observed_days_since
+    )
     return {
         "matches_14d": count_matches(prior, as_of, 14),
         "matches_30d": count_matches(prior, as_of, 30),
@@ -405,6 +500,8 @@ def player_temporal_features(
         "streak": current_streak(prior),
         "form_trend_30d": form_trend(prior, as_of, 30),
         "days_since_last": days_since,
+        # Unknown history is neutral, not evidence that the player is rusty.
+        "rust_flag": int(observed_days_since is not None and days_since > 21),
         "sets_14d": sets_played(prior, as_of, 14),
         "last_surface": last_surface(prior, as_of),
         "rank_change_30d": rank_change(prior, as_of, 30, rank_as_of),

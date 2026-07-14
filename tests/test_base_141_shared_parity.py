@@ -11,9 +11,11 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import math
+import os
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -44,8 +46,10 @@ from features.base_141_shared import (  # noqa: E402
 from features.ta_feature_calculator import (  # noqa: E402
     EXACT_141_FEATURES,
     TAFeatureCalculator,
+    UnsafeToInferError,
 )
 import features.ta_feature_calculator as ta_feature_module  # noqa: E402
+import preprocess as preprocess_module  # noqa: E402
 from preprocess import (  # noqa: E402
     calculate_temporal_features,
     preprocess_jeffsackmann_data_for_ml,
@@ -154,7 +158,9 @@ def _target_row(ordinal: int) -> dict:
     target = FIXTURE["target"]
     target_match = {
         **target,
-        "date": FIXTURE["as_of"],
+        # Sackmann carries a date-only midnight while live serving carries an
+        # actual kickoff clock.  The shared contract must make those equal.
+        "date": pd.Timestamp(FIXTURE["as_of"]).normalize().isoformat(),
         "surface": FIXTURE["context"]["surface"],
         "score": "",
         # The target is never applied to its own features; a deterministic
@@ -309,6 +315,148 @@ def test_historical_candidate_cannot_overwrite_active_legacy_dataset():
         )
 
 
+def test_historical_candidate_rejects_hardlink_and_casefolded_active_aliases(
+    tmp_path, monkeypatch
+):
+    active = tmp_path / "active.csv"
+    hardlink = tmp_path / "candidate.csv"
+    active.write_text("legacy\n", encoding="utf-8")
+    os.link(active, hardlink)
+    monkeypatch.setattr(preprocess_module, "_ACTIVE_LEGACY_DATASET", active)
+
+    with pytest.raises(ValueError, match="cannot overwrite the active legacy dataset"):
+        preprocess_jeffsackmann_data_for_ml(
+            output_path=hardlink,
+            feature_semantics_id=SHARED_SEMANTICS_ID,
+        )
+
+    assert preprocess_module._paths_alias(
+        tmp_path / "ACTIVE.CSV", active
+    )
+
+
+def test_full_missing_profile_preprocessing_is_finite_and_live_equivalent(
+    tmp_path, monkeypatch
+):
+    raw = pd.DataFrame([{
+        "data_source": "missingness_fixture",
+        "tourney_id": "missing-1",
+        "tourney_name": "Missingness Cup",
+        "tourney_date": 20260720,
+        "surface": "Hard",
+        "draw_size": 32,
+        "tourney_level": "A",
+        "match_num": 1,
+        "round": "R32",
+        "score": "",
+        "best_of": 3,
+        "winner_id": 1,
+        "winner_name": "Missing Alpha",
+        "winner_hand": np.nan,
+        "winner_ht": np.nan,
+        "winner_ioc": np.nan,
+        "winner_age": np.nan,
+        "winner_seed": np.nan,
+        "winner_entry": np.nan,
+        "winner_rank": np.nan,
+        "winner_rank_points": np.nan,
+        "loser_id": 2,
+        "loser_name": "Missing Beta",
+        "loser_hand": np.nan,
+        "loser_ht": np.nan,
+        "loser_ioc": np.nan,
+        "loser_age": np.nan,
+        "loser_seed": np.nan,
+        "loser_entry": np.nan,
+        "loser_rank": np.nan,
+        "loser_rank_points": np.nan,
+    }])
+    candidate_path = tmp_path / "base_141_shared_missingness.csv"
+    with monkeypatch.context() as local_patch:
+        local_patch.setattr(
+            preprocess_module.pd,
+            "read_csv",
+            lambda *_args, **_kwargs: raw.copy(),
+        )
+        historical_frame, feature_names = preprocess_jeffsackmann_data_for_ml(
+            output_path=candidate_path,
+            feature_semantics_id=SHARED_SEMANTICS_ID,
+        )
+
+    assert feature_names == EXACT_141_FEATURES
+    historical = {
+        name: float(historical_frame.iloc[0][name])
+        for name in EXACT_141_FEATURES
+    }
+    _assert_structurally_valid(historical)
+    assert historical["Player1_Rank"] == 999.0
+    assert historical["Player2_Rank"] == 999.0
+    assert historical["Player1_Rank_Points"] == 0.0
+    assert historical["Player2_Rank_Points"] == 0.0
+    assert historical["Player1_Height"] == 180.0
+    assert historical["Player2_Height"] == 180.0
+    assert historical["Player1_Age"] == 25.0
+    assert historical["Player2_Age"] == 25.0
+    assert historical["Rank_Diff"] == 0.0
+    assert historical["Avg_Rank"] == 999.0
+    assert historical["Rank_Ratio"] == 1.0
+    assert historical["Rank_Points_Diff"] == 0.0
+    assert historical["Avg_Rank_Points"] == 0.0
+    assert historical["Height_Diff"] == 0.0
+    assert historical["Avg_Height"] == 180.0
+    assert historical["Age_Diff"] == 0.0
+    assert historical["Avg_Age"] == 25.0
+
+    class MissingProfileScraper:
+        @staticmethod
+        def get_player_profile(slug, **_kwargs):
+            return {
+                "name": "Missing Alpha" if slug == "missing-alpha" else "Missing Beta",
+                "slug": slug,
+                "hand": None,
+                "height_cm": None,
+                "country": None,
+                "birthdate": None,
+                "age": None,
+                "current_rank": None,
+                "player_id": None,
+            }
+
+        @staticmethod
+        def get_player_matches(*_args, **_kwargs):
+            return pd.DataFrame()
+
+        @staticmethod
+        def get_upcoming_match(*_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(ta_feature_module, "needs_stitching", lambda *_args: False)
+    monkeypatch.setattr(
+        ta_feature_module, "batch_get_profiles", lambda *_args, **_kwargs: {}
+    )
+    calc = TAFeatureCalculator(
+        MissingProfileScraper(), feature_semantics_id=SHARED_SEMANTICS_ID
+    )
+    calc.use_store = False
+    calc._atp_rankings = None
+    live_features = calc.build_141_features_from_slugs(
+        slug1="missing-alpha",
+        slug2="missing-beta",
+        match_date=datetime(2026, 7, 20, 12),
+        surface="Hard",
+        tournament_level="A",
+        draw_size=32,
+        round_code="R32",
+        force_refresh=False,
+        persist=False,
+        session_cache={},
+        match_date_is_explicit=True,
+    )
+    live = {name: float(live_features[name]) for name in EXACT_141_FEATURES}
+    _assert_structurally_valid(live)
+    assert historical == live
+
+
 def test_chronological_golden_is_field_exact_across_all_141_features():
     historical = _historical_vector()
     live = _live_vector()
@@ -343,12 +491,18 @@ def test_first_surface_is_neutral_without_prior_history(monkeypatch):
         (), AS_OF, "Clay", rank_as_of=player["current_rank"]
     )
     assert temporal["last_surface"] is None
+    assert temporal["days_since_last"] == 60
+    assert temporal["rust_flag"] == 0
 
     historical = calculate_temporal_features(
         pd.DataFrame([_target_row(0)]),
         feature_semantics_id=SHARED_SEMANTICS_ID,
     )
     assert float(historical.iloc[0]["Surface_Transition_Flag"]) == 0.0
+    assert float(historical.iloc[0]["P1_Days_Since_Last"]) == 60.0
+    assert float(historical.iloc[0]["P2_Days_Since_Last"]) == 60.0
+    assert float(historical.iloc[0]["P1_Rust_Flag"]) == 0.0
+    assert float(historical.iloc[0]["P2_Rust_Flag"]) == 0.0
 
     class EmptyHistoryScraper(FixtureScraper):
         def get_player_matches(self, slug, years=None, **_kwargs):
@@ -384,6 +538,76 @@ def test_first_surface_is_neutral_without_prior_history(monkeypatch):
         match_date_is_explicit=True,
     )
     assert float(live["Surface_Transition_Flag"]) == 0.0
+    assert float(live["P1_Days_Since_Last"]) == 60.0
+    assert float(live["P2_Days_Since_Last"]) == 60.0
+    assert float(live["P1_Rust_Flag"]) == 0.0
+    assert float(live["P2_Rust_Flag"]) == 0.0
+
+
+def test_shared_h2h_uses_stable_id_or_exact_full_name_and_fails_on_ambiguity():
+    calc = TAFeatureCalculator(
+        FixtureScraper(), feature_semantics_id=SHARED_SEMANTICS_ID
+    )
+    surname_collision = pd.DataFrame([
+        {
+            "date": "2026-06-01",
+            "opp_name": "Francisco Cerundolo",
+            "result": "W",
+        },
+        {
+            "date": "2026-06-08",
+            "opp_name": "Juan Manuel Cerundolo",
+            "result": "L",
+        },
+    ])
+    exact = calc._shared_h2h_stats(
+        surname_collision, "Francisco Cerundolo", AS_OF
+    )
+    assert exact["H2H_Total_Matches"] == 1
+    assert exact["H2H_P1_Wins"] == 1
+
+    id_evidence = pd.DataFrame([
+        {
+            "date": "2026-06-01",
+            "opp_name": "F. Cerundolo",
+            "opp_id": 707.0,
+            "result": "W",
+        },
+        {
+            "date": "2026-06-08",
+            "opp_name": "Francisco Cerundolo",
+            "opp_id": 808.0,
+            "result": "L",
+        },
+    ])
+    stable = calc._shared_h2h_stats(
+        id_evidence,
+        "any display alias",
+        AS_OF,
+        p2_player_id=707,
+    )
+    assert stable["H2H_Total_Matches"] == 1
+    assert stable["H2H_P1_Wins"] == 1
+
+    ambiguous = pd.DataFrame([
+        {
+            "date": "2026-06-01",
+            "opp_name": "Francisco Cerundolo",
+            "opp_id": 707,
+            "result": "W",
+        },
+        {
+            "date": "2026-06-08",
+            "opp_name": "Francisco Cerundolo",
+            "opp_id": 808,
+            "result": "L",
+        },
+    ])
+    with pytest.raises(
+        UnsafeToInferError,
+        match="shared_h2h_ambiguous_opponent_identity",
+    ):
+        calc._shared_h2h_stats(ambiguous, "Francisco Cerundolo", AS_OF)
 
 
 def test_rank_change_sign_and_recent_h2h_smoothing_are_pinned():
@@ -402,6 +626,141 @@ def test_rank_change_sign_and_recent_h2h_smoothing_are_pinned():
     one_loss = h2h_features_from_counts(total=1, p1_wins=0, recent_p1_results=[False])
     assert one_win["H2H_Recent_P1_Advantage"] == pytest.approx(0.125)
     assert one_loss["H2H_Recent_P1_Advantage"] == pytest.approx(-0.125)
+
+
+def test_candidate_windows_are_calendar_day_granular_across_adapter_clocks():
+    day = pd.Timestamp("2026-07-20")
+    frame = pd.DataFrame([
+        {
+            "date": day - pd.Timedelta(days=14) + pd.Timedelta(hours=23),
+            "result": "W",
+            "surface": "Hard",
+            "score": "6-4 6-4",
+            "rank": 20,
+        },
+        {
+            "date": day - pd.Timedelta(days=1) + pd.Timedelta(hours=23),
+            "result": "L",
+            "surface": "Clay",
+            "score": "4-6 4-6",
+            "rank": 21,
+        },
+        {
+            # Same calendar day is never prior evidence, even though midnight
+            # is earlier than a live noon kickoff.
+            "date": day + pd.Timedelta(minutes=1),
+            "result": "W",
+            "surface": "Clay",
+            "score": "6-0 6-0",
+            "rank": 1,
+        },
+    ])
+    history = observations_from_records(frame)
+    historical_midnight = player_temporal_features(
+        history, day, "Clay", rank_as_of=19
+    )
+    live_kickoff = player_temporal_features(
+        history, day + pd.Timedelta(hours=19), "Clay", rank_as_of=19
+    )
+
+    assert historical_midnight == live_kickoff
+    assert live_kickoff["matches_14d"] == 2
+    assert live_kickoff["sets_14d"] == 4.0
+
+
+def test_equal_day_historical_rows_share_one_snapshot_and_are_permutation_invariant():
+    prior = {
+        "id": "prior",
+        "date": "2026-07-01",
+        "player1": "alpha",
+        "player2": "gamma",
+        "player1_wins": 1,
+        "p1_rank": 45,
+        "p2_rank": 190,
+        "surface": "Clay",
+        "score": "6-4 6-4",
+    }
+    same_a = {
+        "id": "same-a",
+        "date": "2026-07-10T08:00:00",
+        "player1": "alpha",
+        "player2": "beta",
+        "player1_wins": 1,
+        "p1_rank": 42,
+        "p2_rank": 115,
+        "surface": "Clay",
+        "score": "6-3 6-3",
+    }
+    same_b = {
+        **same_a,
+        "id": "same-b",
+        "date": "2026-07-10T20:00:00",
+        "player1_wins": 0,
+        "score": "3-6 3-6",
+    }
+    next_day = {
+        **same_a,
+        "id": "next-day",
+        "date": "2026-07-11T12:00:00",
+        "p1_rank": 41,
+        "p2_rank": 114,
+    }
+
+    def _build(day_rows):
+        rows = [_historical_row(prior, 0)]
+        for match in day_rows:
+            row = _historical_row(match, 1)
+            # Deliberately tie the source order.  The batch apply order must
+            # still be deterministic and must not affect same-day features.
+            row["match_num"] = 1
+            rows.append(row)
+        rows.append(_historical_row(next_day, 2))
+        built = calculate_temporal_features(
+            pd.DataFrame(rows),
+            feature_semantics_id=SHARED_SEMANTICS_ID,
+        )
+        return built.set_index("tourney_id")
+
+    forward = _build([same_a, same_b])
+    reverse = _build([same_b, same_a])
+    for match_id in ("same-a", "same-b", "next-day"):
+        assert {
+            name: float(forward.loc[match_id, name])
+            for name in EXACT_141_FEATURES
+        } == {
+            name: float(reverse.loc[match_id, name])
+            for name in EXACT_141_FEATURES
+        }
+
+    # Both same-day matches read only the prior-day state.  In particular the
+    # second row cannot see the first through career, H2H, lefty, or form state.
+    same_a_vector = {
+        name: float(forward.loc["same-a", name])
+        for name in EXACT_141_FEATURES
+    }
+    same_b_vector = {
+        name: float(forward.loc["same-b", name])
+        for name in EXACT_141_FEATURES
+    }
+    assert same_a_vector == same_b_vector
+    assert forward.loc["same-a", "P1_Level_Matches_Career"] == 1
+    assert forward.loc["same-b", "P1_Level_Matches_Career"] == 1
+    assert forward.loc["same-a", "P1_Round_WinRate_Career"] == forward.loc[
+        "same-b", "P1_Round_WinRate_Career"
+    ]
+    assert forward.loc["same-a", "P1_Surface_Experience"] == 1
+    assert forward.loc["same-b", "P1_Surface_Experience"] == 1
+    assert forward.loc["same-a", "P1_Matches_14d"] == 1
+    assert forward.loc["same-b", "P1_Matches_14d"] == 1
+    assert forward.loc["same-a", "H2H_Total_Matches"] == 0
+    assert forward.loc["same-b", "H2H_Total_Matches"] == 0
+    assert forward.loc["same-a", "P1_vs_Lefty_WinRate"] == forward.loc[
+        "same-b", "P1_vs_Lefty_WinRate"
+    ]
+
+    # The next day sees both results exactly once, after the atomic day flush.
+    assert forward.loc["next-day", "P1_Level_Matches_Career"] == 3
+    assert forward.loc["next-day", "H2H_Total_Matches"] == 2
 
 
 def test_half_open_windows_score_fallback_and_population_volatility():
