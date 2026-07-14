@@ -263,10 +263,12 @@ def test_database_enforces_model_release_contract_completeness_and_semver():
                 repository.write_batch(RecordBatch.from_records(
                     "ml.model_releases", [valid_calibration]
                 ))
-                connection.execute(
-                    "SET CONSTRAINTS "
-                    "model_release_calibrated_promotion_guard IMMEDIATE"
-                )
+                # PostgreSQL constraint triggers are deferred by the global
+                # constraint mode, but their trigger names are not addressable
+                # as table constraints by SET CONSTRAINTS <name>. Force every
+                # deferred check so this assertion exercises the guard before
+                # the surrounding transaction exits.
+                connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         for row in invalid_rows:
             db_row = deepcopy(row)
             db_row["registry_entry"] = canonical_json(db_row["registry_entry"])
