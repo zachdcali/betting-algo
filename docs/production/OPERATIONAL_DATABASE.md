@@ -1,10 +1,12 @@
 # Operational Database
 
-This document describes operational Postgres contract `1.1.0`, built by the
+This document describes operational Postgres contract `1.2.0`, built by the
 ordered migrations
 [`20260714010000_operational_schema_v1.sql`](../../supabase/migrations/20260714010000_operational_schema_v1.sql)
 and
-[`20260714020000_operational_integrity_v1_1.sql`](../../supabase/migrations/20260714020000_operational_integrity_v1_1.sql).
+[`20260714020000_operational_integrity_v1_1.sql`](../../supabase/migrations/20260714020000_operational_integrity_v1_1.sql),
+then
+[`20260714030000_eligibility_provenance_v1_2.sql`](../../supabase/migrations/20260714030000_eligibility_provenance_v1_2.sql).
 It is a side-by-side migration target, not authorization to change the
 production source of truth.
 
@@ -51,8 +53,24 @@ location, checksum, capture time, source fetch, and parser/context metadata.
 - `pipeline_runs` and `pipeline_run_stages` record run lifecycle and stage
   evidence.
 - `odds_observations` records typed point-in-time markets.
-- `match_metadata_observations` records append-first event, start-time, round,
-  surface, and level evidence with field-level provenance.
+- `eligibility_generations` plus append-only generation status events make
+  staging acceptance and rollback explicit. Draft content is mutable;
+  `candidate` recomputes and freezes a generation/count seal after complete
+  reviews and conflict checks; `accepted` revalidates the same pins. The
+  highest accepted generation serves, and audited `accepted -> retired`
+  falls back to the prior accepted generation.
+- `player_entities` is the normalized identity target imported exactly from
+  the current `public.players` compatibility projection. Identity, alias, and
+  typed profile observations reference it; they never point at an unbound
+  integer or create a second live player registry during migration.
+- `match_metadata_observations` remains the legacy append-first event,
+  start-time, round, surface, and level path. Contract `1.2.0` puts prospective
+  reviewed round evidence in the isolated
+  `eligibility_match_round_observations` table so it cannot change
+  `api.current_match_metadata` before cutover.
+- `eligibility_review_events` changes review state append-only. Candidate
+  sealing rejects incomplete reviews and every accepted identity, alias,
+  profile, source-key, or round conflict; views are not the conflict gate.
 - `paper_accounts`, `paper_sessions`, and `account_ledger` record paper-account
   configuration, sessions, and financial events.
 - `bet_recommendations` and `bet_state_events` separate the recommendation from
@@ -111,7 +129,7 @@ feature schema and semantics, training dataset, protocol, and code commit.
 
 ### `api`: reviewed projections only
 
-Contract `1.1.0` creates private projections for current metadata, pipeline
+Contracts through `1.2.0` create private projections for current metadata, pipeline
 runs, source freshness, predictions, bet states, settlements, and paper-account
 state. It grants none of them to a browser role.
 
@@ -199,11 +217,17 @@ psql "$OPERATIONAL_STAGING_DATABASE_URL" \
 psql "$OPERATIONAL_STAGING_DATABASE_URL" \
   -v ON_ERROR_STOP=1 \
   -f supabase/migrations/20260714020000_operational_integrity_v1_1.sql
+psql "$OPERATIONAL_STAGING_DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -f supabase/migrations/20260714030000_eligibility_provenance_v1_2.sql
 ```
 
 The migrations use additive objects and version registration. The integration
-test applies each newly required migration twice at its own version boundary
-and is safe to rerun against a database already at `1.1.0`.
+test applies each newly required migration twice at its own version boundary.
+Final `1.2.0` is replay-safe only when that exact dedicated-round/seal contract
+is already present. Its preflight rejects the incompatible rejected draft that
+used the same version number. Recreate disposable staging or write a reviewed
+forward migration; never treat `CREATE TABLE IF NOT EXISTS` as an upgrade.
 
 The `1.1.0` preflight deliberately refuses an already populated `1.0.0`
 staging schema. SQL cannot reconstruct the required semantic hashes and
@@ -271,8 +295,10 @@ environment-name form is preferred for CI and staging.
 
 ### Phase 1: staging import
 
-- Apply schema contracts `1.0.0` and `1.1.0` in order, replaying each new
+- Apply schema contracts `1.0.0`, `1.1.0`, and `1.2.0` in order, replaying each new
   migration at its own boundary to prove idempotent DDL.
+- Use a fresh disposable database for final `1.2.0`; do not reuse any database
+  that applied the rejected draft.
 - Generate a fresh read-only plan, review counts, then apply that exact plan.
 - Require exact key/hash parity and a terminal `verified` import batch.
 - Query representative feature, prediction, odds, settlement, and account rows
@@ -398,14 +424,15 @@ These are still open and prevent a production source-of-truth cutover:
    requires a separate staging URL, run-by-run parity report, and failure-mode
    soak; enabling it directly against live Supabase would skip the safety gate.
 4. **Dashboard generations and evaluation snapshots remain on the accepted
-   bridge.** Contract `1.1.0` intentionally does not replace
+   bridge.** Contract `1.2.0` intentionally does not replace
    `dash_sync_manifest` or `dash_model_metrics`. A normalized API generation
    must match every visible count, watermark, cohort, and account value before
    browser reads change.
 5. **Cloud operational controls remain unproved.** Least-privilege roles,
-   backup/PITR, timed restore, blocked-source and transaction-kill drills,
-   alerting, and the seven-day staging soak need a real separate Supabase
-   staging project.
+   trigger-function execution grants, RLS policies, backup/PITR, timed restore,
+   blocked-source and transaction-kill drills, alerting, and the seven-day
+   staging soak need a real separate Supabase staging project. Current
+   integration tests use an owner/admin connection.
 6. **Retraining gates are independent.** Canonical 2025/2026 duplicate and
    player-identity cleanup plus field-exact shared train/serve feature parity
    must pass before new data is used to train or promote models.

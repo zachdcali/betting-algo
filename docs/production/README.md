@@ -24,6 +24,9 @@ Start here:
   decision registry; candidate joins never authorize a remap
 - [Operational Database](/Users/zachdodson/Documents/betting-algo/docs/production/OPERATIONAL_DATABASE.md)
   Additive Supabase/Postgres schema, import proof, and controlled cutover gates
+- [Eligibility Provenance](/Users/zachdodson/Documents/betting-algo/docs/production/ELIGIBILITY_PROVENANCE.md)
+  Generation-pinned identity, alias, profile/height, and official-round
+  evidence with conflict review, coverage diagnostics, and cache cutover gates
 - [Cutover Status — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/CUTOVER_STATUS_2026-07-14.md)
   Dated separation of branch-local proof, current live Supabase, and remaining gates
 - [Runtime Security Audit — 2026-07-14](/Users/zachdodson/Documents/betting-algo/docs/production/SECURITY_AUDIT_2026-07-14.md)

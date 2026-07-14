@@ -102,6 +102,17 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - After cutover, Postgres is the operational source of truth; CSV/Parquet and
   SQLite are one-way exports. Raw source bodies belong in private object
   storage with URI/checksum provenance, not public dashboard tables.
+- Eligibility identity, alias, typed player-profile, and official round
+  evidence uses the normalized `ops` contract with append-only review and
+  generation status events. `public.players` / `public.player_aliases` remain
+  the compatibility projection until exact parity and explicit cutover.
+  Draft generations freeze at candidate with a database-recomputed projection
+  seal/count; acceptance rechecks the same content, complete reviews, active
+  identity coverage, and zero conflicts. Candidate rounds stay in the isolated
+  eligibility round table and cannot change `api.current_match_metadata`.
+  Required mode consumes one short-lived generation-and-seal-pinned ID-bearing
+  profile bundle; legacy height/hand JSON behavior remains unchanged before
+  explicit cutover.
 - `python main.py --dry-run` should not start a betting session or write
   `logs/all_bets.csv`; use it for pipeline smoke checks when duplicate live
   bet logging would be risky.

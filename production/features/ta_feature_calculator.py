@@ -141,8 +141,20 @@ class TAFeatureCalculator:
         return self._store_conn
 
     def _persist_player_field(self, profile: dict, field: str, value) -> None:
-        """Write an officially-sourced profile field back to the store so the
-        enrichment is permanent (non-fatal; only fires with a store identity)."""
+        """Preserve the legacy write-through until explicit ops cutover.
+
+        In required eligibility-provenance mode, accepted normalized
+        observations are authoritative and feature calculation never mutates
+        the compatibility projection.
+        """
+        try:
+            from storage.eligibility import EligibilityMode, eligibility_mode
+        except ImportError:  # pragma: no cover - package-style execution
+            from production.storage.eligibility import (  # type: ignore
+                EligibilityMode, eligibility_mode,
+            )
+        if eligibility_mode() is EligibilityMode.REQUIRED:
+            return
         pid = profile.get('player_id')
         if pid is None or value in (None, '', 'U') or not self.use_store:
             return
@@ -160,6 +172,86 @@ class TAFeatureCalculator:
                     )
         except Exception as exc:
             print(f"      ⚠️ player {field} write-through failed (non-fatal): {exc}")
+
+    def _resolve_height_hand(
+        self,
+        p1_display: str,
+        p2_display: str,
+        profile1: dict,
+        profile2: dict,
+    ) -> Tuple[object, str, object, str]:
+        """Resolve height/hand under the active provenance authority.
+
+        Required mode is an authority switch, not a fallback preference. Both
+        players are therefore looked up in the sealed accepted bundle even if
+        the compatibility store already has populated values. Missing accepted
+        fields are cleared, and a bundle/store identity disagreement blocks
+        inference instead of silently mixing two players' evidence.
+        """
+        try:
+            from storage.eligibility import EligibilityMode, eligibility_mode
+        except ImportError:  # pragma: no cover - package-style execution
+            from production.storage.eligibility import (  # type: ignore
+                EligibilityMode, eligibility_mode,
+            )
+
+        h1 = profile1.get('height_cm')
+        h2 = profile2.get('height_cm')
+        hand1 = profile1.get('hand') or 'U'
+        hand2 = profile2.get('hand') or 'U'
+        if eligibility_mode() is EligibilityMode.REQUIRED:
+            names = [
+                name for name in (p1_display, p2_display)
+                if isinstance(name, str) and name.strip()
+            ]
+            accepted_profiles = batch_get_profiles(names, verbose=False)
+
+            def _accepted(display: str, legacy_profile: dict) -> Tuple[object, str]:
+                accepted = accepted_profiles.get(display) or {}
+                accepted_id = accepted.get('canonical_player_id')
+                if accepted_id is None:
+                    return None, 'U'
+                legacy_id = legacy_profile.get('player_id')
+                if legacy_id is not None:
+                    try:
+                        identity_matches = int(legacy_id) == int(accepted_id)
+                    except (TypeError, ValueError):
+                        identity_matches = False
+                    if not identity_matches:
+                        raise UnsafeToInferError(
+                            "required eligibility identity mismatch for "
+                            f"{display}: store={legacy_id!r}, bundle={accepted_id!r}"
+                        )
+                return accepted.get('height_cm'), accepted.get('hand') or 'U'
+
+            h1, hand1 = _accepted(p1_display, profile1)
+            h2, hand2 = _accepted(p2_display, profile2)
+            return h1, hand1, h2, hand2
+
+        if h1 is None or h2 is None or hand1 == 'U' or hand2 == 'U':
+            missing = []
+            if (h1 is None or hand1 == 'U') and p1_display:
+                missing.append(p1_display)
+            if (h2 is None or hand2 == 'U') and p2_display:
+                missing.append(p2_display)
+            missing = [m for m in missing if isinstance(m, str) and m.strip()]
+            atp_profiles = batch_get_profiles(missing, verbose=False) if missing else {}
+
+            def _fill(display: str, height, hand: str, profile: dict):
+                fallback = atp_profiles.get(display) or {}
+                if height is None and fallback.get('height_cm') is not None:
+                    height = fallback['height_cm']
+                    print(f"  ATP height fallback: {display} → {height}cm")
+                    self._persist_player_field(profile, 'height_cm', height)
+                if hand == 'U' and fallback.get('hand'):
+                    hand = fallback['hand']
+                    print(f"  ATP hand fallback: {display} → {hand}")
+                    self._persist_player_field(profile, 'hand', hand)
+                return height, hand
+
+            h1, hand1 = _fill(p1_display, h1, hand1, profile1)
+            h2, hand2 = _fill(p2_display, h2, hand2, profile2)
+        return h1, hand1, h2, hand2
 
     @staticmethod
     def _slug_to_name(slug: str) -> str:
@@ -1263,32 +1355,11 @@ class TAFeatureCalculator:
             except Exception as _exc:
                 print(f"      ⚠️ ATP history stitch failed for {_display} (non-fatal): {_exc}")
 
-        # ATP height fallback: if TA is missing height for either player, try ATP bio page
-        h1 = profile1.get('height_cm')
-        h2 = profile2.get('height_cm')
-        hand1 = profile1.get('hand') or 'U'
-        hand2 = profile2.get('hand') or 'U'
-        if h1 is None or h2 is None or hand1 == 'U' or hand2 == 'U':
-            missing = []
-            if (h1 is None or hand1 == 'U') and p1_display:
-                missing.append(p1_display)
-            if (h2 is None or hand2 == 'U') and p2_display:
-                missing.append(p2_display)
-            missing = [m for m in missing if isinstance(m, str) and m.strip()]
-            atp_profiles = batch_get_profiles(missing, verbose=False) if missing else {}
-            def _fill(display, h, hand, profile):
-                prof = atp_profiles.get(display) or {}
-                if h is None and prof.get('height_cm') is not None:
-                    h = prof['height_cm']
-                    print(f"  ATP height fallback: {display} → {h}cm")
-                    self._persist_player_field(profile, 'height_cm', h)
-                if hand == 'U' and prof.get('hand'):
-                    hand = prof['hand']
-                    print(f"  ATP hand fallback: {display} → {hand}")
-                    self._persist_player_field(profile, 'hand', hand)
-                return h, hand
-            h1, hand1 = _fill(p1_display, h1, hand1, profile1)
-            h2, hand2 = _fill(p2_display, h2, hand2, profile2)
+        # Legacy mode retains ATP fallback behavior. Required mode instead
+        # replaces both fields from the generation/seal-pinned accepted bundle.
+        h1, hand1, h2, hand2 = self._resolve_height_hand(
+            p1_display, p2_display, profile1, profile2,
+        )
 
         s1 = {
             'height': h1,

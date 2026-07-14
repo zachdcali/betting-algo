@@ -138,6 +138,120 @@ def test_repository_rejects_unapproved_tables_and_unsafe_columns():
         }]))
 
 
+def test_eligibility_batches_are_written_in_seal_safe_topological_order(monkeypatch):
+    repository = OperationalRepository(FakeConnection())
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository,
+        "write_batch",
+        lambda batch: observed.append(batch.table) or 0,
+    )
+    candidate = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [{
+            "idempotency_key": "topology:candidate",
+            "status": "candidate",
+            "effective_at": "2026-07-14T21:00:00Z",
+        }],
+    )
+    accepted = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [{
+            "idempotency_key": "topology:accepted",
+            "status": "accepted",
+            "effective_at": "2026-07-14T21:01:00Z",
+        }],
+    )
+    batches = (
+        RecordBatch("ops.import_batch_memberships", ()),
+        candidate,
+        RecordBatch("ops.player_profile_observations", ()),
+        RecordBatch("ops.eligibility_review_events", ()),
+        RecordBatch("raw.source_artifacts", ()),
+        RecordBatch("ops.eligibility_generations", ()),
+        accepted,
+        RecordBatch("raw.source_fetches", ()),
+        RecordBatch("ops.player_entities", ()),
+    )
+
+    repository.write_batches(batches)
+
+    assert observed == [
+        "ops.eligibility_generations",
+        "raw.source_fetches",
+        "raw.source_artifacts",
+        "ops.player_entities",
+        "ops.player_profile_observations",
+        "ops.eligibility_review_events",
+        "ops.eligibility_generation_status_events",
+        "ops.eligibility_generation_status_events",
+        "ops.import_batch_memberships",
+    ]
+
+
+def test_eligibility_status_batches_sort_candidate_before_accepted(monkeypatch):
+    repository = OperationalRepository(FakeConnection())
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository,
+        "write_batch",
+        lambda batch: observed.append(batch.unique_records[0]["status"]) or 1,
+    )
+    candidate = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [{
+            "idempotency_key": "eligibility-status:candidate",
+            "status": "candidate",
+            "effective_at": "2026-07-14T21:00:00Z",
+        }],
+    )
+    accepted = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [{
+            "idempotency_key": "eligibility-status:accepted",
+            "status": "accepted",
+            "effective_at": "2026-07-14T21:01:00Z",
+        }],
+    )
+
+    repository.write_batches((accepted, candidate))
+
+    assert observed == ["candidate", "accepted"]
+
+
+def test_eligibility_status_records_are_globally_sorted_across_split_batches(
+    monkeypatch,
+):
+    repository = OperationalRepository(FakeConnection())
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository,
+        "write_batch",
+        lambda batch: observed.append(batch.unique_records[0]["status"]) or 1,
+    )
+    candidate_and_retired = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [
+            {
+                "idempotency_key": "eligibility-status:split-candidate",
+                "status": "candidate",
+                "effective_at": "2026-07-14T21:00:00Z",
+            },
+            {
+                "idempotency_key": "eligibility-status:split-retired",
+                "status": "retired",
+                "effective_at": "2026-07-14T21:02:00Z",
+            },
+        ],
+    )
+    accepted = RecordBatch.from_records(
+        "ops.eligibility_generation_status_events", [{
+            "idempotency_key": "eligibility-status:split-accepted",
+            "status": "accepted",
+            "effective_at": "2026-07-14T21:01:00Z",
+        }],
+    )
+
+    repository.write_batches((candidate_and_retired, accepted))
+
+    assert observed == ["candidate", "accepted", "retired"]
+
+
 def test_paper_sessions_and_shadow_metadata_are_allowlisted_and_json_typed():
     connection = FakeConnection()
     repository = OperationalRepository(connection)

@@ -14,6 +14,7 @@ from versioning import OPERATIONAL_SCHEMA_VERSION  # noqa: E402
 MIGRATIONS = (
     ROOT / "supabase" / "migrations" / "20260714010000_operational_schema_v1.sql",
     ROOT / "supabase" / "migrations" / "20260714020000_operational_integrity_v1_1.sql",
+    ROOT / "supabase" / "migrations" / "20260714030000_eligibility_provenance_v1_2.sql",
 )
 
 
@@ -80,7 +81,7 @@ def test_contract_includes_durable_metadata_sessions_and_private_projections():
 
 
 def test_integrity_migration_enforces_multibatch_and_decision_contracts():
-    sql = MIGRATIONS[-1].read_text(encoding="utf-8")
+    sql = MIGRATIONS[1].read_text(encoding="utf-8")
 
     for marker in (
         "ops.import_batch_memberships",
@@ -108,7 +109,7 @@ def test_integrity_migration_enforces_multibatch_and_decision_contracts():
 
 
 def test_registry_status_uses_explicit_monotonic_generation_contract():
-    sql = MIGRATIONS[-1].read_text(encoding="utf-8")
+    sql = MIGRATIONS[1].read_text(encoding="utf-8")
 
     generation_start = sql.index(
         "CREATE TABLE IF NOT EXISTS ml.model_registry_generations ("
@@ -140,7 +141,7 @@ def test_registry_status_uses_explicit_monotonic_generation_contract():
 
 
 def test_immutable_retry_hash_guard_fails_closed_in_postgres():
-    sql = MIGRATIONS[-1].read_text(encoding="utf-8")
+    sql = MIGRATIONS[1].read_text(encoding="utf-8")
 
     assert (
         "CREATE OR REPLACE FUNCTION ops.require_matching_record_sha256("
@@ -188,3 +189,118 @@ def test_imported_tables_retain_row_level_source_provenance():
             "source_row_json",
         ):
             assert column in block, f"{table} missing {column}"
+
+
+def test_eligibility_migration_reuses_normalized_authority_and_fails_closed():
+    sql = MIGRATIONS[2].read_text(encoding="utf-8")
+
+    for marker in (
+        "ops.eligibility_generations",
+        "ops.eligibility_generation_status_events",
+        "ops.player_entities",
+        "ops.player_identity_observations",
+        "ops.player_alias_observations",
+        "ops.player_profile_observations",
+        "ops.eligibility_match_round_observations",
+        "ops.eligibility_review_events",
+        "api.current_player_identities",
+        "api.current_player_aliases",
+        "api.current_player_profiles",
+        "api.current_match_rounds",
+        "api.eligibility_conflicts",
+        "validate_eligibility_review_target",
+        "validate_eligibility_source_artifact",
+        "source_artifact_id",
+        "source_uri",
+        "source_content_sha256",
+        "observed_at",
+        "confidence",
+        "initial_review_state",
+        "expires_at",
+    ):
+        assert marker in sql
+
+    assert "CREATE TABLE IF NOT EXISTS players" not in sql
+    assert "CREATE TABLE IF NOT EXISTS player_aliases" not in sql
+    assert "ALTER TABLE ops.match_metadata_observations" not in sql
+    assert "CREATE OR REPLACE VIEW api.current_match_metadata" not in sql
+    assert "CREATE OR REPLACE VIEW api.candidate_eligibility_match_metadata" in sql
+    assert "REFERENCES ops.player_entities" in sql
+    assert "num_nonnulls(height_cm, hand, country, birthdate, ta_slug, atp_url) = 1" in sql
+    assert "field_value text" not in sql
+    assert "HAVING count(DISTINCT canonical_player_id) = 1" in sql
+    assert "HAVING count(DISTINCT upper(round_code)) = 1" in sql
+    assert "e.confidence," in sql
+    assert "minimum_confidence" not in sql
+    assert "eligibility review target does not exist in generation" in sql
+    assert "eligibility source artifact checksum mismatch" in sql
+    assert "hand IN ('L', 'R', 'A')" in sql
+    assert "'R16', 'RR', 'QF', 'SF', 'F', 'ER', 'BR'" in sql
+    assert "initial_review_state IN ('unreviewed', 'quarantined')" in sql
+    assert "CREATE CONSTRAINT TRIGGER eligibility_review_target_guard" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+
+
+def test_eligibility_generation_cutover_is_append_only_and_highest_accepted():
+    sql = MIGRATIONS[2].read_text(encoding="utf-8")
+
+    assert "eligibility_generations_one_accepted_idx" not in sql
+    assert "eligibility_generation_status_events" in sql
+    assert "SELECT max(generation_sequence) FROM accepted" in sql
+    assert "ops.eligibility_generation_status_events'::regclass" in sql
+    assert "ops.eligibility_generations'::regclass" in sql
+    assert "ops.reject_immutable_fact_mutation()" in sql
+    assert "validate_eligibility_generation_status_event" in sql
+    assert "first eligibility generation status must be candidate" in sql
+    assert "NEW.status NOT IN ('accepted', 'rejected')" in sql
+    assert "previous_status = 'accepted' AND NEW.status <> 'retired'" in sql
+    assert "terminal eligibility status cannot transition" in sql
+    assert "eligibility status effective_at must advance monotonically" in sql
+    assert "existing_record_sha256 = NEW.record_sha256" in sql
+    assert "reviewed_by text NOT NULL" in sql
+    assert "reason text NOT NULL" in sql
+    assert "expected_projection_seal_sha256 text NOT NULL" in sql
+    assert "expected_projection_row_count bigint NOT NULL" in sql
+    assert "ops.compute_eligibility_projection_seal" in sql
+    assert "ops.assert_eligibility_candidate_ready" in sql
+    assert "observations without explicit terminal review" in sql
+    assert "accepted projection conflicts" in sql
+    assert "projection is sealed at status" in sql
+    assert "eligibility sealing requires READ COMMITTED" in sql
+    assert "REVOKE ALL ON FUNCTION ops.compute_eligibility_projection_seal(text)" in sql
+
+
+def test_eligibility_sql_requires_canonical_semantic_storage():
+    sql = MIGRATIONS[2].read_text(encoding="utf-8")
+
+    assert "CHECK (round_code IN" in sql
+    assert "upper(round_code) IN" not in sql[
+        sql.index("CREATE TABLE IF NOT EXISTS ops.eligibility_match_round_observations"):
+        sql.index("CREATE INDEX IF NOT EXISTS eligibility_match_round_lookup_idx")
+    ]
+    for marker in (
+        "source_name !~ '^[[:space:]]'",
+        "source_player_key !~ '^[[:space:]]'",
+        "source_player_key !~ '[[:space:]]$'",
+        "match_uid !~ '^[[:space:]]'",
+        "match_anchor_key !~ '[[:space:]]$'",
+        "source_uri !~ '[[:space:]]$'",
+        "atp_url !~ '[[:space:]]$'",
+    ):
+        assert marker in sql
+    assert "source_uri ~ '^[a-z][a-z0-9+.-]*://'" in sql
+
+
+def test_candidate_rounds_are_isolated_and_never_enter_legacy_metadata_table():
+    sql = MIGRATIONS[2].read_text(encoding="utf-8")
+    start = sql.index("CREATE OR REPLACE VIEW api.current_match_rounds AS")
+    end = sql.index("CREATE OR REPLACE VIEW api.eligibility_conflicts AS", start)
+    view = sql[start:end]
+
+    assert "FROM ops.eligibility_match_round_observations o" in view
+    assert "ops.match_metadata_observations" not in view
+    assert "JOIN api.current_eligibility_generation g" in view
+    assert "g.generation_sha256 = o.eligibility_generation_sha256" in view
+    assert "o.round_code IS NOT NULL" in view
+    assert "o.expires_at > now()" in view
+    assert "HAVING count(DISTINCT upper(round_code)) = 1" in view

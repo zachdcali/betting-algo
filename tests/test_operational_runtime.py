@@ -192,7 +192,7 @@ def test_shadow_schema_mismatch_reports_and_rolls_back_nonfatally():
     ("schema_versions", "reported_latest"),
     [
         (["1.0.0"], "1.0.0"),
-        (["1.0.0", OPERATIONAL_SCHEMA_VERSION, "1.2.0"], "1.2.0"),
+        (["1.0.0", OPERATIONAL_SCHEMA_VERSION, "1.3.0"], "1.3.0"),
     ],
 )
 def test_required_schema_gate_rejects_any_noncurrent_latest_version(

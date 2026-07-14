@@ -820,3 +820,43 @@ def test_database_url_environment_lookup_is_explicit_and_secret_safe(monkeypatch
     ])
     _, error = _resolve_database_url(both)
     assert "only one" in error
+
+
+def test_generic_import_assigns_deterministic_eligibility_round_ids():
+    records = {
+        "ops.pipeline_runs": [{
+            "idempotency_key": "pipeline_run:eligibility-fixture",
+            "external_run_id": "eligibility-run",
+        }],
+        "raw.source_fetches": [{
+            "idempotency_key": "source_fetch:eligibility-fixture",
+            "external_run_id": "eligibility-run",
+        }],
+        "raw.source_artifacts": [{
+            "idempotency_key": "source_artifact:eligibility-fixture",
+            "source_fetch_key": "source_fetch:eligibility-fixture",
+        }],
+        "ops.eligibility_match_round_observations": [{
+            "idempotency_key": "eligibility_match_round:fixture",
+            "external_run_id": "eligibility-run",
+            "source_fetch_key": "source_fetch:eligibility-fixture",
+            "source_artifact_key": "source_artifact:eligibility-fixture",
+        }],
+    }
+
+    import_csv._assign_deterministic_ids_and_links(records)
+
+    assert records["ops.eligibility_match_round_observations"][0][
+        "eligibility_match_round_observation_id"
+    ] == import_csv._entity_uuid(
+        "eligibility_match_round_observation",
+        "eligibility_match_round:fixture",
+    )
+    round_record = records["ops.eligibility_match_round_observations"][0]
+    assert round_record["run_id"] == records["ops.pipeline_runs"][0]["run_id"]
+    assert round_record["source_fetch_id"] == records["raw.source_fetches"][0][
+        "source_fetch_id"
+    ]
+    assert round_record["source_artifact_id"] == records[
+        "raw.source_artifacts"
+    ][0]["source_artifact_id"]
