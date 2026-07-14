@@ -8,7 +8,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 import numpy as np
 import pandas as pd
-from evaluation import ledger
+from evaluation import ledger, metrics
 
 
 def _scored():
@@ -53,3 +53,123 @@ def test_write_outputs(tmp_path):
     text = report.read_text()
     assert "Model Ledger" in text
     assert "2026-06-21" in text
+
+
+def test_all_model_intersection_is_dynamic_and_excludes_partial_shadow_coverage():
+    scored = _scored()
+    shadow_rows = []
+    for uid in ["m0", "m1", "m2"]:
+        base = scored[(scored["match_uid"] == uid) & (scored["model"] == "nn")].iloc[0]
+        shadow_rows.append({
+            **base.to_dict(), "model": "shadow_cat_v1", "family": "catboost",
+            "p1_prob": 0.64,
+        })
+    for uid in ["m0", "m1"]:
+        base = scored[(scored["match_uid"] == uid) & (scored["model"] == "nn")].iloc[0]
+        shadow_rows.append({
+            **base.to_dict(), "model": "shadow_lgbm_v1", "family": "lightgbm",
+            "p1_prob": 0.63,
+        })
+    scored = pd.concat([scored, pd.DataFrame(shadow_rows)], ignore_index=True)
+
+    live = ledger.build_live_ledger(
+        scored,
+        active_shadow_models=["shadow_cat_v1", "shadow_lgbm_v1"],
+    )
+    all_common = live[live["tier"] == "gold_all_model_intersection"]
+
+    assert set(all_common["model"]) == {
+        "nn", "xgb", "rf", "market", "shadow_cat_v1", "shadow_lgbm_v1",
+    }
+    assert set(all_common["n"]) == {2}
+
+
+def test_all_model_intersection_ignores_retired_shadow_history():
+    scored = _scored()
+    shadow_rows = []
+    for uid in ["m0", "m1", "m2"]:
+        base = scored[(scored["match_uid"] == uid) & (scored["model"] == "nn")].iloc[0]
+        shadow_rows.extend([
+            {**base.to_dict(), "model": "shadow_active", "p1_prob": 0.62},
+            {**base.to_dict(), "model": "shadow_retired", "p1_prob": 0.61},
+        ])
+    scored = pd.concat([scored, pd.DataFrame(shadow_rows)], ignore_index=True)
+
+    live = ledger.build_live_ledger(
+        scored, active_shadow_models=["shadow_active"],
+    )
+    all_common = live[live["tier"] == "gold_all_model_intersection"]
+
+    assert "shadow_active" in set(all_common["model"])
+    assert "shadow_retired" not in set(all_common["model"])
+    assert "shadow_retired" in set(live.loc[live["tier"] == "gold", "model"])
+
+
+def test_market_timing_models_only_appear_in_dedicated_tiers():
+    scored = _scored()
+    timing_rows = []
+    for uid in ["m0", "m1"]:
+        base = scored[(scored["match_uid"] == uid) & (scored["model"] == "market")].iloc[0]
+        for model in ["market_open", "market_close"]:
+            timing_rows.append({**base.to_dict(), "model": model})
+    scored = pd.concat([scored, pd.DataFrame(timing_rows)], ignore_index=True)
+
+    live = ledger.build_live_ledger(scored)
+
+    assert live[
+        live["tier"].isin(["gold", "complete"])
+        & live["model"].isin(["market_open", "market_close"])
+    ].empty
+    assert set(live.loc[live["tier"] == "settled_market_timing", "model"]) == {
+        "market_open", "market_close",
+    }
+
+
+def test_settled_market_timing_uses_valid_results_without_feature_tier_filtering():
+    scored = _scored()
+    timing_rows = []
+    for uid, is_gold in [("m0", True), ("m1", False)]:
+        base = scored[(scored["match_uid"] == uid) & (scored["model"] == "market")].iloc[0]
+        for model, probability in [("market_open", 0.48), ("market_close", 0.52)]:
+            timing_rows.append({
+                **base.to_dict(), "model": model, "family": "market",
+                "p1_prob": probability, "is_gold": is_gold,
+                "is_complete": is_gold,
+            })
+    scored = pd.concat([scored, pd.DataFrame(timing_rows)], ignore_index=True)
+
+    live = ledger.build_live_ledger(scored)
+    settled = live[live["tier"] == "settled_market_timing"]
+    gold = live[live["tier"] == "gold_market_timing"]
+
+    assert set(settled["model"]) == {"market_open", "market_close"}
+    assert set(settled["n"]) == {2}
+    assert set(gold["n"]) == {1}
+    calibration = ledger.build_calibration_ledger(scored, live)
+    settled_bins = calibration[calibration["tier"] == "settled_market_timing"]
+    assert set(settled_bins.groupby("model")["count"].sum()) == {2}
+
+
+def test_calibration_ledger_exactly_materializes_authoritative_reliability_bins():
+    scored = _scored()
+    live = ledger.build_live_ledger(scored)
+
+    calibration = ledger.build_calibration_ledger(scored, live)
+    actual = (
+        calibration[(calibration["model"] == "nn") & (calibration["tier"] == "gold")]
+        .sort_values("bin_index")
+        .reset_index(drop=True)
+    )
+    nn_gold = scored[scored["is_gold"] & scored["model"].eq("nn")]
+    expected = metrics.reliability_table(
+        nn_gold["y1"].values, nn_gold["p1_prob"].values
+    ).reset_index(names="bin_index")
+
+    pd.testing.assert_frame_equal(
+        actual[["bin_index", "bin_lo", "bin_hi", "mean_pred", "frac_pos", "count"]],
+        expected[["bin_index", "bin_lo", "bin_hi", "mean_pred", "frac_pos", "count"]],
+        check_dtype=False,
+    )
+    assert int(actual["count"].sum()) == int(
+        live[(live["model"] == "nn") & (live["tier"] == "gold")].iloc[0]["n"]
+    )

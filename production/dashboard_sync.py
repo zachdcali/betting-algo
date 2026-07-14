@@ -362,7 +362,8 @@ def _accepted_prediction_run_id(run_frame: pd.DataFrame,
 
 def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
                          shadow_log: pd.DataFrame | None = None,
-                         feature_log: pd.DataFrame | None = None) -> pd.DataFrame:
+                         feature_log: pd.DataFrame | None = None,
+                         odds_history: pd.DataFrame | None = None) -> pd.DataFrame:
     """Materialize authoritative live metrics through evaluation's one math path."""
     from evaluation import cohorts
     from evaluation.ledger import LIVE_COLUMNS, build_live_ledger
@@ -412,7 +413,7 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
         )
     if shadow_log is None:
         shadow_log = cohorts.load_shadow_log(os.path.dirname(__file__))
-    scored = cohorts.build_scored_frame(pred_log, shadow_log)
+    scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
     frame = build_live_ledger(scored)
     if frame.empty:
         frame = pd.DataFrame(columns=LIVE_COLUMNS)
@@ -424,7 +425,43 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
         + frame.get("model", pd.Series("", index=frame.index)).astype(str)
     )
     frame["sync_id"] = sync_id
+    frame.attrs["scored_frame"] = scored
     return frame
+
+
+def _build_model_calibration(
+    sync_id: str,
+    pred_log: pd.DataFrame,
+    shadow_log: pd.DataFrame | None,
+    odds_history: pd.DataFrame | None,
+    metrics_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Materialize manifest-pinned reliability bins without browser math."""
+    from evaluation import cohorts
+    from evaluation.ledger import CALIBRATION_COLUMNS, build_calibration_ledger
+
+    scored = metrics_frame.attrs.get("scored_frame")
+    if not isinstance(scored, pd.DataFrame):
+        scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
+    live_columns = [column for column in metrics_frame.columns if column in {
+        "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
+        "cal_slope", "cal_intercept", "roi_flat", "n_bets_flat", "pnl_flat",
+        "win_rate_flat", "roi_kelly", "n_bets_kelly", "pnl_kelly",
+        "max_drawdown_kelly",
+    }]
+    calibration = build_calibration_ledger(scored, metrics_frame[live_columns])
+    if calibration.empty:
+        calibration = pd.DataFrame(columns=CALIBRATION_COLUMNS)
+    calibration["generated_at"] = datetime.now(timezone.utc).isoformat(
+        timespec="microseconds"
+    )
+    calibration["calibration_row_key"] = (
+        calibration.get("tier", pd.Series("", index=calibration.index)).astype(str)
+        + ":" + calibration.get("model", pd.Series("", index=calibration.index)).astype(str)
+        + ":" + calibration.get("bin_index", pd.Series("", index=calibration.index)).astype(str)
+    )
+    calibration["sync_id"] = sync_id
+    return calibration
 
 
 def _write_manifest(cur, *, sync_id: str, status: str,
@@ -501,9 +538,19 @@ def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
                     pred_log=planned.get("dash_predictions"),
                     shadow_log=planned.get("dash_shadow"),
                     feature_log=planned.get("dash_features"),
+                    odds_history=planned.get("dash_odds_history"),
                 )
                 planned["dash_model_metrics"] = model_metrics
                 counts["dash_model_metrics"] = len(model_metrics)
+                model_calibration = _build_model_calibration(
+                    sync_id,
+                    pred_log=planned.get("dash_predictions", pd.DataFrame()),
+                    shadow_log=planned.get("dash_shadow"),
+                    odds_history=planned.get("dash_odds_history"),
+                    metrics_frame=model_metrics,
+                )
+                planned["dash_model_calibration"] = model_calibration
+                counts["dash_model_calibration"] = len(model_calibration)
 
                 for table, frame in planned.items():
                     _replace_table(cur, table, frame)

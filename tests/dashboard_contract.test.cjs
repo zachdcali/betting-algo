@@ -7,6 +7,7 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const client = fs.readFileSync(path.join(ROOT, "docs", "dashboard.js"), "utf8");
+const logic = fs.readFileSync(path.join(ROOT, "docs", "dashboard_logic.js"), "utf8");
 const html = fs.readFileSync(path.join(ROOT, "docs", "index.html"), "utf8");
 const deployedVersion = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "dashboard_version.json"), "utf8"));
 
@@ -18,7 +19,7 @@ test("dashboard loads one manifest-pinned generation and retries a moving manife
   assert.match(client, /const acceptedRunId = Logic\.clean\(manifest && manifest\.accepted_prediction_run_id\)/);
   assert.match(client, /const currentRunFilter = acceptedRunId \? \{ sync_id: syncId, run_id: acceptedRunId \} : null/);
   assert.match(client, /latestAttemptRunId: Logic\.clean\(store\.manifest && store\.manifest\.latest_attempt_run_id\)/);
-  assert.match(client, /params\.sync_id = `eq\.\$\{syncId\}`/);
+  assert.match(client, /return fetchAll\(table, columns, order, \{ sync_id: syncId/);
 });
 
 test("deployed build changes self-heal already-open tabs", () => {
@@ -91,7 +92,8 @@ test("manifest counts cover every published operational projection", () => {
 test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(client, /fetchAll\("dash_model_metrics"[^\n]+generationFilter\)/);
   assert.doesNotMatch(client, /Math\.log|expectedCalibrationError|scoreDiagnosticCohort|buildCommonCohort/);
-  assert.match(client, /formatMoney\(metric\.max_drawdown_kelly\)/);
+  assert.match(client, /if \(metric === "max_drawdown_kelly"\) return formatMoney\(value\)/);
+  assert.match(client, /metricCell\(\s*"max_drawdown_kelly", metric\.max_drawdown_kelly/);
   assert.match(client, /startsWith\("shadow_"\)/);
   for (const tier of ["gold_intersection", "complete_intersection", "gold", "complete"]) {
     assert.match(html, new RegExp(`<option value="${tier}"`));
@@ -99,4 +101,58 @@ test("performance UI consumes ledger rows without client metric math", () => {
   const performanceHead = html.match(/<table id="performance-table">[\s\S]*?<thead><tr>([\s\S]*?)<\/tr><\/thead>/);
   assert.ok(performanceHead, "performance table header must exist");
   assert.equal((performanceHead[1].match(/<th\b/g) || []).length, 13);
+});
+
+test("slate renders tournament-grouped two-player decision boards with an explicit EV hurdle", () => {
+  assert.match(client, /Logic\.groupTournamentEntries\(entries\)/);
+  assert.match(client, /Logic\.playerDecisionRows\(row\)\.forEach\(\(playerRow\) =>/);
+  assert.match(client, /Logic\.edgeBand\(playerRow\.edge\)/);
+  assert.match(client, /\["Player", ""\], \["Price · break-even", ""\]/);
+  assert.match(client, /\["NN · live", ""\]/);
+  assert.match(client, /\["NN edge", ""\]/);
+  assert.match(client, /raw BE/);
+  assert.match(client, /qualifies · capital blocked/);
+  assert.match(client, /qualifies at 2 pt gate/);
+  assert.match(client, /Edge = NN probability − offered price raw break-even/);
+});
+
+test("shadow candidates are selectable and presented rather than silently filtered", () => {
+  assert.match(html, /<option value="shadow">Shadow candidates<\/option>/);
+  assert.match(html, /<option value="all">All available models<\/option>/);
+  assert.match(client, /if \(scope === "shadow"\) return isShadow/);
+  assert.match(client, /if \(scope === "all"\) return !isTiming/);
+  assert.match(client, /Logic\.modelPresentation\(metric\.model\)/);
+  assert.match(client, /Shadow candidates/);
+  assert.match(html, /Each shadow variant uses one deterministic opening observation per match and model version/);
+  assert.doesNotMatch(client, /shadowRowsWithheld/);
+  assert.doesNotMatch(html, /Shadow metrics are intentionally withheld/i);
+});
+
+test("calibration and market-timing views consume manifest-pinned authoritative rows only", () => {
+  assert.match(client, /fetchAll\("dash_model_calibration", CALIBRATION_COLUMNS,[^\n]+generationFilter\)/);
+  assert.match(client, /Object\.prototype\.hasOwnProperty\.call\(\s*publishedCounts, "dash_model_calibration"/);
+  assert.match(client, /actual\.dash_model_calibration = arrayCount\("calibration"\)/);
+  assert.match(client, /store\.calibration\s*\n\s*\.filter\(\(row\) => Logic\.clean\(row\.tier\)/);
+  assert.match(client, /Accessible calibration bin table/);
+  assert.match(client, /renderMetricExplorer\(sourceRows, tier, selectedTierRows\)/);
+  assert.match(client, /\["market_open", "market_close"\]\.includes\(model\)/);
+  assert.match(client, /tier\.endsWith\("_market_timing"\) \? "market_open" : "market"/);
+  assert.match(html, /<option value="gold_market_timing">/);
+  assert.match(html, /<option value="complete_market_timing">/);
+  assert.match(html, /<option value="settled_market_timing">All settled · first vs last market<\/option>/);
+  assert.match(html, /Reliability diagram/);
+  assert.match(html, /GOLD · first vs last market/);
+  assert.doesNotMatch(client, /Math\.log|expectedCalibrationError|reliabilityTable|reliability_table|scoreDiagnosticCohort|buildCommonCohort/);
+});
+
+test("odds movement is an exact-match lazy projection and delegates strict timing to shared logic", () => {
+  assert.match(client, /fetchFiltered\(\s*"dash_odds_history"/);
+  assert.match(client, /return fetchAll\(table, columns, order, \{ sync_id: syncId/);
+  assert.doesNotMatch(client, /limit: "250"/);
+  assert.match(client, /\{ match_uid: Logic\.clean\(row\.match_uid\) \}/);
+  assert.match(client, /const series = Logic\.prepareOddsSeries\(rows, row\)/);
+  assert.match(logic, /row\.odds_scraped_at \|\| row\.logged_at/);
+  assert.match(client, /First observed is the earliest price captured by this pipeline, not necessarily the sportsbook's true opener/);
+  assert.match(client, /Last pre-start excludes every observation at or after the exact UTC start/);
+  assert.match(client, /Accessible observation table/);
 });

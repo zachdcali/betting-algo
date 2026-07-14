@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.3">
-  <script src="dashboard_logic.js?v=2026-07-14.3" defer></script>
-  <script src="dashboard.js?v=2026-07-14.3" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.4">
+  <script src="dashboard_logic.js?v=2026-07-14.4" defer></script>
+  <script src="dashboard.js?v=2026-07-14.4" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,7 +23,7 @@
       </div>
       <div class="header-meta" aria-label="Dashboard metadata">
         <span class="paper-pill">Paper only</span>
-        <span id="dashboard-build">Build 2026-07-14.3</span>
+        <span id="dashboard-build">Build 2026-07-14.4</span>
         <span id="page-fetch-time">Loading data…</span>
       </div>
     </header>
@@ -94,7 +94,7 @@
 
       <section id="panel-slate" class="tab-panel" role="tabpanel" aria-labelledby="tab-slate" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">Accepted prediction run</p><h2>Current slate</h2></div>
+          <div><p class="eyebrow">Accepted prediction run</p><h2>Current slate by tournament</h2></div>
           <p id="slate-cohort-note">Only rows from the last successful prediction-bearing run are considered.</p>
         </div>
         <div id="eligible-section" class="state-section">
@@ -116,26 +116,72 @@
 
       <section id="panel-performance" class="tab-panel" role="tabpanel" aria-labelledby="tab-performance" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">Diagnostic, not promotion evidence</p><h2>Common-cohort model report</h2></div>
-          <label class="field-label">Cohort
-            <select id="cohort-select">
-              <option value="gold_intersection">GOLD core intersection</option>
-              <option value="complete_intersection">COMPLETE core intersection</option>
-              <option value="gold">GOLD per-model coverage</option>
-              <option value="complete">COMPLETE per-model coverage</option>
-            </select>
-          </label>
+          <div><p class="eyebrow">Diagnostic, not promotion evidence</p><h2>Model performance laboratory</h2></div>
+          <div class="performance-controls">
+            <label class="field-label">Cohort
+              <select id="cohort-select">
+                <option value="gold_intersection">GOLD · core common cohort</option>
+                <option value="gold_all_model_intersection">GOLD · all-model common cohort</option>
+                <option value="gold">GOLD · each model's coverage</option>
+                <option value="complete_intersection">COMPLETE · core common cohort</option>
+                <option value="complete_all_model_intersection">COMPLETE · all-model common cohort</option>
+                <option value="complete">COMPLETE · each model's coverage</option>
+                <option value="settled_market_timing">All settled · first vs last market</option>
+                <option value="gold_market_timing">GOLD · first vs last market</option>
+                <option value="complete_market_timing">COMPLETE · first vs last market</option>
+              </select>
+            </label>
+            <label class="field-label">Models
+              <select id="model-scope-select">
+                <option value="core">Promoted + market</option>
+                <option value="shadow">Shadow candidates</option>
+                <option value="all">All available models</option>
+                <option value="market_timing">Market timing only</option>
+              </select>
+            </label>
+          </div>
         </div>
         <div class="notice warning">
-          All scores come from the generated Model Evaluation Ledger. The browser never recomputes log loss, Brier, ECE, calibration, or ROI. Use an intersection tier for a fair core-model verdict; per-model tiers have different coverage. Counterfactual Kelly metrics do not replay the live run-wide exposure allocator.
+          All scores come from the generated Model Evaluation Ledger. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Counterfactual Kelly uses the configured 0.18 multiplier but does not replay the live run-wide exposure allocator.
         </div>
         <div id="cohort-definition" class="cohort-definition"></div>
         <div id="ledger-publication-state" class="notice neutral">Loading authoritative ledger metrics and verifying their sync generation…</div>
         <p><a class="secondary-button" href="modeling/MODEL_LEDGER.md">Open generated Model Evaluation Ledger</a></p>
+        <div class="analytics-grid">
+          <article class="analytics-card">
+            <div class="card-heading">
+              <div><p class="eyebrow">Compare every visible model</p><h3>Metric explorer</h3></div>
+              <label class="field-label">Metric
+                <select id="metric-chart-select">
+                  <option value="log_loss">Log loss · lower is better</option>
+                  <option value="brier">Brier score · lower is better</option>
+                  <option value="ece">ECE · lower is better</option>
+                  <option value="cal_slope">Calibration slope · target 1.0</option>
+                  <option value="accuracy">Accuracy · higher is better</option>
+                  <option value="auc">AUC · higher is better</option>
+                  <option value="roi_flat">Flat ROI · zero is break-even</option>
+                  <option value="roi_kelly">Kelly ROI · zero is break-even</option>
+                </select>
+              </label>
+            </div>
+            <p id="metric-chart-note" class="section-note"></p>
+            <div id="metric-chart" class="metric-chart" aria-live="polite"></div>
+          </article>
+          <article class="analytics-card">
+            <div class="card-heading">
+              <div><p class="eyebrow">Reliability diagram</p><h3>Calibration</h3></div>
+              <label class="field-label">Model
+                <select id="calibration-model-select"></select>
+              </label>
+            </div>
+            <p class="section-note">Dots above the diagonal are underconfident; below are overconfident. Empty bins are omitted.</p>
+            <div id="calibration-chart" class="calibration-chart" aria-live="polite"></div>
+          </article>
+        </div>
         <div class="table-shell"><table id="performance-table"><caption>Authoritative model metrics for the selected ledger cohort</caption><thead><tr><th scope="col">Model</th><th scope="col">n</th><th scope="col">Log loss ↓</th><th scope="col">Brier ↓</th><th scope="col">ECE ↓</th><th scope="col">Cal slope</th><th scope="col">Accuracy</th><th scope="col">AUC</th><th scope="col">Flat ROI</th><th scope="col">Flat bets</th><th scope="col">Counterfactual Kelly ROI</th><th scope="col">Counterfactual Kelly bets</th><th scope="col">Counterfactual Kelly max DD ($)</th></tr></thead><tbody></tbody></table></div>
         <details class="research-disclosure">
-          <summary>Shadow-model research</summary>
-          <p>Shadow metrics are intentionally withheld here: the forward log can contain repeated hourly observations for the same match and model version, so the current ledger can overweight those matches. Shadow verdicts return only after evaluation enforces one deterministic observation per match and version. Raw shadow coverage remains visible in System.</p>
+          <summary>How to read shadows and ROI</summary>
+          <p>Each shadow variant uses one deterministic opening observation per match and model version, joined to the operational opening feature snapshot. Hourly repeats do not increase n. “Actual paper” performance remains in Paper bets; flat and Kelly figures here are counterfactual cohort replays. Treat n below 250 as exploratory even when ROI is green.</p>
         </details>
       </section>
 
@@ -148,7 +194,7 @@
       <section id="panel-results" class="tab-panel" role="tabpanel" aria-labelledby="tab-results" hidden>
         <div class="section-heading"><div><p class="eyebrow">Settled history</p><h2>Prediction results</h2></div><label class="field-label">Search players or event<input id="results-search" type="search" autocomplete="off"></label></div>
         <p id="results-summary" class="section-note"></p>
-        <div class="table-shell"><table id="results-table"><caption>Settled prediction history</caption><thead><tr><th scope="col">Date</th><th scope="col">Event</th><th scope="col">Match</th><th scope="col">Winner</th><th scope="col">Score</th><th scope="col">NN</th><th scope="col">XGB</th><th scope="col">Market</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-shell"><table id="results-table"><caption>Settled prediction history</caption><thead><tr><th scope="col">Match date</th><th scope="col">Event</th><th scope="col">Match</th><th scope="col">Winner</th><th scope="col">Score</th><th scope="col">NN</th><th scope="col">XGB</th><th scope="col">Market</th><th scope="col">Market path</th></tr></thead><tbody></tbody></table></div>
         <div class="pagination"><button id="results-more" type="button">Show more</button></div>
       </section>
 
@@ -169,6 +215,11 @@
   <dialog id="feature-dialog" aria-labelledby="feature-dialog-title">
     <div class="dialog-header"><div><p class="eyebrow">Exact lineage</p><h2 id="feature-dialog-title">Feature snapshot</h2></div><button id="feature-dialog-close" class="icon-button" type="button" aria-label="Close feature snapshot">×</button></div>
     <div id="feature-dialog-body"></div>
+  </dialog>
+
+  <dialog id="odds-dialog" aria-labelledby="odds-dialog-title">
+    <div class="dialog-header"><div><p class="eyebrow">Manifest-pinned market lineage</p><h2 id="odds-dialog-title">Market movement</h2></div><button id="odds-dialog-close" class="icon-button" type="button" aria-label="Close market movement">×</button></div>
+    <div id="odds-dialog-body" class="odds-dialog-body"></div>
   </dialog>
 
   <noscript><div class="noscript">The Ledger requires JavaScript to read the public dashboard projection.</div></noscript>
