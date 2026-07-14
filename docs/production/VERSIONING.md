@@ -57,8 +57,19 @@ Probability mode should be tracked separately from the base artifact version:
   Direct sigmoid output from that model
 - `nn_probability_source = calibrated`
   A post-hoc calibration layer applied to that same family
+- `calibration_version = 1.0.0`
+  The independently versioned calibrator contract and pinned artifact
 
 That separation matters because a calibrated probability layer should not silently masquerade as a brand-new artifact version.
+
+Live calibrated promotion is currently fail-closed. It stays blocked until
+the authoritative CSV prediction log, immutable snapshots, normalized
+importer, replay tooling, and evaluation ledger all persist and group by an
+`nn_calibration_version` on every calibrated observation. A candidate
+calibrator can be validated offline before that lineage upgrade, but it cannot
+become a promoted status event. Each promoted calibration must also use a new
+NN model-family version, even when the base weights are identical, while
+retaining its separate calibration version.
 
 ## 2. Logging Schema Versions
 

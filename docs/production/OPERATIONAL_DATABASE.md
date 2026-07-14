@@ -85,7 +85,12 @@ date correction.
   and monotonic registry generations. Current authority is resolved only from
   the globally highest generation, releases omitted by it are no longer
   current, and a generation may promote at most one release per family. An
-  older registry imported later cannot become current.
+  older registry imported later cannot become current. A database constraint
+  independently proves the known family, Semantic Versioning, feature width,
+  schema/semantics bindings, artifact hashes, scaler metadata, and optional
+  calibration metadata before `contract_complete=true` can be stored. The
+  calibrated NN promotion status remains blocked until per-prediction
+  calibration-version lineage exists in the authoritative CSV path.
 
 Feature schema, feature semantics, model family version, dataset release, and
 operational schema are separate version domains. Formula parity work will use

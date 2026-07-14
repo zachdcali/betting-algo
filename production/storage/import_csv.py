@@ -41,12 +41,14 @@ try:
         FEATURE_SCHEMA_ID, FEATURE_SCHEMA_NAME, FEATURE_SCHEMA_SHA256,
         FEATURE_SCHEMA_VERSION, LIVE_SEMANTICS_ID, LOGGING_SCHEMA_VERSION,
         OPERATIONAL_NORMALIZER_VERSION, OPERATIONAL_SCHEMA_VERSION,
+        validate_semver,
     )
 except ImportError:  # pragma: no cover - supports package-style execution
     from production.versioning import (  # type: ignore
         FEATURE_SCHEMA_ID, FEATURE_SCHEMA_NAME, FEATURE_SCHEMA_SHA256,
         FEATURE_SCHEMA_VERSION, LIVE_SEMANTICS_ID, LOGGING_SCHEMA_VERSION,
         OPERATIONAL_NORMALIZER_VERSION, OPERATIONAL_SCHEMA_VERSION,
+        validate_semver,
     )
 
 
@@ -241,9 +243,12 @@ def _normalized_model_version(value: Any) -> str | None:
     entry preserves the original spelling for auditability.
     """
     version = _text(value)
-    if version and re.match(r"^[vV](?=\d)", version):
-        return version[1:]
-    return version
+    if not version:
+        return None
+    try:
+        return validate_semver(version)
+    except ValueError:
+        return None
 
 
 def _model_release_status(
@@ -260,10 +265,31 @@ def _model_release_status(
 
 
 def _model_contract_complete(
-    registry_schema_version: str | None, entry: Mapping[str, Any]
+    family: str,
+    registry_schema_version: str | None,
+    entry: Mapping[str, Any],
 ) -> bool:
+    if family not in MODEL_FAMILIES:
+        return False
+    try:
+        validate_semver(registry_schema_version or "")
+    except ValueError:
+        return False
+    if (
+        "artifact_available" in entry
+        and entry.get("artifact_available") is not True
+    ):
+        return False
+    feature_count = entry.get("features")
+    if (
+        isinstance(feature_count, bool)
+        or not isinstance(feature_count, int)
+        or feature_count < 1
+    ):
+        return False
     required = (
         registry_schema_version,
+        _text(entry.get("model_file")),
         _text(entry.get("feature_schema_id")),
         _text(entry.get("feature_schema_sha256")),
         _text(entry.get("training_feature_semantics_id")),
@@ -273,13 +299,22 @@ def _model_contract_complete(
     )
     if not all(required):
         return False
-    if _text(entry.get("scaler_file")) and not _text(entry.get("scaler_sha256")):
+    scaler_file = _text(entry.get("scaler_file"))
+    scaler_sha256 = _text(entry.get("scaler_sha256"))
+    if family == "nn" and not (scaler_file and scaler_sha256):
+        return False
+    if scaler_file and not scaler_sha256:
         return False
     probability_mode = (_text(entry.get("probability_mode")) or "raw").lower()
-    calibrator_sha256 = _text(
-        entry.get("calibrator_sha256") or entry.get("calibrated_model_sha256")
-    )
-    if probability_mode == "calibrated" and not calibrator_sha256:
+    if probability_mode not in {"raw", "calibrated"}:
+        return False
+    if family != "nn" and probability_mode != "raw":
+        return False
+    if probability_mode == "calibrated" and not (
+        _text(entry.get("calibrated_model_file"))
+        and _text(entry.get("calibrated_model_sha256"))
+        and _normalized_model_version(entry.get("calibration_version"))
+    ):
         return False
     return True
 
@@ -298,6 +333,12 @@ def _model_registry_records(
     if not isinstance(payload, Mapping):
         raise ValueError("model_registry.json must contain a JSON object")
     registry_schema_version = _text(payload.get("registry_schema_version"))
+    try:
+        registry_schema_version = validate_semver(registry_schema_version or "")
+    except ValueError:
+        raise ValueError(
+            "model registry requires a valid SemVer registry_schema_version"
+        ) from None
     registry_generation_sha256 = _file_sha256(path)
     registry_generation = payload.get("registry_generation")
     if (
@@ -352,7 +393,23 @@ def _model_registry_records(
         raw_block = payload if family == "nn" else payload.get(family, {})
         if not isinstance(raw_block, Mapping):
             raise ValueError(f"model registry family {family!r} must be an object")
-        current_version = _normalized_model_version(raw_block.get("current_version"))
+        raw_current_version = _text(raw_block.get("current_version"))
+        current_version = _normalized_model_version(raw_current_version)
+        if not raw_current_version:
+            raise ValueError(
+                f"model registry {family}.current_version is required"
+            )
+        if not current_version:
+            raise ValueError(
+                f"model registry {family}.current_version requires a valid SemVer"
+            )
+        raw_candidate_version = _text(raw_block.get("candidate_version"))
+        if raw_candidate_version and not _normalized_model_version(
+            raw_candidate_version
+        ):
+            raise ValueError(
+                f"model registry {family}.candidate_version requires a valid SemVer"
+            )
         for bucket in ("models", "candidates"):
             raw_entries = raw_block.get(bucket, {})
             if not isinstance(raw_entries, Mapping):
@@ -366,7 +423,9 @@ def _model_registry_records(
                     )
                 version = _normalized_model_version(registry_version)
                 if not version:
-                    raise ValueError(f"model registry entry for {family} has no version")
+                    raise ValueError(
+                        f"model registry entry for {family} requires a valid SemVer"
+                    )
                 identity = (family, version)
                 if identity in release_keys:
                     raise ValueError(
@@ -393,6 +452,9 @@ def _model_registry_records(
                     entry.get("calibrator_sha256")
                     or entry.get("calibrated_model_sha256")
                 )
+                calibration_version = _normalized_model_version(
+                    entry.get("calibration_version")
+                )
                 releases.append({
                     "idempotency_key": release_key,
                     "model_family": family,
@@ -401,6 +463,7 @@ def _model_registry_records(
                     "registry_schema_version": registry_schema_version,
                     "feature_schema_identifier": _text(entry.get("feature_schema_id")),
                     "feature_schema_sha256": _text(entry.get("feature_schema_sha256")),
+                    "feature_count": _integer(entry.get("features")),
                     "training_feature_semantics_id": _text(
                         entry.get("training_feature_semantics_id")
                     ),
@@ -411,9 +474,10 @@ def _model_registry_records(
                     "model_sha256": _text(entry.get("model_sha256")),
                     "scaler_sha256": _text(entry.get("scaler_sha256")),
                     "calibrator_sha256": calibrator_sha256,
+                    "calibration_version": calibration_version,
                     "registry_entry": canonical_json(entry),
                     "contract_complete": _model_contract_complete(
-                        registry_schema_version, entry
+                        family, registry_schema_version, entry
                     ),
                     **_provenance(source, batch_id),
                 })
@@ -444,7 +508,7 @@ def _model_registry_records(
             raise ValueError(
                 f"model registry generation promotes multiple {family} releases"
             )
-        if current_version is not None and len(promoted) != 1:
+        if len(promoted) != 1:
             raise ValueError(
                 f"model registry {family}.current_version {current_version!r} "
                 "must identify exactly one models release"

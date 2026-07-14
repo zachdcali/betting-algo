@@ -1,8 +1,10 @@
+from copy import deepcopy
 from hashlib import sha256
 import os
 from pathlib import Path
 import sys
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import pytest
 
@@ -56,10 +58,29 @@ def _ensure_migrations(connection) -> None:
 def _release(
     *, family: str, version: str, schema_identifier: str | None = None,
     schema_sha256: str | None = None, semantics_identifier: str | None = None,
+    feature_count: int | None = None,
 ) -> RecordBatch:
     contract_complete = all((
-        schema_identifier, schema_sha256, semantics_identifier,
+        schema_identifier, schema_sha256, semantics_identifier, feature_count,
     ))
+    model_sha256 = "a" * 64 if contract_complete else None
+    scaler_sha256 = "b" * 64 if contract_complete and family == "nn" else None
+    registry_entry = {
+        "model_file": f"releases/{family}/{version}/model.bin",
+        "model_sha256": model_sha256,
+        "feature_schema_id": schema_identifier,
+        "feature_schema_sha256": schema_sha256,
+        "features": feature_count,
+        "training_feature_semantics_id": "registry_fixture_training@1.0.0",
+        "live_feature_semantics_id": semantics_identifier,
+        "training_dataset_id": "registry_fixture_dataset@1.0.0",
+        "probability_mode": "raw",
+    }
+    if family == "nn":
+        registry_entry.update({
+            "scaler_file": f"releases/{family}/{version}/scaler.pkl",
+            "scaler_sha256": scaler_sha256,
+        })
     return RecordBatch.from_records("ml.model_releases", [{
         "idempotency_key": f"model_release:{family}:{version}",
         "model_family": family,
@@ -68,11 +89,13 @@ def _release(
         "registry_schema_version": "2.0.0",
         "feature_schema_identifier": schema_identifier,
         "feature_schema_sha256": schema_sha256,
+        "feature_count": feature_count,
         "training_feature_semantics_id": "registry_fixture_training@1.0.0",
         "live_feature_semantics_id": semantics_identifier,
         "training_dataset_id": "registry_fixture_dataset@1.0.0",
-        "model_sha256": "a" * 64 if contract_complete else None,
-        "registry_entry": canonical_json({"fixture": "registry_omission"}),
+        "model_sha256": model_sha256,
+        "scaler_sha256": scaler_sha256,
+        "registry_entry": canonical_json(registry_entry),
         "contract_complete": contract_complete,
     }])
 
@@ -101,6 +124,167 @@ def _status(
     }])
 
 
+def test_database_enforces_model_release_contract_completeness_and_semver():
+    import psycopg
+
+    url = _test_url()
+    with psycopg.connect(url, autocommit=True) as connection:
+        _ensure_migrations(connection)
+
+    schema_identifier = "db_contract_fixture@1.0.0"
+    schema_sha256 = sha256(schema_identifier.encode("utf-8")).hexdigest()
+
+    def _row(*, family="xgboost", version="1.0.0"):
+        model_sha256 = "a" * 64
+        scaler_sha256 = "b" * 64 if family == "nn" else None
+        entry = {
+            "model_file": "releases/model.bin",
+            "model_sha256": model_sha256,
+            "feature_schema_id": schema_identifier,
+            "feature_schema_sha256": schema_sha256,
+            "features": 141,
+            "training_feature_semantics_id": "historical@1.0.0",
+            "live_feature_semantics_id": "live@1.0.0",
+            "training_dataset_id": "dataset@1.0.0",
+            "probability_mode": "raw",
+        }
+        if family == "nn":
+            entry.update({
+                "scaler_file": "releases/scaler.pkl",
+                "scaler_sha256": scaler_sha256,
+            })
+        return {
+            "idempotency_key": f"model_release:db_contract:{uuid4()}",
+            "model_family": family,
+            "model_version": version,
+            "release_status": "registered",
+            "registry_schema_version": "2.0.0",
+            "feature_schema_identifier": schema_identifier,
+            "feature_schema_sha256": schema_sha256,
+            "feature_count": 141,
+            "training_feature_semantics_id": "historical@1.0.0",
+            "live_feature_semantics_id": "live@1.0.0",
+            "training_dataset_id": "dataset@1.0.0",
+            "model_sha256": model_sha256,
+            "scaler_sha256": scaler_sha256,
+            "calibrator_sha256": None,
+            "registry_entry": entry,
+            "contract_complete": True,
+        }
+
+    invalid_rows = []
+    invalid_rows.append(_row(version="final"))
+
+    missing_path = _row()
+    missing_path["registry_entry"].pop("model_file")
+    invalid_rows.append(missing_path)
+
+    missing_json_binding = _row()
+    missing_json_binding["registry_entry"].pop("model_sha256")
+    invalid_rows.append(missing_json_binding)
+
+    non_boolean_availability = _row()
+    non_boolean_availability["registry_entry"]["artifact_available"] = "true"
+    invalid_rows.append(non_boolean_availability)
+
+    non_integer_width = _row()
+    non_integer_width["registry_entry"]["features"] = 141.0
+    invalid_rows.append(non_integer_width)
+
+    unknown_family = _row(family="bogus")
+    invalid_rows.append(unknown_family)
+
+    missing_nn_scaler = _row(family="nn")
+    missing_nn_scaler["registry_entry"].pop("scaler_file")
+    invalid_rows.append(missing_nn_scaler)
+
+    incomplete_calibration = _row(family="nn")
+    incomplete_calibration["registry_entry"]["probability_mode"] = "calibrated"
+    invalid_rows.append(incomplete_calibration)
+
+    missing_calibration_version = _row(family="nn", version="1.0.1")
+    missing_calibration_version["registry_entry"].update({
+        "probability_mode": "calibrated",
+        "calibrated_model_file": "releases/calibrated.pkl",
+        "calibrated_model_sha256": "c" * 64,
+    })
+    missing_calibration_version["calibrator_sha256"] = "c" * 64
+    invalid_rows.append(missing_calibration_version)
+
+    with psycopg.connect(url) as connection:
+        repository = OperationalRepository(connection)
+        valid_calibration = _row(family="nn", version="9.9.9")
+        valid_calibration["registry_entry"].update({
+            "probability_mode": "calibrated",
+            "calibrated_model_file": "releases/calibrated.pkl",
+            "calibrated_model_sha256": "c" * 64,
+            "calibration_version": "v1.0.0",
+        })
+        valid_calibration["calibrator_sha256"] = "c" * 64
+        valid_calibration["calibration_version"] = "1.0.0"
+        valid_calibration["registry_entry"] = canonical_json(
+            valid_calibration["registry_entry"]
+        )
+        latest_sequence = connection.execute(
+            "SELECT coalesce(max(generation_sequence), 0) "
+            "FROM ml.model_registry_generations"
+        ).fetchone()[0]
+        calibration_sequence = int(latest_sequence) + 1
+        calibration_digest = sha256(
+            f"calibration-block:{uuid4()}".encode("utf-8")
+        ).hexdigest()
+        repository.write_batch(_generation(
+            sequence=calibration_sequence,
+            digest=calibration_digest,
+        ))
+        with pytest.raises(
+            psycopg.Error,
+            match="calibrated NN promotion is blocked",
+        ):
+            with connection.transaction():
+                repository.write_batch(RecordBatch.from_records(
+                    "ml.model_release_status_events",
+                    [{
+                        "idempotency_key": (
+                            "model_release_status:calibration_block:"
+                            f"{uuid4()}"
+                        ),
+                        "model_release_key": valid_calibration[
+                            "idempotency_key"
+                        ],
+                        "model_family": "nn",
+                        "registry_generation_sha256": calibration_digest,
+                        "release_status": "promoted",
+                    }],
+                ))
+                # Import batches write status rows before release rows. The
+                # deferred promotion guard must inspect the release only after
+                # both facts exist, not silently pass on the first INSERT.
+                repository.write_batch(RecordBatch.from_records(
+                    "ml.model_releases", [valid_calibration]
+                ))
+                connection.execute(
+                    "SET CONSTRAINTS "
+                    "model_release_calibrated_promotion_guard IMMEDIATE"
+                )
+        for row in invalid_rows:
+            db_row = deepcopy(row)
+            db_row["registry_entry"] = canonical_json(db_row["registry_entry"])
+            with pytest.raises(
+                psycopg.Error,
+                match=(
+                    "model_releases_model_version_semver_check|"
+                    "model_releases_family_check|"
+                    "model_releases_contract_complete_check"
+                ),
+            ):
+                with connection.transaction():
+                    repository.write_batch(RecordBatch.from_records(
+                        "ml.model_releases", [db_row]
+                    ))
+        connection.rollback()
+
+
 def test_new_generation_omission_revokes_current_release_and_family_is_unique():
     import psycopg
 
@@ -124,8 +308,11 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
         second_digest = sha256(
             f"registry-omission:{second_sequence}".encode("utf-8")
         ).hexdigest()
-        omitted_family = f"omission_fixture_{first_sequence}"
-        other_family = f"other_fixture_{first_sequence}"
+        omitted_family = "xgboost"
+        other_family = "random_forest"
+        omitted_version = f"0.0.{first_sequence}"
+        duplicate_version = f"0.1.{first_sequence}"
+        other_version = f"0.2.{first_sequence}"
         schema_identifier = f"registry_omission@{first_sequence}"
         schema_sha256 = sha256(schema_identifier.encode("utf-8")).hexdigest()
         semantics_identifier = f"registry_omission_live@{first_sequence}"
@@ -146,19 +333,24 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
         ))
         repository.write_batch(_release(
             family=omitted_family,
-            version="1.0.0",
+            version=omitted_version,
             schema_identifier=schema_identifier,
             schema_sha256=schema_sha256,
             semantics_identifier=semantics_identifier,
+            feature_count=1,
         ))
-        repository.write_batch(_release(family=omitted_family, version="2.0.0"))
-        repository.write_batch(_release(family=other_family, version="1.0.0"))
+        repository.write_batch(_release(
+            family=omitted_family, version=duplicate_version
+        ))
+        repository.write_batch(_release(
+            family=other_family, version=other_version
+        ))
         repository.write_batch(
             _generation(sequence=first_sequence, digest=first_digest)
         )
         repository.write_batch(_status(
             family=omitted_family,
-            version="1.0.0",
+            version=omitted_version,
             digest=first_digest,
         ))
         repository.write_batch(RecordBatch.from_records(
@@ -204,7 +396,7 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
                 ),
                 "predicted_at": "2026-07-14T00:00:02Z",
                 "model_family": omitted_family,
-                "model_version": "1.0.0",
+                "model_version": omitted_version,
                 "model_role": "promoted",
                 "player1_probability": "0.60",
                 "player2_probability": "0.40",
@@ -212,7 +404,7 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
                 "logging_quality": "snapshot_v2",
                 "metadata": canonical_json({}),
                 "model_release_key": (
-                    f"model_release:{omitted_family}:1.0.0"
+                    f"model_release:{omitted_family}:{omitted_version}"
                 ),
                 "decision_eligible": True,
             }])
@@ -221,7 +413,7 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
         assert connection.execute(
             "SELECT release_status FROM api.current_model_releases "
             "WHERE model_release_key = %s",
-            (f"model_release:{omitted_family}:1.0.0",),
+            (f"model_release:{omitted_family}:{omitted_version}",),
         ).fetchone() == ("promoted",)
 
         # Expected constraint failures run inside savepoints so the enclosing
@@ -236,7 +428,7 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
             with connection.transaction():
                 repository.write_batch(_status(
                     family=omitted_family,
-                    version="2.0.0",
+                    version=duplicate_version,
                     digest=first_digest,
                 ))
 
@@ -248,7 +440,7 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
         )
         repository.write_batch(_status(
             family=other_family,
-            version="1.0.0",
+            version=other_version,
             digest=second_digest,
         ))
 
@@ -262,17 +454,17 @@ def test_new_generation_omission_revokes_current_release_and_family_is_unique():
         omitted_current = connection.execute(
             "SELECT release_status FROM api.current_model_releases "
             "WHERE model_release_key = %s",
-            (f"model_release:{omitted_family}:1.0.0",),
+            (f"model_release:{omitted_family}:{omitted_version}",),
         ).fetchone()
         other_current = connection.execute(
             "SELECT release_status, generation_sequence "
             "FROM api.current_model_releases WHERE model_release_key = %s",
-            (f"model_release:{other_family}:1.0.0",),
+            (f"model_release:{other_family}:{other_version}",),
         ).fetchone()
         historical_status = connection.execute(
             "SELECT release_status FROM ml.model_release_status_events "
             "WHERE model_release_key = %s",
-            (f"model_release:{omitted_family}:1.0.0",),
+            (f"model_release:{omitted_family}:{omitted_version}",),
         ).fetchone()
 
         assert omitted_current is None

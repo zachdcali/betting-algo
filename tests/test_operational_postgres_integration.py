@@ -126,12 +126,27 @@ def _feature_contract_records():
         "registry_schema_version": "2.0.0",
         "feature_schema_identifier": FEATURE_SCHEMA_ID,
         "feature_schema_sha256": FEATURE_SCHEMA_SHA256,
+        "feature_count": len(names),
         "training_feature_semantics_id": "sackmann_historical_legacy@1.0.0",
         "live_feature_semantics_id": LIVE_SEMANTICS_ID,
         "training_dataset_id": "integration_fixture@1.0.0",
         "model_sha256": "a" * 64,
         "scaler_sha256": "b" * 64,
-        "registry_entry": canonical_json({"model_file": "model.pth"}),
+        "registry_entry": canonical_json({
+            "model_file": "model.pth",
+            "model_sha256": "a" * 64,
+            "scaler_file": "scaler.pkl",
+            "scaler_sha256": "b" * 64,
+            "feature_schema_id": FEATURE_SCHEMA_ID,
+            "feature_schema_sha256": FEATURE_SCHEMA_SHA256,
+            "features": len(names),
+            "training_feature_semantics_id": (
+                "sackmann_historical_legacy@1.0.0"
+            ),
+            "live_feature_semantics_id": LIVE_SEMANTICS_ID,
+            "training_dataset_id": "integration_fixture@1.0.0",
+            "probability_mode": "raw",
+        }),
         "contract_complete": True,
     }])
     registry_generation = RecordBatch.from_records(

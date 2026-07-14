@@ -174,12 +174,14 @@ CREATE TABLE IF NOT EXISTS ml.model_releases (
     registry_schema_version text,
     feature_schema_identifier text,
     feature_schema_sha256 text,
+    feature_count integer,
     training_feature_semantics_id text,
     live_feature_semantics_id text,
     training_dataset_id text,
     model_sha256 text,
     scaler_sha256 text,
     calibrator_sha256 text,
+    calibration_version text,
     registry_entry jsonb NOT NULL,
     contract_complete boolean NOT NULL DEFAULT false,
     import_batch_id uuid REFERENCES ops.import_batches(batch_id)
@@ -202,6 +204,227 @@ CREATE TABLE IF NOT EXISTS ml.model_releases (
     CHECK (source_row_sha256 IS NULL OR source_row_sha256 ~ '^[0-9a-f]{64}$'),
     CHECK (record_sha256 IS NULL OR record_sha256 ~ '^[0-9a-f]{64}$')
 );
+
+ALTER TABLE ml.model_releases
+    ADD COLUMN IF NOT EXISTS calibration_version text,
+    ADD COLUMN IF NOT EXISTS feature_count integer;
+
+-- `contract_complete` is consumed by the decision-eligibility trigger, so it
+-- cannot be a caller assertion.  Enforce normalized SemVer and bind every
+-- complete row back to the artifact metadata carried in registry_entry.
+DO $model_release_contract_checks$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_family_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_family_check
+            CHECK (model_family IN ('nn', 'xgboost', 'random_forest'));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_feature_count_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_feature_count_check
+            CHECK (feature_count IS NULL OR feature_count > 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_model_version_semver_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_model_version_semver_check
+            CHECK (
+                model_version ~
+                '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_calibration_version_semver_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_calibration_version_semver_check
+            CHECK (
+                calibration_version IS NULL
+                OR calibration_version ~
+                   '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_registry_schema_semver_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_registry_schema_semver_check
+            CHECK (
+                registry_schema_version IS NULL
+                OR registry_schema_version ~
+                   '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_contract_complete_check'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_contract_complete_check
+            CHECK (
+                NOT contract_complete
+                OR (
+                    registry_schema_version IS NOT NULL
+                    AND feature_schema_identifier IS NOT NULL
+                    AND feature_schema_sha256 IS NOT NULL
+                    AND feature_count IS NOT NULL
+                    AND training_feature_semantics_id IS NOT NULL
+                    AND live_feature_semantics_id IS NOT NULL
+                    AND training_dataset_id IS NOT NULL
+                    AND model_sha256 IS NOT NULL
+                    AND nullif(btrim(registry_entry ->> 'model_file'), '')
+                        IS NOT NULL
+                    AND (
+                        NOT registry_entry ? 'artifact_available'
+                        OR registry_entry -> 'artifact_available' =
+                            'true'::jsonb
+                    )
+                    AND registry_entry ->> 'model_sha256'
+                        IS NOT DISTINCT FROM model_sha256
+                    AND registry_entry ->> 'feature_schema_id'
+                        IS NOT DISTINCT FROM
+                        feature_schema_identifier
+                    AND registry_entry ->> 'feature_schema_sha256'
+                        IS NOT DISTINCT FROM
+                        feature_schema_sha256
+                    AND jsonb_typeof(registry_entry -> 'features') = 'number'
+                    AND CASE
+                        WHEN registry_entry ->> 'features'
+                            ~ '^[1-9][0-9]*$'
+                        THEN (registry_entry ->> 'features')::bigint =
+                            feature_count
+                        ELSE false
+                    END
+                    AND registry_entry ->> 'training_feature_semantics_id'
+                        IS NOT DISTINCT FROM
+                        training_feature_semantics_id
+                    AND registry_entry ->> 'live_feature_semantics_id'
+                        IS NOT DISTINCT FROM
+                        live_feature_semantics_id
+                    AND registry_entry ->> 'training_dataset_id'
+                        IS NOT DISTINCT FROM
+                        training_dataset_id
+                    AND coalesce(
+                        nullif(lower(btrim(
+                            registry_entry ->> 'probability_mode'
+                        )), ''),
+                        'raw'
+                    ) IN ('raw', 'calibrated')
+                    AND (
+                        (
+                            model_family <> 'nn'
+                            AND coalesce(
+                                nullif(lower(btrim(
+                                    registry_entry ->> 'probability_mode'
+                                )), ''),
+                                'raw'
+                            ) = 'raw'
+                        )
+                        OR (
+                            model_family = 'nn'
+                            AND scaler_sha256 IS NOT NULL
+                            AND nullif(btrim(
+                                registry_entry ->> 'scaler_file'
+                            ), '') IS NOT NULL
+                            AND registry_entry ->> 'scaler_sha256'
+                                IS NOT DISTINCT FROM
+                                scaler_sha256
+                            AND (
+                                coalesce(
+                                    nullif(lower(btrim(
+                                        registry_entry ->> 'probability_mode'
+                                    )), ''),
+                                    'raw'
+                                ) = 'raw'
+                                OR (
+                                    coalesce(
+                                        nullif(lower(btrim(
+                                            registry_entry ->>
+                                                'probability_mode'
+                                        )), ''),
+                                        'raw'
+                                    ) = 'calibrated'
+                                    AND calibrator_sha256 IS NOT NULL
+                                    AND calibration_version IS NOT NULL
+                                    AND nullif(btrim(
+                                        registry_entry ->>
+                                            'calibrated_model_file'
+                                    ), '') IS NOT NULL
+                                    AND registry_entry ->>
+                                        'calibrated_model_sha256'
+                                        IS NOT DISTINCT FROM
+                                        calibrator_sha256
+                                    AND (
+                                        CASE
+                                            WHEN registry_entry ->>
+                                                'calibration_version'
+                                                ~ '^v[0-9]'
+                                            THEN substr(
+                                                registry_entry ->>
+                                                    'calibration_version',
+                                                2
+                                            )
+                                            ELSE registry_entry ->>
+                                                'calibration_version'
+                                        END
+                                    ) IS NOT DISTINCT FROM
+                                        calibration_version
+                                )
+                            )
+                        )
+                    )
+                )
+            );
+    END IF;
+END
+$model_release_contract_checks$;
+
+DO $model_release_feature_schema_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'feature_schemas_identifier_hash_count_unique'
+          AND conrelid = 'ml.feature_schemas'::regclass
+    ) THEN
+        ALTER TABLE ml.feature_schemas
+            ADD CONSTRAINT feature_schemas_identifier_hash_count_unique
+            UNIQUE (schema_identifier, schema_sha256, feature_count);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'model_releases_feature_schema_fkey'
+          AND conrelid = 'ml.model_releases'::regclass
+    ) THEN
+        ALTER TABLE ml.model_releases
+            ADD CONSTRAINT model_releases_feature_schema_fkey
+            FOREIGN KEY (
+                feature_schema_identifier,
+                feature_schema_sha256,
+                feature_count
+            ) REFERENCES ml.feature_schemas (
+                schema_identifier,
+                schema_sha256,
+                feature_count
+            ) DEFERRABLE INITIALLY DEFERRED;
+    END IF;
+END
+$model_release_feature_schema_fk$;
 
 -- A registry file hash identifies its bytes, but hashes have no temporal
 -- ordering. The source-owned sequence is therefore the promotion authority:
@@ -322,6 +545,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS model_release_one_promoted_per_family_generati
         registry_generation_sha256, model_family
     )
     WHERE release_status = 'promoted';
+
+CREATE OR REPLACE FUNCTION ml.block_unlogged_calibrated_promotion()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    probability_mode text;
+BEGIN
+    IF NEW.release_status = 'promoted' AND NEW.model_family = 'nn' THEN
+        SELECT coalesce(
+                   nullif(lower(btrim(
+                       release.registry_entry ->> 'probability_mode'
+                   )), ''),
+                   'raw'
+               )
+          INTO probability_mode
+          FROM ml.model_releases AS release
+         WHERE release.idempotency_key = NEW.model_release_key
+           AND release.model_family = NEW.model_family;
+        IF probability_mode = 'calibrated' THEN
+            RAISE EXCEPTION
+                'calibrated NN promotion is blocked until nn_calibration_version lineage is persisted';
+        END IF;
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS model_release_calibrated_promotion_guard
+    ON ml.model_release_status_events;
+CREATE CONSTRAINT TRIGGER model_release_calibrated_promotion_guard
+AFTER INSERT ON ml.model_release_status_events
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION ml.block_unlogged_calibrated_promotion();
 
 ALTER TABLE ml.prediction_observations
     ADD COLUMN IF NOT EXISTS model_release_key text,
@@ -850,6 +1107,7 @@ DECLARE
     snapshot_schema text;
     snapshot_schema_hash text;
     snapshot_semantics text;
+    snapshot_feature_count integer;
     release_complete boolean;
     release_status_value text;
     release_family text;
@@ -857,6 +1115,7 @@ DECLARE
     release_schema text;
     release_schema_hash text;
     release_live_semantics text;
+    release_feature_count integer;
 BEGIN
     IF NEW.decision_eligible THEN
         IF NEW.feature_snapshot_id IS NULL
@@ -870,19 +1129,23 @@ BEGIN
             RAISE EXCEPTION 'decision-eligible prediction requires exact feature and model release';
         END IF;
         SELECT features_complete, lineage_quality, feature_schema_identifier,
-               feature_schema_sha256, feature_semantics_identifier
+               feature_schema_sha256, feature_semantics_identifier,
+               feature_count
           INTO snapshot_complete, snapshot_lineage, snapshot_schema,
-               snapshot_schema_hash, snapshot_semantics
+               snapshot_schema_hash, snapshot_semantics,
+               snapshot_feature_count
           FROM ml.feature_snapshots
          WHERE feature_snapshot_id = NEW.feature_snapshot_id;
         SELECT release.contract_complete, status.release_status,
                release.model_family, release.model_version,
                release.feature_schema_identifier,
                release.feature_schema_sha256,
-               release.live_feature_semantics_id
+               release.live_feature_semantics_id,
+               release.feature_count
           INTO release_complete, release_status_value,
                release_family, release_version, release_schema,
-               release_schema_hash, release_live_semantics
+               release_schema_hash, release_live_semantics,
+               release_feature_count
           FROM ml.model_releases AS release
           JOIN ml.model_release_status_events AS status
             ON status.model_release_key = release.idempotency_key
@@ -907,6 +1170,7 @@ BEGIN
         END IF;
         IF snapshot_schema IS DISTINCT FROM release_schema
            OR snapshot_schema_hash IS DISTINCT FROM release_schema_hash
+           OR snapshot_feature_count IS DISTINCT FROM release_feature_count
            OR snapshot_semantics IS DISTINCT FROM release_live_semantics THEN
             RAISE EXCEPTION 'prediction release and feature snapshot contracts do not match';
         END IF;
@@ -1134,7 +1398,9 @@ SELECT
     release.contract_complete,
     status.registry_generation_sha256,
     generation.generation_sequence,
-    generation.effective_at AS generation_effective_at
+    generation.effective_at AS generation_effective_at,
+    release.feature_count,
+    release.calibration_version
 FROM ml.model_releases AS release
 JOIN ml.model_release_status_events AS status
   ON status.model_release_key = release.idempotency_key

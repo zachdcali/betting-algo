@@ -14,29 +14,42 @@ import warnings
 try:
     from models.nn_runtime import NNWrapper, TennisNet
     from models.registry_utils import (
+        PROBABILITY_MODES,
+        _sha256_file,
+        artifact_feature_count,
+        ordered_feature_names,
         load_registry,
         get_current_version,
         get_model_entry,
+        validate_semver,
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from .nn_runtime import NNWrapper, TennisNet
     from .registry_utils import (
+        PROBABILITY_MODES,
+        _sha256_file,
+        artifact_feature_count,
+        ordered_feature_names,
         load_registry,
         get_current_version,
         get_model_entry,
+        validate_semver,
     )
 
 _REGISTRY = load_registry()
 MODEL_VERSION = get_current_version("nn", _REGISTRY)
 XGB_MODEL_VERSION = get_current_version("xgboost", _REGISTRY)
 RF_MODEL_VERSION = get_current_version("random_forest", _REGISTRY)
+CALIBRATED_LIVE_INFERENCE_ENABLED = False
 warnings.filterwarnings('ignore')
 
 
 def _registry_model_entry(section: str, version: str) -> Dict:
-    """Return a model-registry entry or an empty dict."""
+    """Return only a promoted model-registry entry or an empty dict."""
     family = "nn" if section == "nn" else section
-    return get_model_entry(family, version=version, registry=_REGISTRY, include_candidates=True)
+    if version != get_current_version(family, _REGISTRY):
+        return {}
+    return get_model_entry(family, version=version, registry=_REGISTRY)
 
 # Exact 141 features for NN-141 model (Peak_Age_P1/P2 removed, consolidated to P1_Peak_Age/P2_Peak_Age)
 EXACT_141_FEATURES = [
@@ -91,6 +104,7 @@ class TennisPredictor:
         self.scaler = None
         self.calibrated_model = None
         self.runtime_model_version = MODEL_VERSION
+        self.calibration_version = None
         self.probability_source = "raw"
         self.feature_names = EXACT_141_FEATURES
         self.is_loaded = False
@@ -98,16 +112,66 @@ class TennisPredictor:
     def load_model(self) -> bool:
         """Load the current NN model, optionally using registry-enabled calibration."""
         try:
+            self.is_loaded = False
             entry = _registry_model_entry("nn", MODEL_VERSION)
             model_file = entry.get("model_file")
             scaler_file = entry.get("scaler_file")
-            if entry.get("artifact_available") is False or not model_file or not scaler_file:
+            artifact_available = entry.get("artifact_available", True)
+            if artifact_available is not True or not model_file or not scaler_file:
                 print("❌ Promoted NN registry entry is unavailable or incomplete")
                 return False
+            probability_mode = str(
+                entry.get("probability_mode") or "raw"
+            ).strip().lower()
+            if probability_mode not in PROBABILITY_MODES:
+                print(
+                    "❌ Promoted NN registry entry has unsupported "
+                    f"probability_mode={probability_mode!r}"
+                )
+                return False
+
+            calibrated_file = None
+            calibrated_sha256 = None
+            calibration_version = None
+            if probability_mode == "calibrated":
+                calibrated_file = str(
+                    entry.get("calibrated_model_file") or ""
+                ).strip()
+                calibrated_sha256 = str(
+                    entry.get("calibrated_model_sha256") or ""
+                ).strip().lower()
+                raw_calibration_version = str(
+                    entry.get("calibration_version") or ""
+                ).strip()
+                try:
+                    calibration_version = validate_semver(
+                        raw_calibration_version
+                    )
+                except ValueError:
+                    calibration_version = None
+                if (
+                    not calibrated_file
+                    or not calibrated_sha256
+                    or not calibration_version
+                ):
+                    print(
+                        "❌ Promoted NN calibrated registry entry is incomplete: "
+                        "calibrated_model_file, calibrated_model_sha256, and a "
+                        "SemVer calibration_version are required"
+                    )
+                    return False
+                if not CALIBRATED_LIVE_INFERENCE_ENABLED:
+                    print(
+                        "❌ Calibrated NN live inference is blocked until "
+                        "nn_calibration_version is persisted in prediction and "
+                        "snapshot lineage"
+                    )
+                    return False
             model_path = self.model_dir / model_file
             scaler_path = self.model_dir / scaler_file
-            calibrated_path = self.model_dir / entry.get("calibrated_model_file", "neural_network_calibrated_SURFACE_FIX.pkl")
-            probability_mode = entry.get("probability_mode", "raw")
+            calibrated_path = (
+                self.model_dir / calibrated_file if calibrated_file else None
+            )
 
             if not model_path.exists():
                 print(f"❌ Model file not found: {model_path}")
@@ -116,6 +180,22 @@ class TennisPredictor:
             if not scaler_path.exists():
                 print(f"❌ Scaler file not found: {scaler_path}")
                 return False
+
+            if probability_mode == "calibrated":
+                if calibrated_path is None or not calibrated_path.exists():
+                    print(
+                        "❌ Registry-requested calibrated NN artifact not found: "
+                        f"{calibrated_path}"
+                    )
+                    return False
+                actual_calibrated_sha256 = _sha256_file(calibrated_path)
+                if actual_calibrated_sha256 != calibrated_sha256:
+                    print(
+                        "❌ Registry-requested calibrated NN artifact checksum "
+                        f"mismatch: expected={calibrated_sha256} "
+                        f"actual={actual_calibrated_sha256}"
+                    )
+                    return False
 
             # Load scaler
             with open(scaler_path, 'rb') as f:
@@ -131,17 +211,30 @@ class TennisPredictor:
 
             self.calibrated_model = None
             self.runtime_model_version = MODEL_VERSION
+            self.calibration_version = calibration_version
             self.probability_source = "raw"
-            if probability_mode == "calibrated" and calibrated_path.exists():
+            if probability_mode == "calibrated":
                 try:
                     with open(calibrated_path, 'rb') as f:
                         self.calibrated_model = pickle.load(f)
+                    if not callable(
+                        getattr(self.calibrated_model, "predict_proba", None)
+                    ):
+                        raise ValueError("predict_proba is missing")
+                    calibrated_features = artifact_feature_count(
+                        self.calibrated_model
+                    )
+                    if calibrated_features != input_size:
+                        raise ValueError(
+                            "calibrated artifact features="
+                            f"{calibrated_features!r} expected={input_size}"
+                        )
                     self.probability_source = "calibrated"
                     print(f"✅ Calibrated NN probabilities loaded from {calibrated_path.name}")
                 except Exception as e:
-                    print(f"⚠️  Failed to load calibrated NN artifact {calibrated_path}: {e}")
-            elif probability_mode == "calibrated":
-                print(f"⚠️  Registry requested calibrated NN probabilities but artifact was not found: {calibrated_path}")
+                    self.calibrated_model = None
+                    print(f"❌ Failed to load calibrated NN artifact {calibrated_path}: {e}")
+                    return False
 
             self.is_loaded = True
             print(f"✅ NN model loaded ({input_size} features)")
@@ -257,8 +350,17 @@ class XGBoostPredictor:
             import xgboost as xgb
             entry = _registry_model_entry("xgboost", XGB_MODEL_VERSION)
             model_file = entry.get("model_file")
-            if entry.get("artifact_available") is False or not model_file:
+            if entry.get("artifact_available", True) is not True or not model_file:
                 print("❌ Promoted XGBoost registry entry is unavailable or incomplete")
+                return False
+            probability_mode = str(
+                entry.get("probability_mode") or "raw"
+            ).strip().lower()
+            if probability_mode != "raw":
+                print(
+                    "❌ Promoted XGBoost live inference supports only "
+                    "probability_mode='raw'"
+                )
                 return False
             model_path = self.model_dir / model_file
             if not model_path.exists():
@@ -266,7 +368,18 @@ class XGBoostPredictor:
                 return False
             self.model = xgb.XGBClassifier()
             self.model.load_model(str(model_path))
-            self.feature_names = list(self.model.feature_names_in_)
+            expected_feature_names = list(ordered_feature_names(
+                str(entry.get("feature_schema_sha256") or "")
+            ))
+            artifact_feature_names = [
+                str(name) for name in self.model.feature_names_in_
+            ]
+            if artifact_feature_names != expected_feature_names:
+                print(
+                    "❌ XGBoost model feature order does not match base_141"
+                )
+                return False
+            self.feature_names = expected_feature_names
             self.is_loaded = True
             print(f"✅ XGBoost model loaded ({len(self.feature_names)} features)")
             return True
@@ -302,8 +415,17 @@ class RandomForestPredictor:
         try:
             entry = _registry_model_entry("random_forest", RF_MODEL_VERSION)
             model_file = entry.get("model_file")
-            if entry.get("artifact_available") is False or not model_file:
+            if entry.get("artifact_available", True) is not True or not model_file:
                 print("❌ Promoted Random Forest registry entry is unavailable or incomplete")
+                return False
+            probability_mode = str(
+                entry.get("probability_mode") or "raw"
+            ).strip().lower()
+            if probability_mode != "raw":
+                print(
+                    "❌ Promoted Random Forest live inference supports only "
+                    "probability_mode='raw'"
+                )
                 return False
             model_path = self.model_dir / model_file
             if not model_path.exists():
@@ -311,7 +433,18 @@ class RandomForestPredictor:
                 return False
             with open(model_path, 'rb') as f:
                 self.model = pickle.load(f)
-            self.feature_names = list(self.model.feature_names_in_)
+            expected_feature_names = list(ordered_feature_names(
+                str(entry.get("feature_schema_sha256") or "")
+            ))
+            artifact_feature_names = [
+                str(name) for name in self.model.feature_names_in_
+            ]
+            if artifact_feature_names != expected_feature_names:
+                print(
+                    "❌ Random Forest model feature order does not match base_141"
+                )
+                return False
+            self.feature_names = expected_feature_names
             self.is_loaded = True
             print(f"✅ Random Forest model loaded ({len(self.feature_names)} features)")
             return True

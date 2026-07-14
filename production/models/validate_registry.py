@@ -4,10 +4,18 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
+# Calibrated sklearn pickles reference ``models.nn_runtime``.  Direct script
+# execution otherwise exposes only production/models on sys.path, so add the
+# package root before registry validation attempts to deserialize one.
+PRODUCTION_ROOT = Path(__file__).resolve().parent.parent
+if str(PRODUCTION_ROOT) not in sys.path:
+    sys.path.insert(0, str(PRODUCTION_ROOT))
+
 try:
-    from registry_utils import validate_registry
+    from models.registry_utils import validate_registry
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from .registry_utils import validate_registry
 

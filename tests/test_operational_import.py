@@ -168,7 +168,17 @@ def _write_model_registry(prod: Path):
                 },
             },
         },
-        "random_forest": {"models": {}},
+        "random_forest": {
+            "current_version": "v1.0.0",
+            "models": {
+                "v1.0.0": {
+                    **complete_contract,
+                    "name": "promoted-rf",
+                    "model_file": "releases/random_forest/v1.0.0/model.pkl",
+                    "model_sha256": "d" * 64,
+                },
+            },
+        },
     }
     path = prod / "models/model_registry.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -307,12 +317,13 @@ def test_model_registry_imports_versioned_releases_with_contract_status(tmp_path
     assert generations[0]["registry_generation_sha256"] == (
         plan.file_sha256["models/model_registry.json"]
     )
-    assert len(releases) == 4
+    assert len(releases) == 5
     assert {row["release_status"] for row in releases} == {"registered"}
     assert statuses["model_release:nn:1.1.0"] == "archived"
     assert statuses["model_release:nn:1.2.1"] == "promoted"
     assert statuses["model_release:nn:1.3.0"] == "candidate"
     assert statuses["model_release:xgboost:1.0.0"] == "promoted"
+    assert statuses["model_release:random_forest:1.0.0"] == "promoted"
     assert {
         (row["model_release_key"], row["model_family"])
         for row in status_events
@@ -321,9 +332,11 @@ def test_model_registry_imports_versioned_releases_with_contract_status(tmp_path
         ("model_release:nn:1.2.1", "nn"),
         ("model_release:nn:1.3.0", "nn"),
         ("model_release:xgboost:1.0.0", "xgboost"),
+        ("model_release:random_forest:1.0.0", "random_forest"),
     }
     assert by_identity[("nn", "1.2.1")]["contract_complete"] is True
     assert by_identity[("xgboost", "1.0.0")]["contract_complete"] is True
+    assert by_identity[("random_forest", "1.0.0")]["contract_complete"] is True
     assert by_identity[("nn", "1.1.0")]["contract_complete"] is False
     assert json.loads(by_identity[("nn", "1.2.1")]["registry_entry"]) == (
         registry["models"]["v1.2.1"]
@@ -340,6 +353,124 @@ def test_model_registry_imports_versioned_releases_with_contract_status(tmp_path
     assert artifact["storage_uri"] == "repository-file://models/model_registry.json"
 
 
+def _complete_contract_entry(*, family: str = "nn") -> dict:
+    entry = {
+        "model_file": "releases/model.bin",
+        "model_sha256": "a" * 64,
+        "features": 141,
+        "feature_schema_id": FEATURE_SCHEMA_ID,
+        "feature_schema_sha256": FEATURE_SCHEMA_SHA256,
+        "training_feature_semantics_id": "historical@1.0.0",
+        "live_feature_semantics_id": "live@1.0.0",
+        "training_dataset_id": "dataset@1.0.0",
+        "probability_mode": "raw",
+    }
+    if family == "nn":
+        entry.update({
+            "scaler_file": "releases/scaler.pkl",
+            "scaler_sha256": "b" * 64,
+        })
+    return entry
+
+
+def test_importer_model_contract_completeness_is_fail_closed():
+    raw_nn = _complete_contract_entry()
+    assert import_csv._model_contract_complete("nn", "2.0.0", raw_nn)
+
+    calibrated_nn = {
+        **raw_nn,
+        "probability_mode": "calibrated",
+        "calibrated_model_file": "releases/calibrated.pkl",
+        "calibrated_model_sha256": "c" * 64,
+        "calibration_version": "v1.0.0",
+    }
+    assert import_csv._model_contract_complete(
+        "nn", "2.0.0", calibrated_nn
+    )
+
+    malformed = []
+    for field in ("model_file", "model_sha256", "scaler_file", "scaler_sha256"):
+        entry = dict(raw_nn)
+        entry.pop(field)
+        malformed.append(entry)
+    malformed.extend((
+        {**raw_nn, "features": 141.0},
+        {**raw_nn, "features": True},
+        {**raw_nn, "artifact_available": False},
+        {**raw_nn, "artifact_available": "true"},
+        {**raw_nn, "probability_mode": "automatic"},
+        {
+            **raw_nn,
+            "probability_mode": "calibrated",
+            "calibrated_model_sha256": "c" * 64,
+            "calibration_version": "v1.0.0",
+        },
+        {
+            **raw_nn,
+            "probability_mode": "calibrated",
+            "calibrated_model_file": "releases/calibrated.pkl",
+            "calibration_version": "v1.0.0",
+        },
+        {
+            **raw_nn,
+            "probability_mode": "calibrated",
+            "calibrated_model_file": "releases/calibrated.pkl",
+            "calibrated_model_sha256": "c" * 64,
+        },
+        {
+            **raw_nn,
+            "probability_mode": "calibrated",
+            "calibrated_model_file": "releases/calibrated.pkl",
+            "calibrated_model_sha256": "c" * 64,
+            "calibration_version": "final",
+        },
+    ))
+
+    assert all(
+        not import_csv._model_contract_complete("nn", "2.0.0", entry)
+        for entry in malformed
+    )
+    assert not import_csv._model_contract_complete("nn", "final", raw_nn)
+    assert not import_csv._model_contract_complete(
+        "bogus", "2.0.0", raw_nn
+    )
+    assert not import_csv._model_contract_complete(
+        "xgboost",
+        "2.0.0",
+        {**_complete_contract_entry(family="xgboost"), "probability_mode": "calibrated"},
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "registry_schema_version",
+        "current_version",
+        "candidate_version",
+        "release_key",
+    ),
+)
+def test_registry_import_rejects_ad_hoc_versions(tmp_path, mutation):
+    prod, _ = _fixture_prod(tmp_path)
+    registry = _write_model_registry(prod)
+    if mutation == "registry_schema_version":
+        registry["registry_schema_version"] = "final"
+    elif mutation == "current_version":
+        registry["current_version"] = "final"
+    elif mutation == "candidate_version":
+        registry["candidate_version"] = "next"
+    else:
+        entry = registry["models"].pop("v1.2.1")
+        registry["models"]["final"] = entry
+        registry["current_version"] = "final"
+    (prod / "models/model_registry.json").write_text(
+        json.dumps(registry, indent=2) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="valid SemVer"):
+        build_plan(prod, include_run_feature_files=False)
+
+
 def test_model_registry_rejects_current_version_omitted_from_family(tmp_path):
     prod, _ = _fixture_prod(tmp_path)
     registry = _write_model_registry(prod)
@@ -353,6 +484,20 @@ def test_model_registry_rejects_current_version_omitted_from_family(tmp_path):
             "model registry nn.current_version '9.9.9' must identify "
             "exactly one models release"
         ),
+    ):
+        build_plan(prod, include_run_feature_files=False)
+
+
+def test_model_registry_requires_current_version_for_every_live_family(tmp_path):
+    prod, _ = _fixture_prod(tmp_path)
+    registry = _write_model_registry(prod)
+    registry["random_forest"].pop("current_version")
+    path = prod / "models/model_registry.json"
+    path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="model registry random_forest.current_version is required",
     ):
         build_plan(prod, include_run_feature_files=False)
 

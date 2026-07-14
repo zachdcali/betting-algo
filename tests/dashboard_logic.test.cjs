@@ -27,6 +27,21 @@ function completeSlateRow(overrides = {}) {
   };
 }
 
+test("timezone-naive operational timestamps are interpreted as UTC", () => {
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14T08:26:24.639361"),
+    Date.parse("2026-07-14T08:26:24.639361Z"),
+  );
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14 08:08:02"),
+    Date.parse("2026-07-14T08:08:02Z"),
+  );
+  assert.equal(
+    Logic.parseTimestamp("2026-07-14T08:08:02-04:00"),
+    Date.parse("2026-07-14T08:08:02-04:00"),
+  );
+});
+
 test("normalizes the operational bet outcome vocabulary", () => {
   assert.equal(Logic.normalizeBetOutcome({ outcome: "win", status: "settled" }), "win");
   assert.equal(Logic.normalizeBetOutcome({ outcome: "won", status: "settled" }), "win");

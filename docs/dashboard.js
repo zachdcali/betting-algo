@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-14.2";
+  const BUILD_ID = "2026-07-14.3";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;

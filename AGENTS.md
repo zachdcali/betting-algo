@@ -38,6 +38,10 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   inference.
 - A changed train/validation/test protocol warrants at least a minor version bump.
 - Probability calibration for the NN should be tracked separately from the base NN artifact version.
+- Keep live `probability_mode=calibrated` promotion blocked until immutable
+  prediction and snapshot lineage persists `nn_calibration_version` and the
+  importer, replay, and evaluation ledger carry that version. Candidate
+  calibrators may still be checksum- and schema-validated offline.
 - Keep the ordered feature schema and feature semantics as separate versioned
   contracts. The current representation is `base_141@1.0.0`; its historical
   and live semantics remain explicitly different until shared chronological
