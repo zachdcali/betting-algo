@@ -105,6 +105,22 @@ def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
                    actual_winner, score, settled_at, record_status,
                    model_correct, market_correct, xgb_correct, rf_correct
             FROM dash_predictions WHERE actual_winner IS NOT NULL AND actual_winner <> ''""")
+        # A RESOLVED ROUND / COMPLETE PREDICTION IS STICKY. Same disease: a run
+        # whose ATP draw/schedule fetch failed re-derives a match with round=None
+        # and no model prob, and — being newer — clobbers a prior run that had it
+        # fully resolved and bettable (Bastad went 11/11 bettable -> 0 this way).
+        # Snapshot each still-pending match that IS complete+scored, and after the
+        # reload restore that frozen prediction onto any copy that came back
+        # incomplete. First-complete-wins, enforced at the mirror since the
+        # runner's stale git base has no memory of the prior success.
+        cur.execute("""CREATE TEMP TABLE _complete_bak ON COMMIT DROP AS
+            SELECT COALESCE(NULLIF(match_uid,''), lower(p1)||'|'||lower(p2)||'|'||left(match_date,10)) AS k,
+                   round, features_complete, defaulted_features,
+                   model_p1_prob, xgb_p1_prob, rf_p1_prob, market_p1_prob,
+                   p1_odds_decimal, p2_odds_decimal, edge_p1, surface, level, p1_rank, p2_rank
+            FROM dash_predictions
+            WHERE (actual_winner IS NULL OR actual_winner='')
+              AND features_complete='True' AND model_p1_prob IS NOT NULL AND model_p1_prob<>''""")
 
     cur.execute(f'TRUNCATE "{table}"')
     buf = io.StringIO()
@@ -131,6 +147,25 @@ def _sync_table(cur, table: str, df: pd.DataFrame) -> None:
         restored = cur.rowcount
         if restored:
             print(f"   🛟 preserved {restored} settlement(s) the reload was missing (mirror is monotonic)")
+        # restore complete predictions the reload downgraded to incomplete
+        # (round resolved -> None from a failed fetch). Only touch rows that came
+        # back NOT complete AND are still unsettled — never overwrite a fresh
+        # complete build or a settled result.
+        cur.execute("""UPDATE dash_predictions d SET
+                round=b.round, features_complete=b.features_complete,
+                defaulted_features=b.defaulted_features,
+                model_p1_prob=b.model_p1_prob, xgb_p1_prob=b.xgb_p1_prob,
+                rf_p1_prob=b.rf_p1_prob, market_p1_prob=b.market_p1_prob,
+                p1_odds_decimal=b.p1_odds_decimal, p2_odds_decimal=b.p2_odds_decimal,
+                edge_p1=b.edge_p1, surface=b.surface, level=b.level,
+                p1_rank=b.p1_rank, p2_rank=b.p2_rank
+            FROM _complete_bak b
+            WHERE COALESCE(NULLIF(d.match_uid,''), lower(d.p1)||'|'||lower(d.p2)||'|'||left(d.match_date,10)) = b.k
+              AND (d.actual_winner IS NULL OR d.actual_winner='')
+              AND (d.features_complete IS DISTINCT FROM 'True' OR d.model_p1_prob IS NULL OR d.model_p1_prob='')""")
+        rescued = cur.rowcount
+        if rescued:
+            print(f"   🛟 restored {rescued} complete prediction(s) a failed fetch had downgraded to round-pending")
 
 
 def _enable_public_read(cur, table: str) -> None:
