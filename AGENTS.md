@@ -124,6 +124,14 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   SHA-256. Inference and GOLD verification require a structurally valid, finite
   persisted vector with valid binary/cardinality one-hot groups; a corrupt file,
   mismatched hash, or ambiguous duplicate ID fails closed.
+- Live match identity strips only Bovada's trailing numeric bucket-count suffix
+  (for example `(8)`) before hashing. Snapshot-backed prediction refreshes are
+  exact-`match_uid` only: date, nonblank-round, surface, canonical event, or
+  player-orientation drift must become an explicit non-decision identity
+  conflict, never a fuzzy attachment. The sole enrichment exception is an
+  unsettled incomplete blank round superseded by an explicit complete round.
+  The deterministic feature snapshot ID must agree with its match, run, and
+  oriented players before prediction, dashboard GOLD, shadow, odds, or bet use.
 - Immutable per-run `logs/features_*.csv` rows outrank derived
   `logs/feature_vectors.csv` and `dash_features` copies for the same snapshot
   ID. Parse feature CSV floats with round-trip precision; require run, match,

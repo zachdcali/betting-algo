@@ -257,21 +257,20 @@ def _first_present(row: pd.Series, columns: Iterable[str]) -> str:
 def _feature_identity_compatible(
     candidate: dict[str, Any] | None, prediction: pd.Series
 ) -> bool:
-    """Require the selected vector to preserve player orientation.
-
-    ``match_uid`` has changed historically as round/surface identity inputs were
-    corrected, so it is not a stable cross-era foreign key.  Ordered player
-    identity is stable enough to fail closed without rejecting those known UID
-    migrations.  Exact snapshot IDs still remain the primary join key.
-    """
+    """Require one exact match UID and the same player orientation."""
     if candidate is None:
         return False
     candidate_p1 = _normal_name(candidate.get("p1"))
     candidate_p2 = _normal_name(candidate.get("p2"))
     prediction_p1 = _normal_name(prediction.get("p1"))
     prediction_p2 = _normal_name(prediction.get("p2"))
+    candidate_match_uid = _text(candidate.get("match_uid"))
+    prediction_match_uid = _text(prediction.get("match_uid"))
     return bool(
-        candidate_p1
+        candidate_match_uid
+        and prediction_match_uid
+        and candidate_match_uid == prediction_match_uid
+        and candidate_p1
         and candidate_p2
         and prediction_p1
         and prediction_p2
@@ -569,10 +568,15 @@ def _reason_codes(
     rescore_quality_valid: bool,
     legacy_candidates: list[dict[str, Any]],
     legacy_hash_count: int,
+    identity_record_status: str,
 ) -> list[str]:
     if tier == "GOLD_REPLAY":
         return ["READY_FOR_SAME_SCHEMA_REPLAY"]
     reasons: list[str] = []
+    if identity_record_status == "identity_conflict":
+        reasons.append("MATCH_IDENTITY_CONFLICT")
+    elif identity_record_status == "superseded_identity":
+        reasons.append("SUPERSEDED_MATCH_IDENTITY")
     if tier == "LEGACY_MATCHED":
         reasons.append("LEGACY_NO_IMMUTABLE_LINEAGE")
     elif tier == "NO_VECTOR":
@@ -654,6 +658,21 @@ def build_replay_manifest(prod_dir: str | Path) -> ReplayManifest:
             # A blank ID cannot satisfy the one-row-per-match contract.
             raise RuntimeError("prediction_log.csv contains a blank match_uid")
         primary = _primary_prediction(group)
+        group_identity_statuses = {
+            _text(value).lower() for value in group.get(
+                "record_status", pd.Series("", index=group.index)
+            )
+        }
+        identity_record_status = (
+            "identity_conflict"
+            if "identity_conflict" in group_identity_statuses
+            else "superseded_identity"
+            if "superseded_identity" in group_identity_statuses
+            else _text(primary.get("record_status")).lower()
+        )
+        identity_terminal = identity_record_status in {
+            "identity_conflict", "superseded_identity",
+        }
         primary_snapshot_id = _text(primary.get("feature_snapshot_id"))
         exact_candidates = exact_by_id.get(primary_snapshot_id, []) if primary_snapshot_id else []
         selected: dict[str, Any] | None = exact_candidates[0] if exact_candidates else None
@@ -692,7 +711,8 @@ def build_replay_manifest(prod_dir: str | Path) -> ReplayManifest:
         # The operational row and the immutable feature evidence must agree.
         # A stale optimistic flag on either side cannot promote the vector.
         features_complete = bool(
-            _truthy(primary.get("features_complete"))
+            not identity_terminal
+            and _truthy(primary.get("features_complete"))
             and selected is not None
             and selected["features_complete"]
         )
@@ -738,7 +758,11 @@ def build_replay_manifest(prod_dir: str | Path) -> ReplayManifest:
                 rescore_quality_valid,
             ]
         )
-        if gold:
+        if identity_terminal:
+            tier = "NO_VECTOR"
+            selected_kind = "identity_terminal_excluded"
+            selection_rule = "identity_contract_fail_closed"
+        elif gold:
             tier = "GOLD_REPLAY"
             selected_kind = "exact_opening"
             selection_rule = "prediction_log_operational_opening_id"
@@ -782,6 +806,7 @@ def build_replay_manifest(prod_dir: str | Path) -> ReplayManifest:
             rescore_quality_valid=rescore_quality_valid,
             legacy_candidates=legacy_candidates,
             legacy_hash_count=len(legacy_hashes),
+            identity_record_status=identity_record_status,
         )
         market_p1 = _numeric(primary.get("market_p1_prob"))
         market_p2 = _numeric(primary.get("market_p2_prob"))

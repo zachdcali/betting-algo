@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 import os
 import re
@@ -32,7 +33,13 @@ from ta_scraper import TennisAbstractScraper
 from features.ta_feature_calculator import TAFeatureCalculator
 from utils.bet_tracker import BetTracker
 from audit_logger import SETTLEMENT_AUDIT_LOG_PATH, log_settlement_event, upsert_run_history
-from logging_utils import make_run_id, utc_now
+from logging_utils import (
+    canonicalize_live_event_key,
+    make_run_id,
+    normalize_name,
+    normalize_text,
+    utc_now,
+)
 from prediction_logger import upgrade_prediction_log
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
@@ -50,6 +57,150 @@ MIN_SETTLEMENT_SCORE = 65
 AMBIGUITY_MARGIN = 6
 
 SCRAPER = TennisAbstractScraper(rate_limit_delay=DEFAULT_RATE_LIMIT_DELAY)
+IDENTITY_TERMINAL_STATUSES = {'identity_conflict', 'superseded_identity'}
+
+
+def _identity_signature(row: pd.Series) -> tuple[str, ...]:
+    """Comparable oriented metadata for duplicate operational match UIDs."""
+    event_key = normalize_text(row.get('identity_event_key'))
+    if not event_key:
+        event_key = canonicalize_live_event_key(row.get('tournament'))
+    return (
+        normalize_name(row.get('p1')),
+        normalize_name(row.get('p2')),
+        normalize_text(row.get('match_date')),
+        event_key,
+        normalize_text(row.get('round')),
+        normalize_text(row.get('surface')),
+    )
+
+
+def _settlement_uid_gate(df: pd.DataFrame, pending: pd.DataFrame) -> tuple[
+    pd.DataFrame, dict[str, int]
+]:
+    """Block unsafe UID groups and attempt compatible duplicates once.
+
+    Durable hydration can temporarily expose more than one operational row for
+    a match UID.  A tombstone or existing terminal result on any member blocks
+    the whole UID.  Compatible pending duplicates consume one TA candidate;
+    inconsistent metadata is marked as an identity conflict and fails closed.
+    """
+    counts = {
+        'identity_terminal_uid': 0,
+        'already_settled_uid': 0,
+        'duplicate_identity_conflict': 0,
+        'compatible_duplicate_uid': 0,
+    }
+    if pending.empty or 'match_uid' not in df.columns:
+        return pending, counts
+
+    uid = df['match_uid'].fillna('').astype(str).str.strip()
+    pending_uid = pending.get(
+        'match_uid', pd.Series('', index=pending.index)
+    ).fillna('').astype(str).str.strip()
+    status = df.get(
+        'record_status', pd.Series('', index=df.index)
+    ).fillna('').astype(str).str.strip().str.lower()
+    winner = pd.to_numeric(
+        df.get('actual_winner', pd.Series('', index=df.index)),
+        errors='coerce',
+    )
+    pending_uid_values = {
+        match_uid for match_uid in pending_uid if match_uid
+    }
+
+    identity_blocked = {
+        match_uid for match_uid in uid[status.isin(IDENTITY_TERMINAL_STATUSES)]
+        if match_uid and match_uid in pending_uid_values
+    }
+    settled_blocked = {
+        match_uid for match_uid in uid[winner.isin([1, 2])]
+        if match_uid and match_uid in pending_uid_values
+    }
+    counts['identity_terminal_uid'] = len(identity_blocked)
+    counts['already_settled_uid'] = len(settled_blocked - identity_blocked)
+    blocked = identity_blocked | settled_blocked
+    if blocked:
+        pending = pending.loc[~pending_uid.isin(blocked)].copy()
+
+    pending_uid = pending.get(
+        'match_uid', pd.Series('', index=pending.index)
+    ).fillna('').astype(str).str.strip()
+    duplicate_uids = pending_uid[pending_uid.ne('')].value_counts()
+    duplicate_uids = set(duplicate_uids[duplicate_uids.gt(1)].index)
+    incompatible_uids: set[str] = set()
+    for match_uid in duplicate_uids:
+        group_indices = pending.index[pending_uid.eq(match_uid)]
+        signatures = {
+            _identity_signature(pending.loc[index]) for index in group_indices
+        }
+        if len(signatures) == 1:
+            counts['compatible_duplicate_uid'] += 1
+            continue
+        incompatible_uids.add(match_uid)
+        counts['duplicate_identity_conflict'] += 1
+        all_indices = df.index[uid.eq(match_uid)]
+        df.loc[all_indices, 'record_status'] = 'identity_conflict'
+        df.loc[all_indices, 'identity_status'] = 'conflict'
+        df.loc[all_indices, 'identity_conflict_fields'] = (
+            'duplicate_match_uid_metadata'
+        )
+        df.loc[all_indices, 'features_complete'] = False
+
+    if incompatible_uids:
+        pending = pending.loc[~pending_uid.isin(incompatible_uids)].copy()
+    return pending, counts
+
+
+def _dedupe_pending_match_uids(pending: pd.DataFrame) -> pd.DataFrame:
+    """Keep one settlement candidate per nonblank compatible match UID."""
+    if pending.empty or 'match_uid' not in pending.columns:
+        return pending
+    pending_uid = pending['match_uid'].fillna('').astype(str).str.strip()
+    keep = pending_uid.eq('') | ~pending_uid.duplicated(keep='first')
+    return pending.loc[keep].copy()
+
+
+def _compatible_pending_group_indices(
+    df: pd.DataFrame, selected_index: int
+) -> list[int]:
+    """Return every compatible pending row represented by one candidate."""
+    selected = df.loc[selected_index]
+    raw_match_uid = selected.get('match_uid')
+    match_uid = (
+        '' if raw_match_uid is None or pd.isna(raw_match_uid)
+        else str(raw_match_uid).strip()
+    )
+    if not match_uid or 'match_uid' not in df.columns:
+        return [selected_index]
+    uid = df['match_uid'].fillna('').astype(str).str.strip()
+    winner = pd.to_numeric(df['actual_winner'], errors='coerce')
+    status = df.get(
+        'record_status', pd.Series('', index=df.index)
+    ).fillna('').astype(str).str.strip().str.lower()
+    indices = list(df.index[
+        uid.eq(match_uid)
+        & winner.isna()
+        & ~status.isin(IDENTITY_TERMINAL_STATUSES)
+    ])
+    if not indices:
+        return [selected_index]
+    signatures = {_identity_signature(df.loc[index]) for index in indices}
+    return indices if len(signatures) == 1 else [selected_index]
+
+
+def _prediction_correct(probability, actual_winner: int):
+    """Return 0/1 correctness for a finite probability, otherwise no score."""
+    try:
+        value = float(probability)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return int(
+        (actual_winner == 1 and value > 0.5)
+        or (actual_winner == 2 and value < 0.5)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -367,26 +518,28 @@ def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime
     return True, ""
 
 
-def _recently_attempted_row_indexes(
+def _recently_attempted_identity_keys(
     *,
     audit_path: Path = SETTLEMENT_AUDIT_LOG_PATH,
     backoff_hours: float = DEFAULT_RETRY_BACKOFF_HOURS,
     now=None,
-) -> set[int]:
+) -> tuple[set[int], set[str], set[str]]:
     """
-    Return prediction-log row indexes attempted recently by real settlement runs.
+    Return stable identity keys attempted recently by real settlement runs.
 
     This keeps catch-up runs moving forward: an unresolved old row should not
-    block every immediate rerun while TA has no matching result.
+    block every immediate rerun while TA has no matching result. Row indexes
+    remain a legacy fallback, but match/prediction UIDs prevent a compatible
+    duplicate row (or a shifted CSV index) from bypassing the cooldown.
     """
     if backoff_hours <= 0 or not Path(audit_path).exists():
-        return set()
+        return set(), set(), set()
     try:
-        audit = pd.read_csv(audit_path, usecols=["logged_at", "dry_run", "row_index"])
+        audit = pd.read_csv(audit_path)
     except Exception:
-        return set()
-    if audit.empty:
-        return set()
+        return set(), set(), set()
+    if audit.empty or not {"logged_at", "dry_run", "row_index"}.issubset(audit.columns):
+        return set(), set(), set()
 
     logged_at = pd.to_datetime(audit["logged_at"], errors="coerce", utc=True)
     reference = pd.Timestamp(now if now is not None else utc_now())
@@ -398,7 +551,50 @@ def _recently_attempted_row_indexes(
     is_real_attempt = ~dry_run.isin({"true", "1", "yes"})
     recent = audit[is_real_attempt & logged_at.ge(cutoff)].copy()
     indexes = pd.to_numeric(recent["row_index"], errors="coerce").dropna().astype(int)
-    return set(indexes)
+
+    def _stable_values(column: str) -> set[str]:
+        if column not in recent.columns:
+            return set()
+        values = recent[column].fillna("").astype(str).str.strip()
+        return {
+            value for value in values
+            if value and value.casefold() not in {"nan", "none", "null"}
+        }
+
+    return set(indexes), _stable_values("match_uid"), _stable_values("prediction_uid")
+
+
+def _recently_attempted_row_indexes(
+    *,
+    audit_path: Path = SETTLEMENT_AUDIT_LOG_PATH,
+    backoff_hours: float = DEFAULT_RETRY_BACKOFF_HOURS,
+    now=None,
+) -> set[int]:
+    """Backward-compatible row-index view of the stable retry identity set."""
+    indexes, _, _ = _recently_attempted_identity_keys(
+        audit_path=audit_path,
+        backoff_hours=backoff_hours,
+        now=now,
+    )
+    return indexes
+
+
+def _recently_attempted_mask(
+    pending: pd.DataFrame,
+    *,
+    row_indexes: set[int],
+    match_uids: set[str],
+    prediction_uids: set[str],
+) -> pd.Series:
+    """Mark every pending row covered by a recent stable settlement identity."""
+    mask = pd.Series(pending.index.isin(row_indexes), index=pending.index, dtype=bool)
+    if match_uids and "match_uid" in pending.columns:
+        values = pending["match_uid"].fillna("").astype(str).str.strip()
+        mask |= values.isin(match_uids)
+    if prediction_uids and "prediction_uid" in pending.columns:
+        values = pending["prediction_uid"].fillna("").astype(str).str.strip()
+        mask |= values.isin(prediction_uids)
+    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +1049,8 @@ def run(
         'prediction_log_created': 0,
         'prediction_log_updated': 0,
         'prediction_log_skipped_incomplete': 0,
+        'prediction_identity_aliases': 0,
+        'prediction_identity_conflicts': 0,
         'bet_opportunities': 0,
         'bets_logged': 0,
         'settlement_candidates': 0,
@@ -886,8 +1084,14 @@ def run(
         return summary
 
     pending = df[df['actual_winner'].isna()].copy()
+    pending, identity_gate_counts = _settlement_uid_gate(df, pending)
     if 'record_status' in pending.columns:
-        pending = pending[~pending['record_status'].isin(['stale_no_model', 'expired_unsettled'])]
+        pending = pending[~pending['record_status'].isin([
+            'stale_no_model',
+            'expired_unsettled',
+            'identity_conflict',
+            'superseded_identity',
+        ])]
     if not include_market_only:
         pending = pending[pending['model_p1_prob'].notna()]
     age_skip_reasons = []
@@ -900,11 +1104,25 @@ def run(
                 age_skip_reasons.append(reason)
         pending = pending[pd.Series(eligible_mask, index=pending.index)].copy()
 
-    recent_attempt_indexes = _recently_attempted_row_indexes(backoff_hours=retry_backoff_hours)
+    (
+        recent_attempt_indexes,
+        recent_attempt_match_uids,
+        recent_attempt_prediction_uids,
+    ) = _recently_attempted_identity_keys(backoff_hours=retry_backoff_hours)
     recent_attempt_count = 0
-    if recent_attempt_indexes and not pending.empty:
+    if (
+        recent_attempt_indexes
+        or recent_attempt_match_uids
+        or recent_attempt_prediction_uids
+    ) and not pending.empty:
         before_recent_filter = len(pending)
-        pending = pending[~pending.index.isin(recent_attempt_indexes)].copy()
+        recently_attempted = _recently_attempted_mask(
+            pending,
+            row_indexes=recent_attempt_indexes,
+            match_uids=recent_attempt_match_uids,
+            prediction_uids=recent_attempt_prediction_uids,
+        )
+        pending = pending[~recently_attempted].copy()
         recent_attempt_count = before_recent_filter - len(pending)
 
     if not pending.empty:
@@ -921,12 +1139,24 @@ def run(
             ascending = [c != "match_date" for c in sort_cols]
             pending = pending.sort_values(sort_cols, ascending=ascending)
             pending = pending.drop(columns=["_start_sort"], errors="ignore")
+        # One compatible operational duplicate may survive durable hydration.
+        # It should consume one external settlement lookup, not one per CSV row.
+        pending = _dedupe_pending_match_uids(pending)
         if max_candidates and max_candidates > 0:
             pending = pending.head(max_candidates)
 
     summary['settlement_candidates'] = len(pending)
     if pending.empty:
-        if age_skip_reasons:
+        gate_reasons = {
+            reason: count for reason, count in identity_gate_counts.items()
+            if count
+        }
+        if identity_gate_counts['duplicate_identity_conflict'] and not dry_run:
+            df.to_csv(LOG_PATH, index=False)
+        if gate_reasons:
+            print("No identity-safe unsettled predictions.")
+            summary['settlement_reason_summary'] = gate_reasons
+        elif age_skip_reasons:
             print(f"No old-enough unsettled predictions. Skipped {len(age_skip_reasons)} too-recent row(s).")
             summary['settlement_reason_summary'] = {'too_recent_to_settle': len(age_skip_reasons)}
         elif recent_attempt_count:
@@ -958,6 +1188,10 @@ def run(
     newly_settled = 0
     newly_settled_bets = 0
     reason_counts = Counter()
+    reason_counts.update({
+        reason: count for reason, count in identity_gate_counts.items()
+        if count
+    })
     if age_skip_reasons:
         reason_counts['too_recent_to_settle'] = len(age_skip_reasons)
     if recent_attempt_count:
@@ -1089,51 +1323,70 @@ def run(
             print(f"  [DRY RUN] Would settle: winner={winner_label}, score={result['score']}")
             continue
 
-        # Write result back
-        df.at[idx, 'actual_winner'] = result['actual_winner']
-        df.at[idx, 'score'] = result['score']
-        df.at[idx, 'settled_at'] = result['settled_at']
-
-        import math
-        model_p1_raw = row['model_p1_prob']
-        market_p1 = float(row['market_p1_prob'])
+        # Write one authoritative result onto every compatible pending copy of
+        # this exact UID. This clears hydrated duplicate backlog without a
+        # second external lookup while retaining every immutable observation.
+        settlement_indices = _compatible_pending_group_indices(df, idx)
         w = result['actual_winner']
-        # Only score model_correct if there was actually a model prediction
-        if pd.isna(model_p1_raw) or (isinstance(model_p1_raw, float) and math.isnan(model_p1_raw)):
-            model_correct = float('nan')
-        else:
-            model_p1 = float(model_p1_raw)
-            model_correct = int((w == 1 and model_p1 > 0.5) or (w == 2 and model_p1 < 0.5))
-        market_correct = int((w == 1 and market_p1 > 0.5) or (w == 2 and market_p1 < 0.5))
-        if not pd.isna(model_correct):
-            df.at[idx, 'model_correct'] = model_correct
-        df.at[idx, 'market_correct'] = market_correct
-
-        # Score XGBoost if prediction exists
-        xgb_p1_raw = row.get('xgb_p1_prob')
         if 'xgb_correct' not in df.columns:
             df['xgb_correct'] = None
-        if pd.notna(xgb_p1_raw) and not (isinstance(xgb_p1_raw, float) and math.isnan(xgb_p1_raw)):
-            xgb_p1 = float(xgb_p1_raw)
-            xgb_correct = int((w == 1 and xgb_p1 > 0.5) or (w == 2 and xgb_p1 < 0.5))
-            df.at[idx, 'xgb_correct'] = xgb_correct
-
-        # Score Random Forest if prediction exists
-        rf_p1_raw = row.get('rf_p1_prob')
         if 'rf_correct' not in df.columns:
             df['rf_correct'] = None
-        if pd.notna(rf_p1_raw) and not (isinstance(rf_p1_raw, float) and math.isnan(rf_p1_raw)):
-            rf_p1 = float(rf_p1_raw)
-            rf_correct = int((w == 1 and rf_p1 > 0.5) or (w == 2 and rf_p1 < 0.5))
-            df.at[idx, 'rf_correct'] = rf_correct
+        model_correct = None
+        market_correct = None
+        for settlement_index in settlement_indices:
+            settlement_row = df.loc[settlement_index]
+            df.at[settlement_index, 'actual_winner'] = w
+            df.at[settlement_index, 'score'] = result['score']
+            df.at[settlement_index, 'settled_at'] = result['settled_at']
+            df.at[settlement_index, 'record_status'] = 'settled'
+            row_model_correct = _prediction_correct(
+                settlement_row.get('model_p1_prob'), w
+            )
+            row_market_correct = _prediction_correct(
+                settlement_row.get('market_p1_prob'), w
+            )
+            row_xgb_correct = _prediction_correct(
+                settlement_row.get('xgb_p1_prob'), w
+            )
+            row_rf_correct = _prediction_correct(
+                settlement_row.get('rf_p1_prob'), w
+            )
+            if row_model_correct is not None:
+                df.at[settlement_index, 'model_correct'] = row_model_correct
+            if row_market_correct is not None:
+                df.at[settlement_index, 'market_correct'] = row_market_correct
+            if row_xgb_correct is not None:
+                df.at[settlement_index, 'xgb_correct'] = row_xgb_correct
+            if row_rf_correct is not None:
+                df.at[settlement_index, 'rf_correct'] = row_rf_correct
+            if settlement_index == idx:
+                model_correct = row_model_correct
+                market_correct = row_market_correct
 
         winner_name = p1 if w == 1 else p2
-        model_str = ('✓' if model_correct else '✗') if not (isinstance(model_correct, float) and math.isnan(model_correct)) else 'N/A'
-        print(f"  ✓ Settled: {winner_name} won | Model {model_str} | Market {'✓' if market_correct else '✗'}")
+        model_str = 'N/A' if model_correct is None else ('✓' if model_correct else '✗')
+        market_str = 'N/A' if market_correct is None else ('✓' if market_correct else '✗')
+        print(
+            f"  ✓ Settled: {winner_name} won | Model {model_str} | "
+            f"Market {market_str} | rows={len(settlement_indices)}"
+        )
         newly_settled += 1
 
         settled_bets = tracker.settle_pending_bets_for_match(
             match_uid=row.get('match_uid'),
+            alias_match_uids=(
+                [
+                    value.strip()
+                    for value in str(
+                        row.get('identity_related_match_uid') or ''
+                    ).split('|')
+                    if value.strip()
+                ]
+                if str(row.get('identity_status') or '').strip().lower()
+                == 'canonical_alias'
+                else []
+            ),
             p1=p1,
             p2=p2,
             actual_winner=w,
@@ -1185,7 +1438,14 @@ def run(
             cutoff = pd.Timestamp.now() - pd.Timedelta(days=21)
             cond = (df2['actual_winner'].isna()
                     & (age_basis.isna() | (age_basis < cutoff))
-                    & (~df2.get('record_status', pd.Series('', index=df2.index)).astype(str).isin(['expired_unsettled', 'settled'])))
+                    & (~df2.get(
+                        'record_status', pd.Series('', index=df2.index)
+                    ).astype(str).isin([
+                        'expired_unsettled',
+                        'settled',
+                        'identity_conflict',
+                        'superseded_identity',
+                    ])))
             n_exp = int(cond.sum())
             if n_exp:
                 df2.loc[cond, 'record_status'] = 'expired_unsettled'

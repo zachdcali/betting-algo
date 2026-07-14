@@ -15,6 +15,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 from evaluation import replay_manifest, replay_models
 from feature_vector_log import feature_fingerprint
+from logging_utils import build_feature_snapshot_id
 from models.inference import EXACT_141_FEATURES
 from versioning import FEATURE_SCHEMA_ID, FEATURE_SCHEMA_SHA256
 
@@ -37,12 +38,19 @@ def _valid_features(rank: float) -> dict:
 
 
 def _feature(snapshot_id: str, uid: str, p1: str, p2: str, rank: float) -> dict:
+    snapshot_label = snapshot_id
+    run_id = f"run_{snapshot_label}" if snapshot_label else ""
+    snapshot_id = (
+        build_feature_snapshot_id(uid, run_id, p1, p2)
+        if snapshot_label else ""
+    )
     row = _valid_features(rank)
     schema_hash, vector_hash, _ = feature_fingerprint(row)
     row.update(
         {
             "feature_snapshot_id": snapshot_id,
             "match_uid": uid,
+            "run_id": run_id,
             "player1_raw": p1,
             "player2_raw": p2,
             "meta_match_date": "2026-07-10",
@@ -78,6 +86,13 @@ def _prediction(uid: str, p1: str, p2: str, **overrides) -> dict:
         "market_p2_prob": 0.46,
         "actual_winner": 1,
     }
+    snapshot_label = str(overrides.get("feature_snapshot_id", "") or "")
+    if snapshot_label:
+        run_id = overrides.get("run_id") or f"run_{snapshot_label}"
+        overrides["run_id"] = run_id
+        overrides["feature_snapshot_id"] = build_feature_snapshot_id(
+            uid, run_id, p1, p2
+        )
     row.update(overrides)
     return row
 

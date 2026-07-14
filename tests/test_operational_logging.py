@@ -4,6 +4,7 @@ import sys
 import tempfile
 
 import pandas as pd
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -87,7 +88,15 @@ def test_orchestrator_logs_incomplete_feature_predictions(monkeypatch):
 
     stats = orchestrator._log_all_predictions(predictions_df, odds_df, pd.DataFrame())
 
-    assert stats == {"attempts": 1, "created": 1, "updated": 0, "skipped_incomplete": 0}
+    assert stats == {
+        "attempts": 1,
+        "created": 1,
+        "updated": 0,
+        "skipped_incomplete": 0,
+        "identity_aliases": 0,
+        "identity_conflicts": 0,
+        "identity_conflict_match_uids": [],
+    }
     assert len(calls) == 1
     assert calls[0]["features_complete"] is False
     assert calls[0]["defaulted_features"] == "round_code=None"
@@ -120,6 +129,148 @@ def test_missing_market_join_is_logged_as_missing_not_even_money(monkeypatch):
 
     assert calls[0]["market_p1_prob"] is None
     assert calls[0]["market_p2_prob"] is None
+
+
+def test_prediction_identity_contract_is_fatal_even_without_durable_mode(monkeypatch):
+    import main
+
+    monkeypatch.delenv("REQUIRE_DURABLE_STATE", raising=False)
+
+    def reject_identity(**_kwargs):
+        raise main.LiveMatchIdentityError("snapshot belongs to another match")
+
+    monkeypatch.setattr(main, "log_prediction", reject_identity)
+    orchestrator = main.LiveBettingOrchestrator.__new__(main.LiveBettingOrchestrator)
+    orchestrator.run_id = "run_identity_failure"
+    orchestrator.run_started_at = "2026-07-14T18:00:00+00:00"
+    predictions = pd.DataFrame([{
+        "player1_normalized": "Player One",
+        "player2_normalized": "Player Two",
+        "player1_raw": "Player One",
+        "player2_raw": "Player Two",
+        "player1_win_prob": 0.63,
+        "prediction_status": "success",
+        "_has_defaulted_features": False,
+        "meta_match_date": "2026-07-14",
+        "meta_surface_input": "Hard",
+        "meta_level_input": "C",
+        "meta_round_input": "R32",
+        "run_id": "run_identity_failure",
+        "match_uid": "match_wrong",
+        "feature_snapshot_id": "feat_wrong",
+    }])
+    unmatched_odds = pd.DataFrame([{
+        "player1_normalized": "Someone Else",
+        "player2_normalized": "Another Player",
+    }])
+
+    with pytest.raises(RuntimeError, match="prediction identity contract failed"):
+        orchestrator._log_all_predictions(
+            predictions, unmatched_odds, pd.DataFrame(),
+        )
+
+
+def test_unexpected_prediction_logging_error_is_fatal_before_decisions(monkeypatch):
+    import main
+
+    monkeypatch.delenv("REQUIRE_DURABLE_STATE", raising=False)
+
+    def unavailable_log(**_kwargs):
+        raise OSError("prediction log unavailable")
+
+    monkeypatch.setattr(main, "log_prediction", unavailable_log)
+    orchestrator = main.LiveBettingOrchestrator.__new__(main.LiveBettingOrchestrator)
+    orchestrator.run_id = "run_logging_failure"
+    orchestrator.run_started_at = "2026-07-14T18:00:00+00:00"
+    predictions = pd.DataFrame([{
+        "player1_normalized": "Player One",
+        "player2_normalized": "Player Two",
+        "player1_raw": "Player One",
+        "player2_raw": "Player Two",
+        "player1_win_prob": 0.63,
+        "prediction_status": "success",
+        "_has_defaulted_features": False,
+        "meta_match_date": "2026-07-14",
+        "meta_surface_input": "Hard",
+        "meta_level_input": "C",
+        "meta_round_input": "R32",
+        "run_id": "run_logging_failure",
+        "match_uid": "match_unavailable",
+        "feature_snapshot_id": "feat_unavailable",
+    }])
+    unmatched_odds = pd.DataFrame([{
+        "player1_normalized": "Someone Else",
+        "player2_normalized": "Another Player",
+    }])
+
+    with pytest.raises(
+        RuntimeError, match="prediction identity preflight/logging failed"
+    ):
+        orchestrator._log_all_predictions(
+            predictions, unmatched_odds, pd.DataFrame(),
+        )
+
+
+def test_logging_gate_returns_both_sides_of_same_run_identity_conflict(monkeypatch):
+    import main
+
+    calls = 0
+
+    def classify_prediction(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "created"
+        kwargs["identity_conflict_uids_out"].update(
+            {"match_opening", "match_shifted"}
+        )
+        return "identity_conflict"
+
+    monkeypatch.setattr(main, "log_prediction", classify_prediction)
+    monkeypatch.setattr(main, "log_skipped_live_match", lambda **_kwargs: None)
+    orchestrator = main.LiveBettingOrchestrator.__new__(main.LiveBettingOrchestrator)
+    orchestrator.run_id = "run_same_slate"
+    orchestrator.run_started_at = "2026-07-14T18:00:00+00:00"
+    base = {
+        "player1_normalized": "Player One",
+        "player2_normalized": "Player Two",
+        "player1_raw": "Player One",
+        "player2_raw": "Player Two",
+        "player1_win_prob": 0.63,
+        "prediction_status": "success",
+        "_has_defaulted_features": False,
+        "meta_match_date": "2026-07-14",
+        "meta_surface_input": "Hard",
+        "meta_level_input": "C",
+        "meta_round_input": "R32",
+        "run_id": "run_same_slate",
+    }
+    predictions = pd.DataFrame([
+        {
+            **base,
+            "match_uid": "match_opening",
+            "feature_snapshot_id": "feat_opening",
+        },
+        {
+            **base,
+            "meta_round_input": "R16",
+            "match_uid": "match_shifted",
+            "feature_snapshot_id": "feat_shifted",
+        },
+    ])
+    unmatched_odds = pd.DataFrame([{
+        "player1_normalized": "Someone Else",
+        "player2_normalized": "Another Player",
+    }])
+
+    stats = orchestrator._log_all_predictions(
+        predictions, unmatched_odds, pd.DataFrame()
+    )
+
+    assert stats["identity_conflicts"] == 1
+    assert set(stats["identity_conflict_match_uids"]) == {
+        "match_opening", "match_shifted",
+    }
 
 
 def test_prediction_terminal_status_rejects_all_failed_rows():
@@ -318,6 +469,68 @@ def test_auto_settle_recent_attempt_backoff_ignores_dry_runs(tmp_path):
     assert recent == {12}
 
 
+def test_auto_settle_recent_attempt_backoff_uses_stable_identity_keys(tmp_path):
+    import auto_settle
+
+    audit_path = tmp_path / "settlement_audit.csv"
+    pd.DataFrame(
+        [
+            {
+                "logged_at": "2026-05-13T12:00:00+00:00",
+                "dry_run": False,
+                "row_index": 12,
+                "match_uid": "match_shared",
+                "prediction_uid": "prediction_shared",
+            },
+            {
+                "logged_at": "2026-05-13T12:00:00+00:00",
+                "dry_run": True,
+                "row_index": 13,
+                "match_uid": "match_dry_run",
+                "prediction_uid": "prediction_dry_run",
+            },
+        ]
+    ).to_csv(audit_path, index=False)
+
+    indexes, match_uids, prediction_uids = (
+        auto_settle._recently_attempted_identity_keys(
+            audit_path=audit_path,
+            backoff_hours=18,
+            now=pd.Timestamp("2026-05-13T18:00:00+00:00"),
+        )
+    )
+
+    assert indexes == {12}
+    assert match_uids == {"match_shared"}
+    assert prediction_uids == {"prediction_shared"}
+
+    pending = pd.DataFrame(
+        [
+            {
+                "match_uid": "match_shared",
+                "prediction_uid": "prediction_shared",
+            },
+            {
+                "match_uid": "match_shared",
+                "prediction_uid": "prediction_duplicate_row",
+            },
+            {
+                "match_uid": "match_fresh",
+                "prediction_uid": "prediction_fresh",
+            },
+        ],
+        index=[12, 99, 100],
+    )
+    mask = auto_settle._recently_attempted_mask(
+        pending,
+        row_indexes=indexes,
+        match_uids=match_uids,
+        prediction_uids=prediction_uids,
+    )
+
+    assert mask.to_dict() == {12: True, 99: True, 100: False}
+
+
 def test_bet_tracker_skips_duplicate_pending_bets():
     from utils.bet_tracker import BetTracker
 
@@ -402,6 +615,59 @@ def test_bet_tracker_settles_string_false_as_player_two(tmp_path):
     assert settled["status"] == "settled"
     assert settled["outcome"] == "win"
     assert settled["actual_profit"] == 10.0
+
+
+def test_bet_settlement_never_fuzzy_matches_a_different_nonblank_uid(tmp_path):
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    tracker = BetTracker(str(tmp_path))
+    session_id = tracker.start_session(1000.0, 0.18, "identity settlement")
+    rows = []
+    for bet_id, match_uid in (
+        ("exact", "match_canonical"),
+        ("explicit_alias", "match_old_alias"),
+        ("different_uid", "match_other_round"),
+        ("legacy_blank", ""),
+    ):
+        row = {column: "" for column in BETS_COLUMNS}
+        row.update({
+            "bet_id": bet_id,
+            "session_id": session_id,
+            "match": "Player One vs Player Two",
+            "match_uid": match_uid,
+            "bet_on": "Player One",
+            "bet_on_player1": True,
+            "odds_decimal": 2.0,
+            "stake": 10.0,
+            "status": "pending",
+        })
+        rows.append(row)
+    pd.DataFrame(rows, columns=BETS_COLUMNS).to_csv(tracker.bets_file, index=False)
+
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_canonical",
+        alias_match_uids=["match_old_alias"],
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    ) == 2
+    first_pass = pd.read_csv(tracker.bets_file).set_index("bet_id")
+    assert first_pass.loc["exact", "status"] == "settled"
+    assert first_pass.loc["explicit_alias", "status"] == "settled"
+    assert first_pass.loc["different_uid", "status"] == "pending"
+    assert first_pass.loc["legacy_blank", "status"] == "pending"
+
+    # Once exact/alias rows are gone, the compatibility fallback may settle the
+    # blank-ID legacy bet, but still cannot touch another nonblank UID.
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_canonical",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    ) == 1
+    second_pass = pd.read_csv(tracker.bets_file).set_index("bet_id")
+    assert second_pass.loc["legacy_blank", "status"] == "settled"
+    assert second_pass.loc["different_uid", "status"] == "pending"
 
 
 def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():

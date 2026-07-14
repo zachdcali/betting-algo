@@ -116,3 +116,55 @@ def test_sync_shadow_settlements_scores_shadow_rows(tmp_path):
     assert synced.loc[0, "shadow_pick"] == "Player A"
     assert synced.loc[0, "shadow_correct"] == 1
     assert synced.loc[0, "market_correct"] == 0
+
+
+def test_shadow_settlement_allows_only_exact_or_explicit_alias_identity(tmp_path):
+    shadow_path = tmp_path / "shadow.csv"
+    prediction_log_path = tmp_path / "prediction_log.csv"
+    pd.DataFrame([
+        {
+            "shadow_prediction_uid": "shadow_alias",
+            "match_uid": "match_old_alias",
+            "feature_snapshot_id": "feat_old",
+            "match_date": "2026-07-14",
+            "p1": "Player A", "p2": "Player B",
+            "shadow_p1_prob": 0.6,
+        },
+        {
+            "shadow_prediction_uid": "shadow_conflict",
+            "match_uid": "match_other_round",
+            "feature_snapshot_id": "feat_other",
+            "match_date": "2026-07-14",
+            "p1": "Player A", "p2": "Player B",
+            "shadow_p1_prob": 0.6,
+        },
+    ]).to_csv(shadow_path, index=False)
+    pd.DataFrame([
+        {
+            "match_uid": "match_old_alias",
+            "feature_snapshot_id": "feat_old",
+            "actual_winner": "",
+            "record_status": "superseded_identity",
+            "identity_status": "superseded_alias",
+            "identity_related_match_uid": "match_canonical",
+            "match_date": "2026-07-14",
+            "p1": "Player A", "p2": "Player B",
+        },
+        {
+            "match_uid": "match_canonical",
+            "feature_snapshot_id": "feat_canonical",
+            "actual_winner": 1,
+            "record_status": "settled",
+            "identity_status": "canonical_alias",
+            "identity_related_match_uid": "match_old_alias",
+            "score": "6-4 6-4",
+            "settled_at": "2026-07-14T15:00:00",
+            "match_date": "2026-07-14",
+            "p1": "Player A", "p2": "Player B",
+        },
+    ]).to_csv(prediction_log_path, index=False)
+
+    assert sync_shadow_settlements(shadow_path, prediction_log_path) == 1
+    synced = pd.read_csv(shadow_path).set_index("shadow_prediction_uid")
+    assert synced.loc["shadow_alias", "actual_winner"] == 1
+    assert pd.isna(synced.loc["shadow_conflict", "actual_winner"])

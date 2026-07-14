@@ -35,14 +35,20 @@ from utils.stake_calculator import KellyStakeCalculator
 from utils.bet_tracker import BetTracker
 from tournaments.fallback_heuristics import get_fallback_tournament_meta
 from tournaments.resolve_tournament import TournamentResolver, level_hint_from_title
-from prediction_logger import log_prediction
+from prediction_logger import LiveMatchIdentityError, log_prediction
 from shadow.performance_v1_shadow import (
     PerformanceV1ShadowEnsemble,
     log_shadow_predictions,
     shadow_row_from_prediction,
 )
 from audit_logger import log_skipped_live_match, upsert_run_history
-from logging_utils import build_feature_snapshot_id, build_match_uid, make_run_id, utc_now
+from logging_utils import (
+    build_feature_snapshot_id,
+    build_match_uid,
+    canonicalize_live_event_key,
+    make_run_id,
+    utc_now,
+)
 from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 
 BOVADA_TIMEZONE = ZoneInfo("America/New_York")
@@ -60,6 +66,29 @@ def prediction_terminal_status(predictions: pd.DataFrame) -> tuple[str, int, int
     if success == 0:
         return "no_predictions", 0, errors
     return ("partial" if errors else "success"), success, errors
+
+
+def exclude_identity_conflicts(
+    predictions: pd.DataFrame,
+    bet_slips: pd.DataFrame,
+    conflict_match_uids,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Remove unresolved identities from every decision-producing branch."""
+    conflicts = {str(value).strip() for value in conflict_match_uids if str(value).strip()}
+    if not conflicts:
+        return predictions, bet_slips
+
+    filtered_predictions = predictions
+    filtered_bets = bet_slips
+    if 'match_uid' in predictions.columns:
+        filtered_predictions = predictions[
+            ~predictions['match_uid'].astype(str).isin(conflicts)
+        ].copy()
+    if 'match_uid' in bet_slips.columns:
+        filtered_bets = bet_slips[
+            ~bet_slips['match_uid'].astype(str).isin(conflicts)
+        ].copy()
+    return filtered_predictions, filtered_bets
 
 
 def _atp_live_surface(event_label: str, session_cache: dict):
@@ -165,6 +194,8 @@ class LiveBettingOrchestrator:
             'prediction_log_created': 0,
             'prediction_log_updated': 0,
             'prediction_log_skipped_incomplete': 0,
+            'prediction_identity_aliases': 0,
+            'prediction_identity_conflicts': 0,
             'bet_opportunities': 0,
             'bets_logged': 0,
             'settlement_candidates': 0,
@@ -696,8 +727,8 @@ class LiveBettingOrchestrator:
                     ordered_features[feature_name] = pd.NA
 
             match_uid = build_match_uid(
-                row.get('player1_raw', p1),
-                row.get('player2_raw', p2),
+                p1,
+                p2,
                 resolved_match_date,
                 row.get('event', ''),
                 resolved_round,
@@ -706,8 +737,8 @@ class LiveBettingOrchestrator:
             feature_snapshot_id = build_feature_snapshot_id(
                 match_uid,
                 self.run_id,
-                row.get('player1_raw', p1),
-                row.get('player2_raw', p2),
+                p1,
+                p2,
             )
 
             # Metadata (not fed to model)
@@ -733,6 +764,9 @@ class LiveBettingOrchestrator:
                 'meta_surface_input': resolved_surface,
                 'meta_round_input': resolved_round,
                 'meta_match_date': resolved_match_date,
+                'meta_identity_event_key': canonicalize_live_event_key(
+                    row.get('event', '')
+                ),
                 'meta_defaulted_features': features.get('_defaulted_features') or '',
                 'meta_draw_input': draw_size,
                 'meta_resolver_source': resolver_source,
@@ -989,6 +1023,9 @@ class LiveBettingOrchestrator:
             'created': 0,
             'updated': 0,
             'skipped_incomplete': 0,
+            'identity_aliases': 0,
+            'identity_conflicts': 0,
+            'identity_conflict_match_uids': [],
         }
         try:
             today = datetime.now().date().isoformat()
@@ -1105,6 +1142,7 @@ class LiveBettingOrchestrator:
                 else:
                     rf_p1, rf_p2 = None, None
 
+                identity_conflict_group: set[str] = set()
                 action = log_prediction(
                     p1=p1, p2=p2,
                     tournament=tournament, surface=surface, level=level,
@@ -1113,6 +1151,7 @@ class LiveBettingOrchestrator:
                     run_id=pred_row.get('run_id', self.run_id),
                     match_uid=pred_row.get('match_uid'),
                     feature_snapshot_id=pred_row.get('feature_snapshot_id'),
+                    identity_event_key=pred_row.get('meta_identity_event_key', ''),
                     model_p1_prob=float(model_p1), model_p2_prob=model_p2,
                     market_p1_prob=mkt_p1, market_p2_prob=mkt_p2,
                     p1_rank=p1_rank, p2_rank=p2_rank,
@@ -1134,6 +1173,7 @@ class LiveBettingOrchestrator:
                     defaulted_features=pred_row.get('meta_defaulted_features', ''),
                     feature_schema_sha256=pred_row.get('feature_schema_sha256', ''),
                     feature_vector_sha256=pred_row.get('feature_vector_sha256', ''),
+                    identity_conflict_uids_out=identity_conflict_group,
                     # data-quality caveats surfaced on the slate (still bettable,
                     # but visible): handedness and unranked status are honest
                     # values the model uses, not defaults — the user should see them
@@ -1141,14 +1181,50 @@ class LiveBettingOrchestrator:
                 )
                 if action == 'created':
                     stats['created'] += 1
+                elif action == 'created_alias':
+                    stats['created'] += 1
+                    stats['identity_aliases'] += 1
                 elif action == 'updated':
                     stats['updated'] += 1
+                elif action == 'identity_conflict':
+                    stats['identity_conflicts'] += 1
+                    conflict_uid = str(pred_row.get('match_uid') or '').strip()
+                    blocked_uids = identity_conflict_group or {conflict_uid}
+                    stats['identity_conflict_match_uids'].extend(
+                        sorted(uid for uid in blocked_uids if uid)
+                    )
+                    log_skipped_live_match(
+                        run_id=pred_row.get('run_id', self.run_id),
+                        run_started_at=self.run_started_at,
+                        stage='prediction_logging',
+                        skip_reason_code='match_identity_conflict',
+                        skip_reason_detail='date_round_surface_or_tournament_identity_shift',
+                        match_uid=conflict_uid,
+                        feature_snapshot_id=pred_row.get('feature_snapshot_id', ''),
+                        match_date=match_date,
+                        match_start_time=match_time,
+                        match_start_at_utc=self.match_start_at_utc(match_time),
+                        odds_scraped_at=odds_scraped_at,
+                        tournament=tournament,
+                        event_title=event,
+                        surface=surface,
+                        level=level,
+                        round_code=pred_row.get('meta_round_input', '') or '',
+                        p1=p1,
+                        p2=p2,
+                        defaulted_features='match_identity_conflict',
+                    )
+        except LiveMatchIdentityError as e:
+            print(f"  🛑 Prediction identity contract failed (fatal): {e}")
+            raise RuntimeError(f"prediction identity contract failed: {e}") from e
         except Exception as e:
-            required = os.environ.get('REQUIRE_DURABLE_STATE') == '1'
-            print(f"  ⚠️ Prediction logging failed ({'fatal' if required else 'non-fatal'}): {e}")
-            import traceback; traceback.print_exc()
-            if required:
-                raise RuntimeError(f"prediction lineage logging failed: {e}") from e
+            # This stage is also the decision-eligibility preflight.  If it
+            # cannot durably classify every row, the caller must not proceed
+            # to shadows or stake allocation even in local/non-durable mode.
+            print(f"  🛑 Prediction identity preflight/logging failed (fatal): {e}")
+            raise RuntimeError(
+                f"prediction identity preflight/logging failed: {e}"
+            ) from e
         return stats
 
     def _find_odds_row(self, p1: str, p2: str, odds_df: pd.DataFrame):
@@ -1335,6 +1411,8 @@ class LiveBettingOrchestrator:
         )
         if 'error' in error_fields:
             return 'partial'
+        if self.run_metrics.get('prediction_identity_conflicts', 0):
+            return 'partial'
         if self.run_metrics.get('exposure_gate_status') == 'blocked_pending_exposure':
             return 'partial'
         return status
@@ -1473,21 +1551,42 @@ class LiveBettingOrchestrator:
                 self._persist_run_state(status='no_predictions')
                 return False
             
-            # Step 4: Calculate stakes
-            bet_slips_df = self.calculate_edges_and_stakes(
-                predictions_df,
-                odds_df,
-                bankroll=bankroll,
-                available_bankroll=available_bankroll,
-            )
-
-            # Step 4b: Log all predictions (regardless of edge threshold)
+            # Step 4: Log all predictions (regardless of edge threshold) and
+            # resolve identity before any match can consume allocation budget.
             prediction_log_stats = self._log_all_predictions(predictions_df, odds_df, features_df)
             self.run_metrics['prediction_log_attempts'] = prediction_log_stats.get('attempts', 0)
             self.run_metrics['prediction_log_created'] = prediction_log_stats.get('created', 0)
             self.run_metrics['prediction_log_updated'] = prediction_log_stats.get('updated', 0)
             self.run_metrics['prediction_log_skipped_incomplete'] = prediction_log_stats.get('skipped_incomplete', 0)
-            shadow_stats = self._log_performance_shadow_predictions(predictions_df, odds_df)
+            self.run_metrics['prediction_identity_aliases'] = prediction_log_stats.get('identity_aliases', 0)
+            self.run_metrics['prediction_identity_conflicts'] = prediction_log_stats.get('identity_conflicts', 0)
+            identity_conflict_uids = set(
+                prediction_log_stats.get('identity_conflict_match_uids', [])
+            )
+            decision_predictions_df = predictions_df
+            if identity_conflict_uids:
+                print(
+                    f"  🛑 Blocking {len(identity_conflict_uids)} match identity "
+                    "conflict(s) from shadows and staking"
+                )
+                decision_predictions_df, _ = exclude_identity_conflicts(
+                    predictions_df,
+                    pd.DataFrame(),
+                    identity_conflict_uids,
+                )
+
+            # Step 4b: Allocate only after the identity gate. Filtering an
+            # already-sized slip can strand the per-run cap on a conflicted row
+            # and under-allocate otherwise valid opportunities.
+            bet_slips_df = self.calculate_edges_and_stakes(
+                decision_predictions_df,
+                odds_df,
+                bankroll=bankroll,
+                available_bankroll=available_bankroll,
+            )
+            shadow_stats = self._log_performance_shadow_predictions(
+                decision_predictions_df, odds_df
+            )
             self.run_metrics['performance_shadow_attempts'] = shadow_stats.get('attempts', 0)
             self.run_metrics['performance_shadow_logged'] = shadow_stats.get('logged', 0)
             self.run_metrics['performance_shadow_models_loaded'] = shadow_stats.get('models_loaded', 0)

@@ -19,12 +19,74 @@ MODEL_PROB_COLS = {
     "rf": "rf_p1_prob",
     "market": "market_p1_prob",
 }
+IDENTITY_TERMINAL_STATUSES = {"identity_conflict", "superseded_identity"}
 SHADOW_FAMILIES = ["xgboost", "catboost", "lightgbm", "nn"]
 SCORED_COLUMNS = [
     "match_uid", "model", "family", "p1_prob",
     "p1_odds_decimal", "p2_odds_decimal", "y1",
     "is_gold", "is_complete", "prediction_time",
 ]
+
+
+def _identity_text(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def feature_identity_contract(
+    row: pd.Series | dict,
+    *,
+    match_uid: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, str]:
+    """Extract the immutable match/run/oriented-player snapshot contract."""
+    return {
+        "match_uid": _identity_text(
+            row.get("match_uid") if match_uid is None else match_uid
+        ),
+        "run_id": _identity_text(
+            row.get("run_id") if run_id is None else run_id
+        ),
+        "p1": _identity_text(row.get("player1_raw"))
+              or _identity_text(row.get("p1")),
+        "p2": _identity_text(row.get("player2_raw"))
+              or _identity_text(row.get("p2")),
+    }
+
+
+def prediction_feature_identity_matches(
+    frame: pd.DataFrame,
+    authority_contracts: dict[str, dict[str, str]],
+) -> pd.Series:
+    """Verify match UID, run, orientation, and deterministic snapshot ID."""
+    from logging_utils import build_feature_snapshot_id, normalize_name
+
+    def matches(row: pd.Series) -> bool:
+        snapshot_id = _identity_text(row.get("feature_snapshot_id"))
+        authority = authority_contracts.get(snapshot_id)
+        if not snapshot_id or not authority:
+            return False
+        prediction = feature_identity_contract(row)
+        values = [*prediction.values(), *authority.values()]
+        if not all(values):
+            return False
+        return bool(
+            prediction["match_uid"] == authority["match_uid"]
+            and prediction["run_id"] == authority["run_id"]
+            and normalize_name(prediction["p1"]) == normalize_name(authority["p1"])
+            and normalize_name(prediction["p2"]) == normalize_name(authority["p2"])
+            and build_feature_snapshot_id(
+                prediction["match_uid"], prediction["run_id"],
+                prediction["p1"], prediction["p2"],
+            ) == snapshot_id
+            and build_feature_snapshot_id(
+                authority["match_uid"], authority["run_id"],
+                authority["p1"], authority["p2"],
+            ) == snapshot_id
+        )
+
+    return frame.apply(matches, axis=1).astype(bool)
 
 
 def _coerce_probability(value) -> float | None:
@@ -148,6 +210,15 @@ def load_prediction_log(prod_dir: str) -> pd.DataFrame:
         snapshot_id: lineage.referential_vector_hashes(snapshot_id)
         for snapshot_id in evidence
     }
+    authority_contracts = {
+        snapshot_id: feature_identity_contract(
+            occurrence.row,
+            match_uid=occurrence.match_uid,
+            run_id=occurrence.run_id,
+        )
+        for snapshot_id, occurrence in lineage.canonical_by_id.items()
+        if snapshot_id not in invalid_ids
+    }
     ids = frame.get("feature_snapshot_id", pd.Series("", index=frame.index)).fillna("").astype(str)
     # Referential verification is fail-closed. If no compatible lineage file
     # exists, no row can claim GOLD merely because it carries an ID-shaped
@@ -164,15 +235,21 @@ def load_prediction_log(prod_dir: str) -> pd.DataFrame:
         )
         for snapshot_id, expected in zip(ids, expected_hash)
     ], index=frame.index)
+    identity_matches = prediction_feature_identity_matches(
+        frame, authority_contracts
+    )
     frame["feature_snapshot_verified"] = (
         ids.ne("") & matched_hash.ne("")
-        & expected_matches
+        & expected_matches & identity_matches
     )
     frame.attrs["feature_snapshot_verification"] = {
         "scanned_paths": scanned_paths,
         "legacy_paths_without_ids": legacy_paths,
         "verified_id_count": len(evidence),
         "invalid_id_count": len(invalid_ids),
+        "match_uid_mismatch_count": int(
+            (ids.ne("") & matched_hash.ne("") & ~identity_matches).sum()
+        ),
     }
     return frame
 
@@ -193,7 +270,16 @@ def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
     winner = pd.to_numeric(pred_log["actual_winner"], errors="coerce")
     # Only explicit player 1/2 outcomes are ground truth. Historical void
     # sentinels such as -1 must never become an implicit player-two win.
-    s = pred_log[winner.isin([1, 2])].copy()
+    status = pred_log.get(
+        "record_status", pd.Series("", index=pred_log.index)
+    ).fillna("").astype(str).str.strip().str.lower()
+    terminal_uids = set(
+        pred_log.loc[
+            status.isin(IDENTITY_TERMINAL_STATUSES), "match_uid"
+        ].dropna()
+    )
+    identity_eligible = ~pred_log["match_uid"].isin(terminal_uids)
+    s = pred_log[winner.isin([1, 2]) & identity_eligible].copy()
     s["y1"] = (pd.to_numeric(s["actual_winner"], errors="coerce") == 1).astype(int)
     nunique = s.groupby("match_uid")["y1"].nunique()
     consistent = nunique[nunique == 1].index
@@ -216,8 +302,15 @@ def _coerce_bool(series: pd.Series) -> pd.Series:
 
 def _tier_flags(pred_log: pd.DataFrame) -> pd.DataFrame:
     f = pred_log.copy()
+    status = f.get(
+        "record_status", pd.Series("", index=f.index)
+    ).fillna("").astype(str).str.strip().str.lower()
+    terminal_uids = set(
+        f.loc[status.isin(IDENTITY_TERMINAL_STATUSES), "match_uid"].dropna()
+    )
+    identity_eligible = ~f["match_uid"].isin(terminal_uids)
     if "features_complete" in f.columns:
-        f["is_complete"] = _coerce_bool(f["features_complete"])
+        f["is_complete"] = _coerce_bool(f["features_complete"]) & identity_eligible
     else:
         f["is_complete"] = False
     lq = f["logging_quality"] if "logging_quality" in f.columns else pd.Series(index=f.index, dtype=object)
@@ -231,7 +324,14 @@ def _tier_flags(pred_log: pd.DataFrame) -> pd.DataFrame:
         f["is_complete"] & verified
         & (lq == "snapshot_v2") & (rq == "exact_feature_snapshot")
     )
-    return f[["match_uid", "is_complete", "is_gold"]].drop_duplicates("match_uid")
+    flags = (
+        f[["match_uid", "is_complete", "is_gold"]]
+        .groupby("match_uid", as_index=False, dropna=False)
+        .any()
+    )
+    terminal_mask = flags["match_uid"].isin(terminal_uids)
+    flags.loc[terminal_mask, ["is_complete", "is_gold"]] = False
+    return flags
 
 
 def _market_start_timestamp(row: pd.Series) -> pd.Timestamp | None:

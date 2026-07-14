@@ -66,6 +66,62 @@ def test_prediction_merge_joins_settlement_to_best_complete_inference():
     assert row["features_complete"] == "True"
 
 
+def test_prediction_merge_cannot_resurrect_identity_conflict():
+    durable_pending = pd.DataFrame([{
+        "match_uid": "m1", "actual_winner": "", "record_status": "pending",
+        "features_complete": "True", "model_p1_prob": "0.61",
+        "identity_status": "canonical", "feature_snapshot_id": "feat_open",
+        "latest_logged_at": "2026-07-14T09:00:00Z",
+    }])
+    local_conflict = pd.DataFrame([{
+        "match_uid": "m1", "actual_winner": "",
+        "record_status": "identity_conflict", "features_complete": "False",
+        "model_p1_prob": "0.61", "identity_status": "conflict",
+        "identity_related_match_uid": "m0",
+        "identity_conflict_fields": "round",
+        "defaulted_features": "match_identity_conflict",
+        "latest_logged_at": "2026-07-14T10:00:00Z",
+    }])
+
+    merged = merge_state_frames(
+        durable_pending, local_conflict, SPECS["dash_predictions"]
+    )
+    row = merged.iloc[0]
+
+    assert row["record_status"] == "identity_conflict"
+    assert row["features_complete"] == "False"
+    assert row["identity_status"] == "conflict"
+    assert row["identity_conflict_fields"] == "round"
+
+
+def test_newer_settlement_cannot_override_older_identity_conflict():
+    identity_conflict = pd.DataFrame([{
+        "match_uid": "m1", "actual_winner": "",
+        "record_status": "identity_conflict", "features_complete": "False",
+        "model_p1_prob": "0.61", "identity_status": "conflict",
+        "identity_related_match_uid": "m0",
+        "identity_conflict_fields": "match_date",
+        "defaulted_features": "match_identity_conflict",
+        "latest_logged_at": "2026-07-14T09:00:00Z",
+    }])
+    newer_settlement = pd.DataFrame([{
+        "match_uid": "m1", "actual_winner": "1",
+        "record_status": "settled", "features_complete": "True",
+        "model_p1_prob": "0.61", "identity_status": "canonical",
+        "settled_at": "2026-07-14T12:00:00Z",
+    }])
+
+    merged = merge_state_frames(
+        identity_conflict, newer_settlement, SPECS["dash_predictions"]
+    )
+    row = merged.iloc[0]
+
+    assert row["record_status"] == "identity_conflict"
+    assert row["features_complete"] == "False"
+    assert row["identity_status"] == "conflict"
+    assert row["identity_conflict_fields"] == "match_date"
+
+
 def test_terminal_run_and_bet_outrank_newer_running_or_pending_copy():
     run_existing = pd.DataFrame([{"run_id": "r1", "status": "success",
                                   "completed_at": "2026-07-10T00:00:00Z"}])

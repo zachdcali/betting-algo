@@ -9,6 +9,7 @@ import os
 from datetime import datetime
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prediction_log.csv')
+IDENTITY_TERMINAL_STATUSES = {'identity_conflict', 'superseded_identity'}
 
 def load_log():
     if not os.path.exists(LOG_PATH):
@@ -18,6 +19,12 @@ def load_log():
 
 def show_pending(df):
     pending = df[df['actual_winner'].isna()]
+    if 'record_status' in pending.columns:
+        pending = pending[
+            ~pending['record_status'].fillna('').astype(str).str.lower().isin(
+                IDENTITY_TERMINAL_STATUSES
+            )
+        ]
     if pending.empty:
         print("No unsettled predictions.")
         return
@@ -29,6 +36,8 @@ def show_pending(df):
 def settle(df, idx, winner):
     """winner: 1 for P1, 2 for P2"""
     row = df.loc[idx]
+    if str(row.get('record_status') or '').strip().lower() in IDENTITY_TERMINAL_STATUSES:
+        raise ValueError('identity conflict/superseded rows cannot be settled')
     df.at[idx, 'actual_winner'] = winner
     df.at[idx, 'settled_at'] = datetime.now().isoformat()
     model_correct = (winner == 1 and row['model_p1_prob'] > 0.5) or (winner == 2 and row['model_p1_prob'] < 0.5)
@@ -40,6 +49,12 @@ def settle(df, idx, winner):
 
 def show_stats(df):
     settled = df[df['actual_winner'].notna()].copy()
+    if 'record_status' in settled.columns:
+        settled = settled[
+            ~settled['record_status'].fillna('').astype(str).str.lower().isin(
+                IDENTITY_TERMINAL_STATUSES
+            )
+        ]
     if settled.empty:
         print("No settled predictions yet.")
         return

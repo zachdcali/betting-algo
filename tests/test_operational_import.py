@@ -386,6 +386,48 @@ def test_prediction_import_is_one_observation_per_available_model_family(tmp_pat
     assert len({row["idempotency_key"] for row in predictions}) == 4
 
 
+def test_identity_blocked_prediction_import_preserves_gate_and_emits_no_settlement(
+    tmp_path,
+):
+    prod, _ = _fixture_prod(tmp_path)
+    path = prod / "prediction_log.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    row.update({
+        "record_status": "identity_conflict",
+        "record_note": "match_identity_conflict:round",
+        "identity_status": "conflict",
+        "identity_event_key": "challenger - example",
+        "identity_related_match_uid": "match_old",
+        "identity_conflict_fields": "round,event_key",
+    })
+    _write_csv(path, [row])
+
+    plan = build_plan(prod, include_run_feature_files=False)
+    operational = [
+        record
+        for record in _all_records(plan, "ml.prediction_observations")
+        if record["model_role"] != "shadow"
+    ]
+
+    assert len(operational) == 2
+    assert all(record["decision_eligible"] is False for record in operational)
+    identity_events = [
+        record for record in _all_records(plan, "ops.skip_events")
+        if record["stage_name"] == "prediction_identity_reconciliation"
+    ]
+    assert len(identity_events) == 1
+    event = identity_events[0]
+    assert event["reason_code"] == "identity_conflict"
+    assert event["match_uid"] == "match_1"
+    context = json.loads(event["context"])
+    assert context["identity_status"] == "conflict"
+    assert context["identity_related_match_uid"] == "match_old"
+    assert context["identity_conflict_fields"] == ["round", "event_key"]
+    assert context["identity_decision_blocked"] is True
+    assert _all_records(plan, "ops.settlement_events") == []
+
+
 def test_model_registry_imports_versioned_releases_with_contract_status(tmp_path):
     prod, _ = _fixture_prod(tmp_path)
     registry = _write_model_registry(prod)
