@@ -56,7 +56,7 @@ jobs:
       - name: Validate promoted model registry and artifacts
         # Prevent an immutable Actions cache or stale release asset from
         # silently serving a different artifact set after a registry change.
-        run: python production/models/validate_registry.py
+        run: python production/models/validate_registry.py --artifact-scope promoted
 
       - name: Configure store credentials
         run: echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env.supabase
