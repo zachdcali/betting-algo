@@ -1080,6 +1080,19 @@
     "source_uri": "https://www.atptour.com/en/players/max-schoenhaus/s0vu/overview",
     "status": "identity_mismatch"
   },
+  "maxim mrva": {
+    "canonical_player_id": 211617,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-15T22:32:48+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "35c2bdd421c6a0187f1452a11a6e3e0721925729ae41511df9b02a306c61e577",
+    "source_uri": "https://www.atptour.com/en/players/maxim-mrva/m0se/overview",
+    "status": "resolved"
+  },
   "maxime st hilaire": {
     "canonical_player_id": 212636,
     "identity_binding": "",
