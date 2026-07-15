@@ -496,7 +496,8 @@ def parse_challenger_calendar(html: str) -> pd.DataFrame:
     soup = BeautifulSoup(html, "lxml")
     rows, seen = [], set()
     for a in soup.select("a[href*='/en/scores/']"):
-        m = re.search(r"/en/scores/(?:current(?:-challenger)?|archive)/([a-z0-9-]+)/(\d+)", a.get("href", ""))
+        href = str(a.get("href", "")).strip()
+        m = re.search(r"/en/scores/(?:current(?:-challenger)?|archive)/([a-z0-9-]+)/(\d+)", href)
         if not m or m.group(2) in seen:
             continue
         node, start = a, None
@@ -514,9 +515,25 @@ def parse_challenger_calendar(html: str) -> pd.DataFrame:
         seen.add(m.group(2))
         name = card_text.split("|")[0].strip() if "|" in card_text else card_text[:60].strip()
         surf = re.search(r"\b(Clay|Grass|Hard|Carpet)\b", card_text, re.I)
+        # Historical calendar cards already carry an immutable
+        # ``/archive/<slug>/<id>/<year>/results`` URL. Rewriting every card to
+        # ``current-challenger`` makes an old backlog lookup silently fetch the
+        # present edition of a recurring event instead of the dated instance.
+        # Preserve the official event-instance path while selecting its results
+        # view (calendar buttons sometimes link to ``/draws`` instead).
+        results_href = re.sub(
+            r"/(?:draws|daily-schedule)(?=([?#]|$))",
+            "/results",
+            href,
+        )
+        url = (
+            results_href
+            if results_href.startswith("http")
+            else f"https://www.atptour.com{results_href}"
+        )
         rows.append({
             "event": name, "slug": m.group(1), "id": m.group(2),
-            "url": f"https://www.atptour.com/en/scores/current-challenger/{m.group(1)}/{m.group(2)}/results",
+            "url": url,
             "start_date": start,
             "surface": surf.group(1).title() if surf else None,
         })

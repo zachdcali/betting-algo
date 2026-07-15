@@ -131,5 +131,13 @@ def test_parse_challenger_calendar_fixture():
     df = parse_challenger_calendar(_load("atp_chall_calendar.html.gz"))
     assert len(df) >= 100
     assert df["start_date"].nunique() > 10  # per-card dates, not one shared (Facebook-bug guard)
+    # Historical cards must keep their immutable year-pinned result URL. A
+    # current-challenger rewrite can point an old backlog lookup at a later
+    # edition of the same recurring event.
+    first = df.iloc[0]
+    assert first["url"].endswith(
+        f"/en/scores/archive/{first['slug']}/{first['id']}/2026/results"
+    )
+    assert df["url"].str.endswith("/results").all()
     week = df[(df.start_date >= "2026-07-06") & (df.start_date <= "2026-07-13")]
     assert {"iasi", "bogota", "braunschweig"} <= set(week["slug"])
