@@ -60,6 +60,167 @@ test("normalizes the operational bet outcome vocabulary", () => {
   assert.equal(Logic.normalizeBetOutcome({ outcome: "", status: "settled" }), "settled_unknown");
 });
 
+test("current account authority reconciles bankroll history to pending bet stakes", () => {
+  const bets = [
+    { bet_id: "pending", status: "pending", stake: "12.5" },
+    { bet_id: "settled", status: "settled", outcome: "loss", stake: "8" },
+    { bet_id: "void", status: "void", outcome: "void", stake: "4" },
+  ];
+  const rows = [
+    {
+      timestamp: "2026-07-15T10:05:42Z",
+      account_equity: "590",
+      pending_exposure: "20",
+      available_bankroll: "570",
+      num_pending_bets: "2",
+      num_settled_bets: "0",
+      dashboard_row_key: "newer-but-stale",
+    },
+    {
+      timestamp: "2026-07-15 03:16:27",
+      account_equity: "570.5",
+      pending_exposure: "12.5",
+      available_bankroll: "558",
+      num_pending_bets: "1",
+      num_settled_bets: "1",
+      dashboard_row_key: "settlement-authority",
+    },
+  ];
+  assert.deepEqual(Logic.currentAccountState(rows, bets), {
+    verified: true,
+    equity: 570.5,
+    pendingExposure: 12.5,
+    available: 558,
+    gate: "open",
+    observedAt: Date.parse("2026-07-15T03:16:27Z"),
+    reason: "manifest-pinned bankroll row reconciled to bet counts and pending stakes",
+  });
+});
+
+test("current account authority fails closed on ledger disagreement", () => {
+  const state = Logic.currentAccountState(
+    [{ account_equity: 500, pending_exposure: 8, available_bankroll: 492, num_pending_bets: 1, num_settled_bets: 0 }],
+    [{ status: "pending", stake: 9 }],
+  );
+  assert.equal(state.verified, false);
+  assert.equal(state.equity, null);
+  assert.equal(state.pendingExposure, 9);
+  assert.equal(state.available, null);
+});
+
+test("current account authority rejects repeated exposure with stale ledger counts", () => {
+  const state = Logic.currentAccountState(
+    [
+      {
+        timestamp: "2026-07-15T10:00:00Z",
+        account_equity: 480,
+        pending_exposure: 10,
+        available_bankroll: 470,
+        num_pending_bets: 2,
+        num_settled_bets: 7,
+      },
+      {
+        timestamp: "2026-07-15T09:00:00Z",
+        account_equity: 500,
+        pending_exposure: 10,
+        available_bankroll: 490,
+        num_pending_bets: 1,
+        num_settled_bets: 8,
+      },
+    ],
+    [
+      { status: "pending", stake: 10 },
+      { status: "settled", outcome: "win", stake: 5 },
+      { status: "settled", outcome: "loss", stake: 5 },
+      { status: "settled", outcome: "win", stake: 5 },
+      { status: "settled", outcome: "loss", stake: 5 },
+      { status: "settled", outcome: "win", stake: 5 },
+      { status: "settled", outcome: "loss", stake: 5 },
+      { status: "settled", outcome: "win", stake: 5 },
+      { status: "settled", outcome: "loss", stake: 5 },
+    ],
+  );
+  assert.equal(state.verified, true);
+  assert.equal(state.equity, 500);
+});
+
+test("current account authority clamps valid overexposure to a closed gate", () => {
+  const state = Logic.currentAccountState(
+    [{ account_equity: 100, pending_exposure: 120, available_bankroll: 0, num_pending_bets: 1, num_settled_bets: 0 }],
+    [{ status: "pending", stake: 120 }],
+  );
+  assert.equal(state.verified, true);
+  assert.equal(state.available, 0);
+  assert.equal(state.gate, "blocked pending exposure");
+});
+
+test("current account authority withholds all values when its generation is untrusted", () => {
+  const state = Logic.currentAccountState(
+    [{ account_equity: 100, pending_exposure: 10, available_bankroll: 90, num_pending_bets: 1, num_settled_bets: 0 }],
+    [{ status: "pending", stake: 10 }],
+    1,
+    false,
+  );
+  assert.equal(state.verified, false);
+  assert.equal(state.equity, null);
+  assert.equal(state.pendingExposure, null);
+  assert.equal(state.available, null);
+});
+
+test("generation trust rejects retained rows after manifest or generation refresh failures", () => {
+  const valid = {
+    manifest: { sync_id: "sync_current", status: "success" },
+    loadedSyncId: "sync_current",
+    errors: {},
+  };
+  assert.equal(Logic.generationTrustIssue(valid, true, ["bets", "bankroll"]), "");
+  assert.match(
+    Logic.generationTrustIssue(
+      { ...valid, errors: { manifest: "request timed out" } },
+      true,
+      ["bets", "bankroll"],
+    ),
+    /manifest refresh failed/,
+  );
+  assert.match(
+    Logic.generationTrustIssue(
+      { ...valid, errors: { generation: "manifest advanced twice" } },
+      true,
+      ["bets", "bankroll"],
+    ),
+    /generation refresh failed/,
+  );
+  assert.match(
+    Logic.generationTrustIssue({ ...valid, loadedSyncId: "sync_old" }, true, ["bets"]),
+    /does not match manifest/,
+  );
+});
+
+test("generation trust requires success status, count parity, and requested resources", () => {
+  const valid = {
+    manifest: { sync_id: "sync_current", status: "success" },
+    loadedSyncId: "sync_current",
+    errors: {},
+  };
+  assert.match(
+    Logic.generationTrustIssue(
+      { ...valid, manifest: { ...valid.manifest, status: "partial" } },
+      true,
+      ["bets"],
+    ),
+    /status is partial/,
+  );
+  assert.match(Logic.generationTrustIssue(valid, false, ["bets"]), /counts are unverified/);
+  assert.match(
+    Logic.generationTrustIssue(
+      { ...valid, errors: { bets: "request timed out" } },
+      true,
+      ["bets"],
+    ),
+    /bets refresh failed/,
+  );
+});
+
 test("pending exposure is split by the settlement SLA without guessing local match time", () => {
   const pending = { status: "pending", outcome: "", timestamp: "2026-07-13T12:00:00Z" };
   assert.equal(

@@ -80,7 +80,15 @@ test("operations UI exposes accepted generation, capital gate, and settlement ba
     assert.match(client, new RegExp(`"${field}"`));
   }
   assert.match(client, /pendingBetDiagnostics\(\)/);
+  assert.match(client, /fetchAll\("dash_bankroll", BANKROLL_COLUMNS/);
+  assert.match(client, /Logic\.generationTrustIssue\(store, generationCounts\.ok, resourceNames\)/);
+  assert.match(client, /currentGenerationTrusted\("bankroll", "bets"\)/);
+  assert.match(client, /Logic\.currentAccountState\(store\.bankroll, store\.bets, 1, accountTrusted\)/);
+  assert.match(client, /Current equity/);
+  assert.match(client, /Latest pipeline equity/);
+  assert.match(logic, /manifest-pinned bankroll row reconciled to bet counts and pending stakes/);
   assert.match(client, /past the settlement SLA/);
+  assert.match(client, /Paper bet ledger withheld/);
   assert.match(html, /id="accepted-generation"/);
   assert.match(html, /id="account-state"/);
   assert.match(html, /id="metric-overdue"/);
