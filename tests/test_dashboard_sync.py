@@ -540,3 +540,90 @@ def test_sync_publishes_calibration_in_same_generation_and_manifest_counts(monke
     assert set(published["dash_model_metrics"]["sync_id"]) == {manifest["sync_id"]}
     assert set(published["dash_model_calibration"]["sync_id"]) == {manifest["sync_id"]}
     assert connection.committed
+
+
+class _DatabaseFailure(RuntimeError):
+    def __init__(self, message: str, sqlstate: str):
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def test_atomic_publication_retries_deadlock_from_the_transaction_boundary(
+    monkeypatch,
+):
+    attempts = []
+    sleeps = []
+
+    def publish_once(*, verbose):
+        attempts.append(verbose)
+        if len(attempts) == 1:
+            raise _DatabaseFailure("deadlock", "40P01")
+        return {"dash_predictions": 12}
+
+    monkeypatch.setattr(dashboard_sync, "_sync_dashboard_tables_once", publish_once)
+    monkeypatch.setattr(dashboard_sync, "sleep", sleeps.append)
+
+    assert dashboard_sync.sync_dashboard_tables(verbose=False) == {
+        "dash_predictions": 12,
+    }
+    assert attempts == [False, False]
+    assert sleeps == [1.0]
+
+
+def test_atomic_publication_retries_wrapped_serialization_failure(monkeypatch):
+    attempts = 0
+    sleeps = []
+
+    def publish_once(*, verbose):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            cause = _DatabaseFailure("serialization", "40001")
+            raise RuntimeError("wrapped publication failure") from cause
+        return {"dash_predictions": 3}
+
+    monkeypatch.setattr(dashboard_sync, "_sync_dashboard_tables_once", publish_once)
+    monkeypatch.setattr(dashboard_sync, "sleep", sleeps.append)
+
+    assert dashboard_sync.sync_dashboard_tables(verbose=False) == {
+        "dash_predictions": 3,
+    }
+    assert attempts == 2
+    assert sleeps == [1.0]
+
+
+def test_atomic_publication_does_not_retry_nontransaction_failure(monkeypatch):
+    attempts = 0
+
+    def publish_once(*, verbose):
+        nonlocal attempts
+        attempts += 1
+        raise _DatabaseFailure("bad data", "22000")
+
+    monkeypatch.setattr(dashboard_sync, "_sync_dashboard_tables_once", publish_once)
+    monkeypatch.setattr(
+        dashboard_sync, "sleep",
+        lambda _delay: pytest.fail("nonretryable failure slept"),
+    )
+
+    with pytest.raises(_DatabaseFailure, match="bad data"):
+        dashboard_sync.sync_dashboard_tables(verbose=False)
+    assert attempts == 1
+
+
+def test_atomic_publication_fails_after_bounded_deadlock_retries(monkeypatch):
+    attempts = 0
+    sleeps = []
+
+    def publish_once(*, verbose):
+        nonlocal attempts
+        attempts += 1
+        raise _DatabaseFailure("persistent deadlock", "40P01")
+
+    monkeypatch.setattr(dashboard_sync, "_sync_dashboard_tables_once", publish_once)
+    monkeypatch.setattr(dashboard_sync, "sleep", sleeps.append)
+
+    with pytest.raises(_DatabaseFailure, match="persistent deadlock"):
+        dashboard_sync.sync_dashboard_tables(verbose=False)
+    assert attempts == 3
+    assert sleeps == [1.0, 3.0]
