@@ -49,6 +49,25 @@ def normalize_name(name: str) -> str:
     return normalize_text(name).replace("-", " ")
 
 
+LIVE_PLAYER_IDENTITY_SCHEMA_VERSION = "live_player_name@1.0.0"
+
+
+def normalize_live_player_key(name: str) -> str:
+    """Return the sportsbook-facing player key used at live ingestion.
+
+    This deliberately does not replace the historical ``normalize_name``
+    contract used by existing UIDs.  It names and centralizes the narrower
+    live-ingestion representation so display text and identity keys can be
+    compared without rewriting historical identifiers.
+    """
+    if name is None or pd.isna(name):
+        return ""
+    text = unicodedata.normalize("NFKD", str(name))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-zA-Z\s\-]", "", text).lower().strip()
+    return re.sub(r"\s+", " ", text)
+
+
 def stable_hash(*parts, length: int = 20) -> str:
     """Hash a set of normalized parts."""
     joined = "||".join(normalize_text(part) for part in parts)

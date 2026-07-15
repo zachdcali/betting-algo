@@ -18,15 +18,19 @@ import pandas as pd
 from datetime import datetime, timezone
 import re
 import time
-import unicodedata
 import random
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+
+_PRODUCTION_DIR = str(Path(__file__).resolve().parent.parent)
+if _PRODUCTION_DIR not in sys.path:
+    sys.path.insert(0, _PRODUCTION_DIR)
+from logging_utils import normalize_live_player_key
 
 # Shared process-wide browser (see scraping/browser_session.py). A private
 # sync_playwright() here collides with it ('Sync API inside the asyncio loop')
 # once any other fetcher has run in the same process.
-import sys
 _SCRAPING_DIR = str(Path(__file__).resolve().parent.parent / "scraping")
 if _SCRAPING_DIR not in sys.path:
     sys.path.insert(0, _SCRAPING_DIR)
@@ -116,13 +120,7 @@ def expected_count_from_title(title: str) -> int:
     return int(m.group(1)) if m else -1
 
 def normalize_name(name_str: str) -> str:
-    if not name_str or pd.isna(name_str):
-        return ""
-    name = unicodedata.normalize("NFKD", str(name_str))
-    name = "".join(ch for ch in name if not unicodedata.combining(ch))
-    name = re.sub(r"[^a-zA-Z\s\-]", "", name).lower().strip()
-    name = re.sub(r"\s+", " ", name)
-    return name
+    return normalize_live_player_key(name_str)
 
 def american_to_decimal(odds_str: Optional[str]) -> Optional[float]:
     if not odds_str:

@@ -82,6 +82,20 @@ Current intent:
 - `prediction_log_v2`
   Rows created under the hardened logging path with `run_id`, `match_uid`, `feature_snapshot_id`, and immutable snapshot ids
 
+New live `prediction_log_v2` rows also carry an additive player-identity
+sub-contract:
+
+- `player_identity_schema_version = live_player_name@1.0.0`
+- oriented `p1_identity_key` and `p2_identity_key` values copied from the exact
+  odds-ingestion inputs used to create `match_uid` and `feature_snapshot_id`
+- raw `p1` and `p2` remain display/audit text and are not substituted for those
+  keys during lineage validation or market joins
+
+Older v2 rows may have blank identity-key columns. They are not rewritten. A
+later exact-UID refresh may backfill the keys only after the supplied display
+names, keys, UID, feature snapshot, and match metadata all pass the fail-closed
+identity checks.
+
 These are different from model versions:
 
 - A logging schema bump does not mean a new model.
