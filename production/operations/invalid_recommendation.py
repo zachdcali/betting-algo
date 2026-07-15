@@ -17,15 +17,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Any, Iterable
 
 import pandas as pd
 
 from audit_logger import SKIPPED_MATCH_COLUMNS
-from logging_utils import stable_hash, utc_now_iso
+from logging_utils import atomic_write_csv, stable_hash, utc_now_iso
 from operations.operational_lock import operational_csv_lock
 from prediction_logger import COLUMNS as PREDICTION_COLUMNS
 from utils.bet_tracker import (
@@ -129,35 +127,6 @@ def _read_optional_csv_strings(path: Path, *, columns: Iterable[str]) -> pd.Data
     if not path.exists():
         return pd.DataFrame(columns=list(columns))
     return _read_csv_strings(path, columns=columns)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
-    """Replace one CSV atomically so unlocked readers see old or new bytes."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            frame.to_csv(handle, index=False, lineterminator="\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def _exact_prediction_index(
@@ -280,7 +249,7 @@ def _append_or_verify_skip_audit(
         [audit, pd.DataFrame([audit_row], columns=SKIPPED_MATCH_COLUMNS)],
         ignore_index=True,
     )
-    _atomic_write_csv(audit, audit_path)
+    atomic_write_csv(audit, audit_path)
     return True
 
 
@@ -367,7 +336,7 @@ def _quarantine_under_lock(
         )
         predictions.at[index, "features_complete"] = "False"
         predictions.at[index, "defaulted_features"] = defaulted
-        _atomic_write_csv(predictions, prediction_path)
+        atomic_write_csv(predictions, prediction_path)
         prediction_changed = True
         row = predictions.loc[index]
 
@@ -388,6 +357,7 @@ def _quarantine_under_lock(
 def quarantine_invalid_recommendation(
     production_dir: Path | str,
     *,
+    pipeline_paused: bool,
     reason_code: str,
     expected_match_uid: str,
     expected_feature_snapshot_id: str,
@@ -397,6 +367,10 @@ def quarantine_invalid_recommendation(
     detail: str = "",
 ) -> QuarantineResult:
     """Tombstone one exact operational prediction and append Slate audit."""
+    if pipeline_paused is not True:
+        raise RuntimeError(
+            "quarantine requires the hourly pipeline and auto-settlement to be paused"
+        )
     normalized_reason = _clean(reason_code).casefold()
     if normalized_reason not in INVALID_RECOMMENDATION_REASON_CODES:
         raise ValueError(
@@ -421,6 +395,7 @@ def quarantine_invalid_recommendation(
 def remediate_invalid_recommendation(
     production_dir: Path | str,
     *,
+    pipeline_paused: bool,
     bet_id: str,
     reason_code: str,
     expected_match_uid: str,
@@ -431,6 +406,10 @@ def remediate_invalid_recommendation(
     detail: str = "",
 ) -> RemediationResult:
     """Quarantine first, then release only the exact bad paper exposure."""
+    if pipeline_paused is not True:
+        raise RuntimeError(
+            "remediation requires the hourly pipeline and auto-settlement to be paused"
+        )
     normalized_reason = _clean(reason_code).casefold()
     if normalized_reason not in INVALID_RECOMMENDATION_REASON_CODES:
         raise ValueError(
@@ -479,6 +458,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
+        "--confirm-pipeline-paused",
+        action="store_true",
+        help=(
+            "required concurrency acknowledgement: the scheduled pipeline and "
+            "standalone auto-settlement must both be paused"
+        ),
+    )
+    parser.add_argument(
         "--production-dir",
         type=Path,
         default=Path(__file__).resolve().parents[1],
@@ -498,9 +485,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if not args.apply:
         parser.error("refusing mutation without explicit --apply")
+    if not args.confirm_pipeline_paused:
+        parser.error(
+            "refusing mutation until --confirm-pipeline-paused is supplied"
+        )
 
     result = remediate_invalid_recommendation(
         args.production_dir,
+        pipeline_paused=args.confirm_pipeline_paused,
         bet_id=args.bet_id,
         reason_code=args.reason_code,
         expected_match_uid=args.match_uid,

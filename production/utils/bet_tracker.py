@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 import json
 
-from logging_utils import ensure_csv_columns, normalize_name
+from logging_utils import atomic_write_csv, ensure_csv_columns, normalize_name
 from operations.operational_lock import locked_operational_csv
 from settlement_attribution import (
     ATTRIBUTION_QUALITY_EXACT_UID,
@@ -89,9 +89,16 @@ class BetTracker:
     @locked_operational_csv
     def _initialize_files(self):
         """Initialize tracking files with headers"""
-        ensure_csv_columns(self.bets_file, BETS_COLUMNS).to_csv(self.bets_file, index=False)
-        ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS).to_csv(self.bankroll_file, index=False)
-        ensure_csv_columns(self.session_file, SESSION_COLUMNS).to_csv(self.session_file, index=False)
+        atomic_write_csv(
+            ensure_csv_columns(self.bets_file, BETS_COLUMNS), self.bets_file,
+        )
+        atomic_write_csv(
+            ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS),
+            self.bankroll_file,
+        )
+        atomic_write_csv(
+            ensure_csv_columns(self.session_file, SESSION_COLUMNS), self.session_file,
+        )
     
     @locked_operational_csv
     def start_session(self, initial_bankroll: float, kelly_multiplier: float, notes: str = "") -> str:
@@ -648,7 +655,7 @@ class BetTracker:
         bets.at[idx, 'metric_eligible'] = 'false'
         bets.at[idx, 'result_evidence_kind'] = ''
         bets.at[idx, 'result_evidence_sha256'] = ''
-        bets.to_csv(self.bets_file, index=False)
+        atomic_write_csv(bets, self.bets_file)
 
         self.log_bankroll_change(
             session_id,
@@ -726,7 +733,7 @@ class BetTracker:
         }
         
         bankroll_df = pd.concat([bankroll_df, pd.DataFrame([bankroll_record])], ignore_index=True)
-        bankroll_df.to_csv(self.bankroll_file, index=False)
+        atomic_write_csv(bankroll_df, self.bankroll_file)
     
     @locked_operational_csv
     def get_current_bankroll(self) -> float:
@@ -815,7 +822,7 @@ class BetTracker:
             sessions_df.loc[idx, 'end_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             sessions_df.loc[idx, 'final_bankroll'] = self.get_current_bankroll()
 
-        sessions_df.to_csv(self.session_file, index=False)
+        atomic_write_csv(sessions_df, self.session_file)
 
     @locked_operational_csv
     def settle_pending_bets_for_match(

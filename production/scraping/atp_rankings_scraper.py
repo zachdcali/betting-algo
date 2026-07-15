@@ -145,6 +145,8 @@ def _normalized_name_tokens(value: str) -> tuple[str, ...]:
 
 def _profile_name_tokens(player_url: str) -> tuple[str, ...]:
     """Extract the full player-name slug from an official ATP profile URL."""
+    if player_url is None or pd.isna(player_url):
+        return ()
     try:
         parts = [part for part in urlparse(str(player_url)).path.split("/") if part]
         player_index = next(
@@ -157,12 +159,28 @@ def _profile_name_tokens(player_url: str) -> tuple[str, ...]:
 
 
 def _normalized_profile_url(player_url: str) -> str:
-    """Normalize an ATP profile URL to its host-independent path identity."""
-    try:
-        path = urlparse(str(player_url or "").strip()).path
-    except ValueError:
+    """Normalize an ATP URL to the stable ``player slug / ATP id`` identity.
+
+    ATP links for the same player can end in ``/overview``, ``/bio``, or no
+    tab at all.  Those presentation routes are not identity.  The profile slug
+    plus ATP player ID are, so canonical lookups compare only that pair and
+    remain host/locale/tab independent.
+    """
+    if player_url is None or pd.isna(player_url):
         return ""
-    return path.rstrip("/").casefold()
+    try:
+        parts = [
+            part.casefold()
+            for part in urlparse(str(player_url or "").strip()).path.split("/")
+            if part
+        ]
+        player_index = next(
+            index for index, part in enumerate(parts) if part == "players"
+        )
+        slug, player_id = parts[player_index + 1:player_index + 3]
+    except (StopIteration, ValueError, IndexError):
+        return ""
+    return f"{slug}/{player_id}" if slug and player_id else ""
 
 
 def _profile_identity_matches(
@@ -369,6 +387,64 @@ def _matching_row(
     return None
 
 
+def _plausible_identity_candidates(
+    player_name: str,
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return rows reached by any name fallback before identity validation."""
+    if df.empty or "player_name" not in df.columns:
+        return df.iloc[0:0]
+    name = str(player_name or "").strip()
+    parts = name.replace("-", " ").split()
+    if not parts:
+        return df.iloc[0:0]
+    names = df["player_name"].fillna("").astype(str).str.lower().str.strip()
+    mask = names.eq(name.lower())
+    initial = parts[0][0].lower()
+    last = parts[-1].lower()
+    for token in parts[1:-1]:
+        if len(token) >= 4:
+            mask |= names.eq(f"{initial}. {token.lower()}")
+    if last:
+        mask |= names.eq(f"{initial}. {last}")
+        if len(parts) >= 2:
+            mask |= names.str.contains(rf"\b{re.escape(last)}\b", na=False)
+    if len(parts) >= 2:
+        family = parts[0].lower()
+        reversed_abbrev = f"{parts[1][0].lower()}. {family}"
+        mask |= names.eq(reversed_abbrev)
+        mask |= names.str.contains(rf"\b{re.escape(family)}\b", na=False)
+    return df.loc[mask]
+
+
+def get_player_lookup_status(
+    player_name: str,
+    df: Optional[pd.DataFrame] = None,
+    *,
+    player_url: str = "",
+) -> str:
+    """Classify a rank miss without coercing ambiguity into ``unranked``.
+
+    Returns ``resolved``, ``not_ranked``, ``identity_unresolved``, or
+    ``rankings_unavailable``.  ``not_ranked`` means no ranking row was reached
+    by any supported fallback; ``identity_unresolved`` means one or more rows
+    were plausible but rejected by the strict identity contract.
+    """
+    if df is None:
+        df = load_rankings()
+    if df is None or df.empty or "player_name" not in df.columns:
+        return "rankings_unavailable"
+    if _matching_row(player_name, df, player_url=player_url) is not None:
+        return "resolved"
+    if _normalized_profile_url(player_url):
+        return "identity_unresolved"
+    return (
+        "identity_unresolved"
+        if not _plausible_identity_candidates(player_name, df).empty
+        else "not_ranked"
+    )
+
+
 def _lookup(
     player_name: str,
     col: str,
@@ -427,7 +503,10 @@ def get_player_url(
     row = _matching_row(player_name, df, player_url=player_url)
     if row is None:
         return None
-    value = str(row.get("player_url", "")).strip()
+    raw_value = row.get("player_url", "")
+    if raw_value is None or pd.isna(raw_value):
+        return None
+    value = str(raw_value).strip()
     return value or None
 
 

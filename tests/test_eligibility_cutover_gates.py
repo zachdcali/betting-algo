@@ -883,6 +883,134 @@ def test_invalid_store_height_remains_default_marked_end_to_end(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    ("display_name", "ranking_name", "player_url"),
+    [
+        (
+            "Chak Lam Coleman Wong",
+            "C. Wong",
+            "/en/players/coleman-wong/w0bh/overview",
+        ),
+        (
+            "Alexander Shevchenko",
+            "A. Shevchenko",
+            "/en/players/aleksandr-shevchenko/s0h2/overview",
+        ),
+        (
+            "Stevan Popovic",
+            "S. Popovic",
+            "/en/players/stefan-popovic/p0g5/overview",
+        ),
+    ],
+)
+def test_rank_alias_identity_misses_are_default_marked_end_to_end(
+    monkeypatch,
+    display_name,
+    ranking_name,
+    player_url,
+):
+    class OfflineScraper:
+        @staticmethod
+        def get_player_matches(*_args, **_kwargs):
+            return pd.DataFrame()
+
+    profiles = {
+        "unresolved": {
+            "player_id": 101,
+            "name": display_name,
+            "slug": "unresolved",
+            "height_cm": 183,
+            "hand": "R",
+            "country": "",
+            "birthdate": "2000-01-01",
+            "age": 26,
+            "current_rank": None,
+            "atp_url": "",
+        },
+        "valid": {
+            "player_id": None,
+            "name": "Valid Exact Player",
+            "slug": "valid",
+            "height_cm": 185,
+            "hand": "L",
+            "country": "",
+            "birthdate": "2000-01-01",
+            "age": 26,
+            "current_rank": 101,
+            "atp_url": "/en/players/valid-exact-player/v001/overview",
+        },
+    }
+    rankings = pd.DataFrame([
+        {
+            "rank": 111,
+            "player_name": ranking_name,
+            "points": 520,
+            "player_url": player_url,
+        },
+        {
+            "rank": 101,
+            "player_name": "Valid Exact Player",
+            "points": 600,
+            "player_url": "/en/players/valid-exact-player/v001/overview",
+        },
+    ])
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.setattr(ta_feature_module, "needs_stitching", lambda *_args: False)
+    monkeypatch.setattr(
+        ta_feature_module, "batch_get_profiles", lambda *_args, **_kwargs: {},
+    )
+    calc = TAFeatureCalculator(OfflineScraper())
+    calc.use_store = True
+    calc._atp_rankings = rankings
+    calc._store_profile = lambda slug: dict(profiles[slug])
+    calc._store_history_frame = lambda *_args, **_kwargs: pd.DataFrame()
+
+    import canonical_store
+    import store_history
+
+    @contextmanager
+    def store_connection():
+        yield object()
+
+    monkeypatch.setattr(canonical_store, "connect", store_connection)
+    monkeypatch.setattr(
+        store_history,
+        "latest_recorded_rank",
+        lambda _connection, player_id: 88 if player_id == 101 else None,
+    )
+
+    features = calc.build_141_features_from_slugs(
+        slug1="unresolved",
+        slug2="valid",
+        match_date=datetime(2026, 7, 20, 12),
+        surface="Hard",
+        tournament_level="A",
+        draw_size=32,
+        round_code="R32",
+        force_refresh=False,
+        persist=False,
+        session_cache={},
+        match_date_is_explicit=True,
+    )
+
+    defaults = set(features["_defaulted_features"].split(","))
+    assert (
+        "P1_Rank=rank_lookup_unresolved(identity_unresolved)" in defaults
+    )
+    assert (
+        "P1_Rank_Points=rank_lookup_unresolved(identity_unresolved)" in defaults
+    )
+    assert (
+        "P1_Rank=rank_lookup_unresolved(store_history_fallback)" in defaults
+    )
+    assert (
+        "P1_Rank_Points=rank_lookup_unresolved(store_history_fallback)"
+        in defaults
+    )
+    assert not any(marker.startswith("P2_Rank=") for marker in defaults)
+    assert features["Player1_Rank"] == 88.0
+
+
 def test_supported_module_entrypoint_has_help_without_scraping():
     completed = subprocess.run(
         [sys.executable, "-m", "production.scraping.atp_height_scraper", "--help"],

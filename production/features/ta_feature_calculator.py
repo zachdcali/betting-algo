@@ -18,7 +18,12 @@ import sys
 # Import TA scraper
 sys.path.insert(0, str(Path(__file__).parent.parent / "scraping"))
 from ta_scraper import TennisAbstractScraper
-from atp_rankings_scraper import load_rankings, get_player_points, get_player_rank
+from atp_rankings_scraper import (
+    get_player_lookup_status,
+    get_player_points,
+    get_player_rank,
+    load_rankings,
+)
 from atp_height_scraper import batch_get_profiles
 
 # Import shared round offset function (same directory)
@@ -1261,18 +1266,44 @@ class TAFeatureCalculator:
                     pass
             return float(profile.get('age') or 25.0)
 
+        _semantic_defaults: list = []  # Meaningful defaults bypassing _default_for()
+
         # Unranked players: training's exact convention is rank=999 (preprocess.py:151)
         # with 0 rank points — 'unranked' is REAL information the models learned on
-        # (futures training data is full of it), not a placeholder. Only tour-level
-        # unranked (rank lookup failure on a player who must be ranked) stays odd,
-        # and the loud print keeps it visible.
+        # (futures training data is full of it), not a placeholder. A strict
+        # identity rejection is different: the numeric fallback may keep the row
+        # observable, but explicit markers make it ineligible for betting/GOLD.
         for label, profile in [('P1', profile1), ('P2', profile2)]:
+            lookup_status = 'resolved' if profile.get('current_rank') is not None else None
+
+            def _mark_rank_default(reason: str) -> None:
+                profile['_rank_lookup_unresolved'] = reason
+                markers = (
+                    f'{label}_Rank=rank_lookup_unresolved({reason})',
+                    f'{label}_Rank_Points=rank_lookup_unresolved({reason})',
+                )
+                for marker in markers:
+                    if marker not in _semantic_defaults:
+                        _semantic_defaults.append(marker)
+
             if profile.get('current_rank') is None and profile.get('name'):
                 profile['current_rank'] = get_player_rank(
                     profile['name'],
                     self._atp_rankings,
                     player_url=profile.get('atp_url', ''),
                 )
+                if profile.get('current_rank') is None:
+                    lookup_status = get_player_lookup_status(
+                        profile['name'],
+                        self._atp_rankings,
+                        player_url=profile.get('atp_url', ''),
+                    )
+                    if lookup_status in {
+                        'identity_unresolved', 'rankings_unavailable',
+                    }:
+                        _mark_rank_default(lookup_status)
+                else:
+                    lookup_status = 'resolved'
             if profile.get('current_rank') is None and profile.get('player_id') is not None:
                 # deeper than the rankings file reaches (~1500): use the latest
                 # rank recorded on their matches — the exact lineage training saw
@@ -1283,6 +1314,12 @@ class TAFeatureCalculator:
                         _lr = latest_recorded_rank(_conn, profile['player_id'])
                     if _lr:
                         profile['current_rank'] = _lr
+                        # A historical observation is useful for observability,
+                        # but it is not proof of current ranking identity.  Even
+                        # a true rankings-file ``not_ranked`` miss must remain
+                        # ineligible when this stale numeric fallback is used.
+                        if lookup_status != 'resolved':
+                            _mark_rank_default('store_history_fallback')
                         print(f"      {label} rank from store history: {_lr} (deeper than rankings file)")
                 except Exception as _lr_exc:
                     print(f"      ⚠️ store-rank fallback failed ({_lr_exc})")
@@ -1290,8 +1327,6 @@ class TAFeatureCalculator:
                 profile['current_rank'] = 999
                 profile['_unranked'] = True
                 print(f"      {label} unranked -> rank 999 / 0 pts (training convention): {profile.get('name', profile.get('slug','?'))}")
-
-        _semantic_defaults: list = []  # Track meaningful defaults that bypass _default_for()
 
         def _identity_key(value) -> Optional[str]:
             if value is None or pd.isna(value):

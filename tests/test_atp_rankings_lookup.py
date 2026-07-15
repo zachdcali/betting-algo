@@ -10,6 +10,7 @@ if str(PRODUCTION_DIR) not in sys.path:
     sys.path.insert(0, str(PRODUCTION_DIR))
 
 from scraping.atp_rankings_scraper import (
+    get_player_lookup_status,
     get_player_points,
     get_player_rank,
     get_player_url,
@@ -171,7 +172,7 @@ def test_canonical_player_url_is_an_exact_fail_closed_lookup_key():
     assert get_player_rank(
         "J. Cerundolo",
         rankings,
-        player_url="https://www.atptour.com/en/players/juan-martin-cerundolo/c0c2/overview/",
+        player_url="https://www.atptour.com/en/players/juan-martin-cerundolo/c0c2/bio/",
     ) == 22
     assert get_player_rank(
         "J. Cerundolo",
@@ -198,3 +199,41 @@ def test_profile_identity_allows_ordered_middle_name_and_compound_spacing():
 
     assert get_player_rank("Dominic Stephan Stricker", rankings) == 360
     assert get_player_rank("Soon Woo Kwon", rankings) == 155
+
+
+def test_real_alias_misses_are_identity_unresolved_not_unranked():
+    rankings = pd.DataFrame([
+        {
+            "rank": 111,
+            "player_name": "C. Wong",
+            "points": 520,
+            "player_url": "/en/players/coleman-wong/w0bh/overview",
+        },
+        {
+            "rank": 100,
+            "player_name": "A. Shevchenko",
+            "points": 615,
+            "player_url": "/en/players/aleksandr-shevchenko/s0h2/overview",
+        },
+        {
+            "rank": 595,
+            "player_name": "S. Popovic",
+            "points": 61,
+            "player_url": "/en/players/stefan-popovic/p0g5/overview",
+        },
+    ])
+
+    for unresolved in (
+        "Chak Lam Coleman Wong",
+        "Alexander Shevchenko",
+        "Stevan Popovic",
+    ):
+        assert get_player_rank(unresolved, rankings) is None
+        assert get_player_lookup_status(unresolved, rankings) == (
+            "identity_unresolved"
+        )
+
+    assert get_player_lookup_status("Unknown Futures Player", rankings) == (
+        "not_ranked"
+    )
+    assert get_player_lookup_status("Coleman Wong", rankings) == "resolved"

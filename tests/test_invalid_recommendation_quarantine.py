@@ -92,6 +92,7 @@ def _remediation_kwargs(bet_id: str) -> dict:
     )
 
     return {
+        "pipeline_paused": True,
         "bet_id": bet_id,
         "reason_code": INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
         "expected_match_uid": "match_collision",
@@ -196,6 +197,89 @@ def test_exact_remediation_quarantines_before_refund_and_repairs_replays(tmp_pat
     assert len(pd.read_csv(audits_path)) == 1
 
 
+def test_remediation_repairs_crash_after_atomic_bet_before_bankroll(
+    monkeypatch,
+    tmp_path,
+):
+    from operations.invalid_recommendation import remediate_invalid_recommendation
+    from utils.bet_tracker import BetTracker
+
+    production_dir = tmp_path / "production"
+    _write_prediction(production_dir)
+    bet_id = _logged_bet(production_dir)
+    original_log_bankroll_change = BetTracker.log_bankroll_change
+
+    def crash_before_bankroll(*_args, **_kwargs):
+        raise RuntimeError("injected crash before bankroll audit")
+
+    monkeypatch.setattr(
+        BetTracker,
+        "log_bankroll_change",
+        crash_before_bankroll,
+    )
+    with pytest.raises(RuntimeError, match="injected crash"):
+        remediate_invalid_recommendation(
+            production_dir,
+            **_remediation_kwargs(bet_id),
+        )
+
+    # The terminal bet replace is complete and parseable; the missing audit is
+    # the supported between-file crash window repaired by an exact replay.
+    interrupted_bet = pd.read_csv(
+        production_dir / "logs" / "all_bets.csv",
+    ).iloc[0]
+    assert interrupted_bet["status"] == "void"
+    assert interrupted_bet["outcome"] == "void"
+    assert interrupted_bet["actual_profit"] == pytest.approx(0.0)
+
+    monkeypatch.setattr(
+        BetTracker,
+        "log_bankroll_change",
+        original_log_bankroll_change,
+    )
+    replay = remediate_invalid_recommendation(
+        production_dir,
+        **_remediation_kwargs(bet_id),
+    )
+    assert replay.prediction_changed is False
+    assert replay.audit_appended is False
+    assert replay.bet_refunded is False
+
+    bankroll = pd.read_csv(
+        production_dir / "logs" / "bankroll_history.csv",
+    )
+    audit = bankroll[
+        bankroll["change_reason"].str.contains(
+            "Administrative invalid-recommendation refund",
+            na=False,
+        )
+    ]
+    assert len(audit) == 1
+
+
+def test_atomic_csv_replace_preserves_original_on_replace_failure(
+    monkeypatch,
+    tmp_path,
+):
+    import logging_utils
+
+    target = tmp_path / "ledger.csv"
+    original = b"value\nold\n"
+    target.write_bytes(original)
+
+    def fail_replace(*_args, **_kwargs):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(logging_utils.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        logging_utils.atomic_write_csv(
+            pd.DataFrame([{"value": "new"}]),
+            target,
+        )
+    assert target.read_bytes() == original
+    assert not list(tmp_path.glob(".ledger.csv.*.tmp"))
+
+
 @pytest.mark.parametrize(
     ("overrides", "error"),
     [
@@ -221,6 +305,7 @@ def test_quarantine_rejects_competing_terminal_state(tmp_path, overrides, error)
     with pytest.raises(RuntimeError, match=error):
         quarantine_invalid_recommendation(
             production_dir,
+            pipeline_paused=True,
             reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
             expected_match_uid="match_collision",
             expected_feature_snapshot_id="feat_collision",
@@ -247,12 +332,37 @@ def test_quarantine_requires_exact_oriented_player_pair(tmp_path):
     with pytest.raises(RuntimeError, match="exactly one row"):
         quarantine_invalid_recommendation(
             production_dir,
+            pipeline_paused=True,
             reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
             expected_match_uid="match_collision",
             expected_feature_snapshot_id="feat_collision",
             expected_run_id="run_collision",
             expected_p1="Giacomo Crisostomo",
             expected_p2="Vito Antonio Darderi",
+            detail="reviewed collision",
+        )
+    assert (production_dir / "prediction_log.csv").read_bytes() == before
+
+
+def test_remediation_refuses_to_run_without_pipeline_pause(tmp_path):
+    from operations.invalid_recommendation import quarantine_invalid_recommendation
+    from utils.bet_tracker import (
+        INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+    )
+
+    production_dir = tmp_path / "production"
+    _write_prediction(production_dir)
+    before = (production_dir / "prediction_log.csv").read_bytes()
+    with pytest.raises(RuntimeError, match="pipeline and auto-settlement"):
+        quarantine_invalid_recommendation(
+            production_dir,
+            pipeline_paused=False,
+            reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+            expected_match_uid="match_collision",
+            expected_feature_snapshot_id="feat_collision",
+            expected_run_id="run_collision",
+            expected_p1="Vito Antonio Darderi",
+            expected_p2="Giacomo Crisostomo",
             detail="reviewed collision",
         )
     assert (production_dir / "prediction_log.csv").read_bytes() == before
