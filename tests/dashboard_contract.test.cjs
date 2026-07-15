@@ -107,6 +107,14 @@ test("manifest counts cover every published operational projection", () => {
 test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(client, /fetchAll\("dash_model_metrics"[^\n]+generationFilter\)/);
   assert.doesNotMatch(client, /Math\.log|expectedCalibrationError|scoreDiagnosticCohort|buildCommonCohort/);
+  assert.match(html, /scores below are current for the accepted dashboard sync shown on this page/);
+  assert.match(html, /Open dated full ledger snapshot/);
+  assert.match(html, /This report may lag the accepted sync shown above/);
+  assert.match(html, /dated full ledger snapshot \(live metrics plus offline experiments\)/);
+  assert.doesNotMatch(html, /Open generated Model Evaluation Ledger/);
+  assert.match(html, /Current manifest-pinned model metrics for the selected accepted dashboard generation/);
+  assert.match(client, /Current dashboard authority: ledger metrics match accepted sync \$\{manifestSyncId\}/);
+  assert.match(client, /The dated Markdown report may lag this generation/);
   assert.match(client, /if \(metric === "max_drawdown_kelly"\) return formatMoney\(value\)/);
   assert.match(client, /metricCell\(\s*"max_drawdown_kelly", metric\.max_drawdown_kelly/);
   assert.match(client, /startsWith\("shadow_"\)/);

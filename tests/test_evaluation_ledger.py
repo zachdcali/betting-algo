@@ -51,8 +51,10 @@ def test_write_outputs(tmp_path):
     assert (out_dir / "model_ledger.csv").exists()
     assert report.exists()
     text = report.read_text()
-    assert "Model Ledger" in text
-    assert "2026-06-21" in text
+    assert "# Model Ledger snapshot — 2026-06-21" in text
+    assert "Dated full ledger snapshot, including live metrics and offline experiments" in text
+    assert "may lag the public dashboard" in text
+    assert "manifest-pinned accepted sync" in text
 
 
 def test_all_model_intersection_is_dynamic_and_excludes_partial_shadow_coverage():
