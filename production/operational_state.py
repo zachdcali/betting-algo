@@ -52,6 +52,17 @@ BET_TERMINAL_FIELDS = (
     "status", "outcome", "actual_profit", "bankroll_after",
     "settled_timestamp",
 )
+BET_NUMERIC_FIELDS = frozenset({
+    "stake", "odds_decimal", "actual_profit", "bankroll_after",
+})
+# Pandas' CSV parser and Postgres text round trips can choose adjacent binary64
+# representations for the same source value.  Preserve the fail-closed contract
+# for meaningful changes while treating only sub-trillionth transport noise as
+# equivalent.  At ordinary bankroll sizes this is several orders of magnitude
+# tighter than one cent.
+BET_NUMERIC_ABS_TOLERANCE = Decimal("1e-12")
+BET_NUMERIC_REL_TOLERANCE = Decimal("1e-15")
+BET_NUMERIC_MAX_TOLERANCE = Decimal("1e-9")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -142,7 +153,7 @@ def _true(value) -> bool:
 
 
 def _canonical_bet_value(field: str, value) -> str:
-    """Normalize representation only; semantic differences remain conflicts."""
+    """Normalize syntax; numeric transport tolerance is applied separately."""
     text = _clean(value)
     if not text:
         return ""
@@ -192,6 +203,29 @@ def _explicit_bet_values(group: pd.DataFrame, field: str) -> set[str]:
         )
         if canonical
     }
+
+
+def _bet_values_conflict(field: str, values: set[str]) -> bool:
+    """Return whether explicit values disagree beyond transport precision."""
+    if len(values) <= 1:
+        return False
+    if field not in BET_NUMERIC_FIELDS:
+        return True
+    try:
+        numbers = [Decimal(value) for value in values]
+    except InvalidOperation:
+        return True
+    if any(not number.is_finite() for number in numbers):
+        return True
+    magnitude = max((abs(number) for number in numbers), default=Decimal("0"))
+    tolerance = min(
+        BET_NUMERIC_MAX_TOLERANCE,
+        max(
+            BET_NUMERIC_ABS_TOLERANCE,
+            BET_NUMERIC_REL_TOLERANCE * magnitude,
+        ),
+    )
+    return max(numbers) - min(numbers) > tolerance
 
 
 def _finite_decimal(value) -> Decimal | None:
@@ -354,7 +388,7 @@ def _validate_bet_group(group: pd.DataFrame, row_key_value: str) -> None:
         "settlement_quality", "result_evidence_kind", "result_evidence_sha256",
     ):
         values = _explicit_bet_values(group, field)
-        if len(values) > 1:
+        if _bet_values_conflict(field, values):
             raise RuntimeError(
                 f"conflicting immutable bet {field} for {row_key_value}: "
                 f"{sorted(values)}"
@@ -395,7 +429,7 @@ def _validate_bet_group(group: pd.DataFrame, row_key_value: str) -> None:
     ]
     for field in BET_TERMINAL_FIELDS:
         values = _explicit_bet_values(terminal, field)
-        if len(values) > 1:
+        if _bet_values_conflict(field, values):
             raise RuntimeError(
                 f"conflicting terminal bet {field} for {row_key_value}: "
                 f"{sorted(values)}"
