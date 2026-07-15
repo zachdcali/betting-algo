@@ -7,10 +7,15 @@ returns height_cm=None.
 
 Strategy:
   1. Load player profile URLs from the ATP rankings CSV (populated by atp_rankings_scraper.py).
-  2. Fuzzy-match the player name to find their URL.
+  2. Bind the player name exactly (accent/punctuation normalized) to that URL.
   3. Navigate to their /bio page with Playwright (JS-rendered).
   4. Extract height in cm via regex.
-  5. In today's default legacy mode, retain the existing JSON cache behavior.
+  5. In default legacy mode, retain positive JSON cache values while expiring
+     source-bound negative observations after a bounded TTL.
+     Set ATP_PROFILE_REVALIDATE_LEGACY_POSITIVES=1 to withhold name-keyed
+     legacy positives until the official page identity, body hash, and exact
+     extracted value have been revalidated. This remains compatibility
+     evidence, not canonical-player-ID provenance.
      After explicit eligibility cutover (ELIGIBILITY_PROVENANCE_MODE=required),
      read only a schema/generation-pinned ops export and never write locally.
 
@@ -22,9 +27,14 @@ import json
 import os
 import re
 import time
-import pandas as pd
+import unicodedata
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
+
+import pandas as pd
 
 try:
     from storage.eligibility import (
@@ -45,11 +55,21 @@ except ImportError:  # pragma: no cover - package-style execution
 
 CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_heights.json"
 HANDS_CACHE_PATH = Path(__file__).parent.parent.parent / "data" / "atp_hands.json"
+PROFILE_LOOKUP_META_PATH = (
+    Path(__file__).parent.parent.parent / "data" / "atp_profile_lookup_meta.json"
+)
 CACHE_MANIFEST_PATH = (
     Path(__file__).parent.parent.parent / "data" / "eligibility_cache_manifest.json"
 )
 RANKINGS_PATH = Path(__file__).parent.parent.parent / "data" / "atp_rankings.csv"
 ATP_BASE = "https://www.atptour.com"
+DEFAULT_NEGATIVE_TTL_HOURS = 24 * 7
+DEFAULT_TRANSIENT_TTL_MINUTES = 60
+DEFAULT_NEGATIVE_REFRESH_LIMIT = 8
+MAX_METADATA_FUTURE_SKEW = timedelta(minutes=5)
+OFFICIAL_PAGE_IDENTITY_BINDING = (
+    "official_rankings_or_slug_name_plus_rendered_full_name"
+)
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -115,6 +135,206 @@ def _save_hands_cache(cache: dict):
         json.dump(cache, f, indent=2)
 
 
+def _load_profile_lookup_meta() -> dict:
+    """Load legacy lookup evidence used only to expire negative cache rows."""
+    if _provenance_required() or not PROFILE_LOOKUP_META_PATH.exists():
+        return {}
+    try:
+        with open(PROFILE_LOOKUP_META_PATH) as f:
+            raw = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _save_profile_lookup_meta(metadata: dict) -> None:
+    if _provenance_required():
+        return
+    PROFILE_LOOKUP_META_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(PROFILE_LOOKUP_META_PATH, "w") as f:
+        json.dump(metadata, f, indent=2, sort_keys=True)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _negative_ttl() -> timedelta:
+    raw = os.environ.get(
+        "ATP_PROFILE_NEGATIVE_TTL_HOURS", str(DEFAULT_NEGATIVE_TTL_HOURS)
+    )
+    try:
+        hours = max(0.0, float(raw))
+    except (TypeError, ValueError, OverflowError):
+        hours = float(DEFAULT_NEGATIVE_TTL_HOURS)
+    return timedelta(hours=hours)
+
+
+def _negative_refresh_limit() -> int:
+    raw = os.environ.get(
+        "ATP_PROFILE_NEGATIVE_REFRESH_LIMIT", str(DEFAULT_NEGATIVE_REFRESH_LIMIT)
+    )
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_NEGATIVE_REFRESH_LIMIT
+
+
+def _revalidate_legacy_positives() -> bool:
+    return os.environ.get(
+        "ATP_PROFILE_REVALIDATE_LEGACY_POSITIVES", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _transient_ttl() -> timedelta:
+    raw = os.environ.get(
+        "ATP_PROFILE_TRANSIENT_TTL_MINUTES", str(DEFAULT_TRANSIENT_TTL_MINUTES)
+    )
+    try:
+        minutes = max(0.0, float(raw))
+    except (TypeError, ValueError, OverflowError):
+        minutes = float(DEFAULT_TRANSIENT_TTL_MINUTES)
+    return timedelta(minutes=minutes)
+
+
+def _absolute_profile_url(profile_url: Optional[str], key: str) -> str:
+    if profile_url:
+        return ATP_BASE + profile_url if profile_url.startswith("/") else profile_url
+    # This source changes automatically if a future rankings refresh discovers
+    # an official ATP URL, invalidating the prior no-URL negative observation.
+    return f"atp-rankings://unmapped/{key.replace(' ', '%20')}"
+
+
+def _valid_cached_height(value) -> Optional[int]:
+    try:
+        height = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not height.is_integer() or not 150 <= height <= 230:
+        return None
+    return int(height)
+
+
+def _valid_cached_hand(value) -> Optional[str]:
+    hand = str(value or "").strip().upper()
+    return hand if hand in {"R", "L"} else None
+
+
+def _negative_cache_is_fresh(
+    entry: object,
+    *,
+    source_uri: str,
+    missing_fields: set[str],
+    now: Optional[datetime] = None,
+) -> bool:
+    """Return whether the same source recently lacked all requested fields."""
+    if not isinstance(entry, dict) or entry.get("source_uri") != source_uri:
+        return False
+    recorded_missing = entry.get("missing_fields")
+    if not isinstance(recorded_missing, list):
+        return False
+    if not missing_fields.issubset({str(field) for field in recorded_missing}):
+        return False
+    try:
+        observed = datetime.fromisoformat(str(entry.get("observed_at", "")))
+    except (TypeError, ValueError):
+        return False
+    if observed.tzinfo is None:
+        return False
+    current = now or _utc_now()
+    observed_utc = observed.astimezone(timezone.utc)
+    if observed_utc > current.astimezone(timezone.utc) + MAX_METADATA_FUTURE_SKEW:
+        return False
+    ttl = (
+        _transient_ttl()
+        if entry.get("status") == "fetch_error"
+        else _negative_ttl()
+    )
+    return current <= observed_utc + ttl
+
+
+def _positive_cache_field_is_evidenced(
+    entry: object,
+    *,
+    field: str,
+    value,
+    source_uri: str,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Validate opt-in evidence for one legacy positive cache field."""
+    if field not in {"height_cm", "hand"} or not isinstance(entry, dict):
+        return False
+    if entry.get("source_uri") != source_uri:
+        return False
+    parsed = urlparse(source_uri)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "atptour.com", "www.atptour.com",
+    }:
+        return False
+    if entry.get("identity_binding") != OFFICIAL_PAGE_IDENTITY_BINDING:
+        return False
+    if entry.get("status") not in {"resolved", "partial"}:
+        return False
+    content_hash = str(entry.get("source_content_sha256", "")).lower()
+    if re.fullmatch(r"[0-9a-f]{64}", content_hash) is None:
+        return False
+    missing_fields = entry.get("missing_fields")
+    if not isinstance(missing_fields, list) or field in missing_fields:
+        return False
+    observed_values = entry.get("observed_values")
+    if not isinstance(observed_values, dict) or field not in observed_values:
+        return False
+    if field == "height_cm":
+        if _valid_cached_height(observed_values[field]) != _valid_cached_height(value):
+            return False
+    elif _valid_cached_hand(observed_values[field]) != _valid_cached_hand(value):
+        return False
+    try:
+        observed = datetime.fromisoformat(str(entry.get("observed_at", "")))
+    except (TypeError, ValueError):
+        return False
+    if observed.tzinfo is None:
+        return False
+    current = (now or _utc_now()).astimezone(timezone.utc)
+    return observed.astimezone(timezone.utc) <= current + MAX_METADATA_FUTURE_SKEW
+
+
+def _record_lookup(
+    metadata: dict,
+    *,
+    key: str,
+    source_uri: str,
+    height_cm: Optional[int],
+    hand: Optional[str],
+    status: str,
+    source_content_sha256: str = "",
+    identity_binding: str = "",
+) -> None:
+    missing = []
+    if height_cm is None:
+        missing.append("height_cm")
+    if hand is None:
+        missing.append("hand")
+    metadata[key] = {
+        "source_uri": source_uri,
+        "observed_at": _utc_now().isoformat(timespec="seconds"),
+        "status": status,
+        "missing_fields": missing,
+        "source_content_sha256": source_content_sha256,
+        "identity_binding": identity_binding,
+        "observed_values": (
+            {
+                field: value for field, value in (
+                    ("height_cm", height_cm), ("hand", hand),
+                ) if value is not None
+            }
+            if identity_binding == OFFICIAL_PAGE_IDENTITY_BINDING
+            and status in {"resolved", "partial"}
+            else {}
+        ),
+    }
+
+
 def _provenance_required() -> bool:
     return eligibility_mode() is EligibilityMode.REQUIRED
 
@@ -145,44 +365,81 @@ def _load_url_map() -> dict:
         return {}
 
     url_map = {}
+    ambiguous = set()
     for _, row in df.iterrows():
         url = row.get("player_url")
         name = str(row.get("player_name", "")).strip()
         if pd.isna(url) or not url or not name:
             continue
-        url_map[name.lower()] = str(url)
+        candidate = str(url)
+        keys = {
+            key for key in (
+                _identity_key(name),
+                _official_profile_slug_identity_key(candidate),
+            )
+            if key
+        }
+        for key in keys:
+            if key in ambiguous:
+                continue
+            if key in url_map and url_map[key] != candidate:
+                url_map.pop(key, None)
+                ambiguous.add(key)
+            else:
+                url_map[key] = candidate
+    for key in ambiguous:
+        url_map.pop(key, None)
     return url_map
+
+
+def _identity_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return "".join(char for char in ascii_text.casefold() if char.isalnum())
+
+
+def _official_profile_slug_identity_key(profile_url: str) -> str:
+    """Derive a full-name key from ATP's official `/players/<slug>/` path."""
+    try:
+        path = urlparse(str(profile_url or "")).path
+    except (TypeError, ValueError):
+        return ""
+    match = re.search(r"/players/([^/]+)/", path, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    slug = unquote(match.group(1)).strip(" -")
+    parts = [part for part in slug.split("-") if part]
+    # A single surname/initial is not a safe identity bind. ATP's current
+    # official profile URLs expose full-name slugs (for example
+    # `jannik-sinner`), which the rendered-page check independently confirms.
+    if len(parts) < 2 or any(not _identity_key(part) for part in parts):
+        return ""
+    return _identity_key(" ".join(parts))
 
 
 def _find_profile_url(player_name: str, url_map: dict) -> Optional[str]:
     """
-    Find ATP bio URL for player_name. Tries:
-      1. Exact name match (case-insensitive)
-      2. Last-name match when unique
-      3. Last-name + first-initial match
+    Find an ATP bio URL through an exact normalized name/full-name-slug bind.
+
+    The old unique-surname/first-initial fallback could bind two different
+    people. It remains unsuitable for an automatic feature that can make a row
+    bet-eligible, so ambiguous/fuzzy candidates now stay unresolved.
     """
-    name_lower = player_name.strip().lower()
+    key = _identity_key(player_name)
+    # Accept both the normalized maps produced above and test/legacy callers
+    # that still provide lower-case display keys.
+    return url_map.get(key) or url_map.get(str(player_name or "").strip().lower())
 
-    if name_lower in url_map:
-        return url_map[name_lower]
 
-    parts = name_lower.split()
-    if not parts:
-        return None
+def _profile_text_matches_name(text: str, player_name: str) -> bool:
+    """Require the requested full name to appear on the rendered ATP page."""
+    requested = _identity_key(player_name)
+    rendered = _identity_key(text)
+    return bool(requested and requested in rendered)
 
-    last = parts[-1]
-    first_initial = parts[0][0] if parts else ""
 
-    # Last-name candidates
-    candidates = {k: v for k, v in url_map.items() if k.split()[-1] == last}
-    if len(candidates) == 1:
-        return next(iter(candidates.values()))
-    if len(candidates) > 1 and first_initial:
-        narrowed = {k: v for k, v in candidates.items() if k[0] == first_initial}
-        if len(narrowed) == 1:
-            return next(iter(narrowed.values()))
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -252,27 +509,101 @@ def get_height_cm(
     assert isinstance(cache, dict)
 
     key = _cache_key(player_name)
-    if key in cache:
-        return cache[key]
-    url_map = _load_url_map()
-    bio_url = _find_profile_url(player_name, url_map)
+    cached_height = _valid_cached_height(cache.get(key))
+    metadata = _load_profile_lookup_meta()
+    revalidate_positive = _revalidate_legacy_positives()
+    url_map = None
+    bio_url = None
+    source_uri = ""
+    if cached_height is not None and revalidate_positive and own_cache:
+        url_map = _load_url_map()
+        bio_url = _find_profile_url(player_name, url_map)
+        source_uri = _absolute_profile_url(bio_url, key)
+        if _positive_cache_field_is_evidenced(
+            metadata.get(key),
+            field="height_cm",
+            value=cached_height,
+            source_uri=source_uri,
+        ):
+            return cached_height
+    elif cached_height is not None:
+        return cached_height
+    # Caller-owned dictionaries have no durable lookup-evidence sidecar. Keep
+    # their historical first-wins behavior unless opt-in positive revalidation
+    # explicitly withholds values that cannot carry durable evidence.
+    if not own_cache and key in cache:
+        return None
+
+    if url_map is None:
+        url_map = _load_url_map()
+        bio_url = _find_profile_url(player_name, url_map)
+        source_uri = _absolute_profile_url(bio_url, key)
+    if key in cache and _negative_cache_is_fresh(
+        metadata.get(key),
+        source_uri=source_uri,
+        missing_fields={"height_cm"},
+    ):
+        return None
+
     if not bio_url:
         print(f"  ATP: no URL found for '{player_name}' (re-run atp_rankings_scraper.py to refresh)")
         cache[key] = None
+        _record_lookup(
+            metadata,
+            key=key,
+            source_uri=source_uri,
+            height_cm=None,
+            hand=None,
+            status="no_url",
+        )
         if own_cache:
             _save_cache(cache)
+            _save_profile_lookup_meta(metadata)
         return None
 
     print(f"  ATP height lookup: {player_name}")
-    pg = _new_browser_page()
+    text = ""
+    pg = None
     try:
-        height = _scrape_profile(pg, bio_url)
+        pg = _new_browser_page()
+        text = _fetch_profile_text(pg, bio_url)
+    except Exception as exc:
+        print(f"  ATP profile browser error ({source_uri}): {exc}")
     finally:
-        pg.close()
+        if pg is not None:
+            try:
+                pg.close()
+            except Exception:
+                pass
 
-    cache[key] = height
+    identity_matches = _profile_text_matches_name(text, player_name)
+    height = _extract_height_cm(text) if identity_matches else None
+
+    if height is not None or key not in cache:
+        cache[key] = height
     if own_cache:
         _save_cache(cache)
+        _record_lookup(
+            metadata,
+            key=key,
+            source_uri=source_uri,
+            height_cm=height,
+            hand=None,
+            status=(
+                "resolved" if height is not None
+                else "identity_mismatch" if str(text or "").strip() and not identity_matches
+                else "not_found" if str(text or "").strip()
+                else "fetch_error"
+            ),
+            source_content_sha256=(
+                sha256(text.encode("utf-8")).hexdigest()
+                if str(text or "").strip() else ""
+            ),
+            identity_binding=(
+                OFFICIAL_PAGE_IDENTITY_BINDING if identity_matches else ""
+            ),
+        )
+        _save_profile_lookup_meta(metadata)
 
     if height is not None:
         print(f"  ATP height found: {player_name} → {height}cm")
@@ -281,15 +612,20 @@ def get_height_cm(
     return height
 
 
-def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
+def batch_get_profiles(
+    player_names: list,
+    verbose: bool = True,
+    refresh_state: Optional[dict] = None,
+) -> dict:
     """
     Fetch height AND handedness for multiple players, one page fetch each,
     shared browser. Returns {name: {"height_cm": int|None, "hand": 'R'/'L'/None}}.
-    Default legacy mode retains today's persistent caches. Required cutover
-    mode reads only a generation-pinned export and returns the accepted
-    canonical player ID with each profile so callers can reject identity
-    mismatches. Fresh values remain in-memory pending normalized
-    ingestion/review.
+    Default legacy mode retains positive persistent caches. Missing fields are
+    retried only after their source-bound evidence TTL, with a run-scoped
+    refresh budget supplied by the caller. Required cutover mode reads only a
+    generation-pinned export and returns the accepted canonical player ID with
+    each profile so callers can reject identity mismatches. Fresh values remain
+    compatibility evidence pending normalized ingestion/review.
     """
     if _provenance_required():
         bundle = _load_required_bundle()
@@ -307,50 +643,199 @@ def batch_get_profiles(player_names: list, verbose: bool = True) -> dict:
 
     h_cache = _load_cache()
     hd_cache = _load_hands_cache()
+    metadata = _load_profile_lookup_meta()
+    revalidate_positive = _revalidate_legacy_positives()
+    url_map = _load_url_map() if revalidate_positive else None
     results: dict = {}
-    to_scrape = []
+    incomplete = []
 
     for name in player_names:
         key = _cache_key(name)
-        if key in h_cache and key in hd_cache:
-            results[name] = {"height_cm": h_cache[key], "hand": hd_cache[key]}
+        height = _valid_cached_height(h_cache.get(key))
+        hand = _valid_cached_hand(hd_cache.get(key))
+        if revalidate_positive:
+            assert url_map is not None
+            bio_url = _find_profile_url(name, url_map)
+            source_uri = _absolute_profile_url(bio_url, key)
+            if height is not None and not _positive_cache_field_is_evidenced(
+                metadata.get(key),
+                field="height_cm",
+                value=height,
+                source_uri=source_uri,
+            ):
+                height = None
+            if hand is not None and not _positive_cache_field_is_evidenced(
+                metadata.get(key),
+                field="hand",
+                value=hand,
+                source_uri=source_uri,
+            ):
+                hand = None
+        if height is not None and hand is not None:
+            results[name] = {"height_cm": height, "hand": hand}
         else:
-            to_scrape.append(name)
+            incomplete.append((name, key, height, hand))
 
-    if not to_scrape:
+    if not incomplete:
         return results
-    url_map = _load_url_map()
-    with_url = [(n, _find_profile_url(n, url_map)) for n in to_scrape]
-    needs_scraping = [(n, u) for n, u in with_url if u]
-    no_url = [n for n, u in with_url if not u]
 
-    for name in no_url:
-        results[name] = {"height_cm": h_cache.get(_cache_key(name)),
-                         "hand": hd_cache.get(_cache_key(name))}
-        h_cache.setdefault(_cache_key(name), None)
-        hd_cache.setdefault(_cache_key(name), None)
+    if url_map is None:
+        url_map = _load_url_map()
+    needs_scraping = []
+    no_url = []
+    state = refresh_state if refresh_state is not None else {}
+    if "remaining" not in state:
+        state["remaining"] = _negative_refresh_limit()
+    try:
+        refresh_slots = max(0, int(state["remaining"]))
+    except (TypeError, ValueError, OverflowError):
+        refresh_slots = 0
+    attempted_keys = state.setdefault("attempted_keys", set())
+    if not isinstance(attempted_keys, set):
+        attempted_keys = set(attempted_keys or ())
+        state["attempted_keys"] = attempted_keys
+    for name, key, height, hand in incomplete:
+        bio_url = _find_profile_url(name, url_map)
+        source_uri = _absolute_profile_url(bio_url, key)
+        missing_fields = {
+            field for field, value in (("height_cm", height), ("hand", hand))
+            if value is None
+        }
+        if _negative_cache_is_fresh(
+            metadata.get(key),
+            source_uri=source_uri,
+            missing_fields=missing_fields,
+        ):
+            results[name] = {"height_cm": height, "hand": hand}
+        elif not bio_url:
+            no_url.append((name, key, height, hand, source_uri))
+        elif refresh_slots > 0 and key not in attempted_keys:
+            needs_scraping.append((name, key, height, hand, bio_url, source_uri))
+            attempted_keys.add(key)
+            refresh_slots -= 1
+        else:
+            # Bound stale-negative refresh work so an old cache cannot turn one
+            # hourly pipeline run into an unbounded ATP crawl. Deferred rows
+            # remain incomplete; fresh failures rotate to later rows next run.
+            results[name] = {"height_cm": height, "hand": hand}
+    state["remaining"] = refresh_slots
+
+    for name, key, height, hand, source_uri in no_url:
+        results[name] = {"height_cm": height, "hand": hand}
+        if key not in h_cache:
+            h_cache[key] = height
+        if key not in hd_cache:
+            hd_cache[key] = hand
+        _record_lookup(
+            metadata,
+            key=key,
+            source_uri=source_uri,
+            height_cm=height,
+            hand=hand,
+            status="no_url",
+        )
         if verbose:
             print(f"  ATP: no URL for '{name}' — skipping profile lookup")
 
     if needs_scraping:
         if verbose:
             print(f"  ATP profile scraper: fetching {len(needs_scraping)} players...")
-        pg = _new_browser_page()
+        pg = None
         try:
-            for name, bio_url in needs_scraping:
-                text = _fetch_profile_text(pg, bio_url)
-                h = _extract_height_cm(text)
-                hd = _extract_hand(text)
+            pg = _new_browser_page()
+            for name, key, cached_height, cached_hand, bio_url, source_uri in needs_scraping:
+                try:
+                    text = _fetch_profile_text(pg, bio_url)
+                except Exception:
+                    text = ""
+                if not str(text or "").strip():
+                    results[name] = {
+                        "height_cm": cached_height,
+                        "hand": cached_hand,
+                    }
+                    _record_lookup(
+                        metadata,
+                        key=key,
+                        source_uri=source_uri,
+                        height_cm=cached_height,
+                        hand=cached_hand,
+                        status="fetch_error",
+                    )
+                    continue
+                if not _profile_text_matches_name(text, name):
+                    results[name] = {
+                        "height_cm": cached_height,
+                        "hand": cached_hand,
+                    }
+                    _record_lookup(
+                        metadata,
+                        key=key,
+                        source_uri=source_uri,
+                        height_cm=cached_height,
+                        hand=cached_hand,
+                        status="identity_mismatch",
+                        source_content_sha256=sha256(
+                            text.encode("utf-8")
+                        ).hexdigest(),
+                    )
+                    continue
+                observed_height = _extract_height_cm(text)
+                observed_hand = _extract_hand(text)
+                h = cached_height or observed_height
+                hd = cached_hand or observed_hand
                 results[name] = {"height_cm": h, "hand": hd}
-                h_cache[_cache_key(name)] = h
-                hd_cache[_cache_key(name)] = hd
+                if observed_height is not None or key not in h_cache:
+                    h_cache[key] = observed_height
+                if observed_hand is not None or key not in hd_cache:
+                    hd_cache[key] = observed_hand
+                missing_count = int(observed_height is None) + int(observed_hand is None)
+                status = (
+                    "resolved" if missing_count == 0
+                    else "partial" if missing_count == 1
+                    else "not_found"
+                )
+                _record_lookup(
+                    metadata,
+                    key=key,
+                    source_uri=source_uri,
+                    height_cm=observed_height,
+                    hand=observed_hand,
+                    status=status,
+                    source_content_sha256=sha256(
+                        text.encode("utf-8")
+                    ).hexdigest(),
+                    identity_binding=OFFICIAL_PAGE_IDENTITY_BINDING,
+                )
                 if verbose:
                     print(f"    {name}: {h or '?'}cm hand={hd or '?'}")
+        except Exception:
+            if pg is not None:
+                raise
+            # Browser launch failure is operationally transient. Preserve any
+            # positive cached fields, keep missing fields incomplete, and let a
+            # future run retry after the short transient TTL.
+            for name, key, height, hand, _bio_url, source_uri in needs_scraping:
+                if name in results:
+                    continue
+                results[name] = {"height_cm": height, "hand": hand}
+                _record_lookup(
+                    metadata,
+                    key=key,
+                    source_uri=source_uri,
+                    height_cm=height,
+                    hand=hand,
+                    status="fetch_error",
+                )
         finally:
-            pg.close()
+            if pg is not None:
+                try:
+                    pg.close()
+                except Exception:
+                    pass
 
     _save_cache(h_cache)
     _save_hands_cache(hd_cache)
+    _save_profile_lookup_meta(metadata)
     return results
 
 

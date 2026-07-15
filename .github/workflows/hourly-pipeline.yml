@@ -92,6 +92,11 @@ jobs:
                         production/odds_history.csv production/logs \
                         ':(exclude)production/logs/betting.db' data/atp_rankings.csv \
                         data/atp_heights.json data/atp_hands.json || true
+          PROFILE_LOOKUP_META=data/atp_profile_lookup_meta.json
+          if [ -e "$PROFILE_LOOKUP_META" ] || \
+             git ls-files --error-unmatch "$PROFILE_LOOKUP_META" >/dev/null 2>&1; then
+            git add -A -f -- "$PROFILE_LOOKUP_META"
+          fi
           # SQLite is a derived local read model. Committing its binary churn
           # causes avoidable rebase conflicts and it is rebuilt from CSV logs.
           git restore --worktree production/logs/betting.db || true
