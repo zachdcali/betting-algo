@@ -134,6 +134,9 @@ browser page is reused for up to 32 official-profile attempts by default
 only when the official URL, rendered full name, canonical player ID, body
 SHA-256, observed value, and physical range all bind. Every attempt persists
 its exact status; unresolved players remain default-marked and ineligible.
+Canonical display-key uniqueness and the strict cache allowlist cover every
+slate player, including valid-height rows that need only handedness; a shared
+display key across two canonical IDs fails the run before fallback.
 The run-owned feature-store connection uses autocommit for reads, explicit root
 transactions for profile write-through, and closes in the pipeline `finally`
 path so a prior `SELECT` cannot turn a durable update into an uncommitted

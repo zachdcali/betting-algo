@@ -412,13 +412,10 @@ class TAFeatureCalculator:
                 opponent = profiles[1 - index]
                 candidate_rows.append((profile, opponent, event))
 
-        if not candidate_rows:
-            summary["status"] = "no_candidates"
-            return summary
-
-        # Every browser-eligible name is bound to one canonical store ID for
-        # the whole run.  A display-key collision is ambiguous and fails closed
-        # before cache evidence can influence completeness.
+        # Every slate name is bound to one canonical store ID for the whole
+        # run, including players whose height is already valid but whose hand
+        # is unknown. A display-key collision is ambiguous and fails closed
+        # before any name-keyed cache evidence can influence completeness.
         slate_ids_by_key: dict[str, int] = {}
         for player_id, profile in profiles_by_id.items():
             key = str(profile.get("name") or "").strip().lower()
@@ -431,6 +428,43 @@ class TAFeatureCalculator:
                     f"{profile.get('name')}"
                 )
             slate_ids_by_key[key] = player_id
+
+        # Install the canonical allowlist and strict-positive policy even when
+        # there are no missing heights. Per-match hand fallback shares this
+        # state; without it a hand-only row could still consume a legacy
+        # name-keyed cache value across two canonical IDs.
+        refresh_state = cache.setdefault("atp_profile_refresh", {})
+        existing_player_ids = refresh_state.get("canonical_player_ids") or {}
+        if not isinstance(existing_player_ids, dict):
+            existing_player_ids = {}
+        for key, player_id in slate_ids_by_key.items():
+            existing_id = existing_player_ids.get(key)
+            if existing_id is not None and int(existing_id) != player_id:
+                raise UnsafeToInferError(
+                    "height hydration cache key changed canonical player within run: "
+                    f"{key}"
+                )
+        refresh_state["require_evidenced_positives"] = True
+        if "remaining" not in refresh_state:
+            refresh_state["remaining"] = _run_height_hydration_limit()
+        allowed_keys = refresh_state.setdefault("allowed_keys", set())
+        if not isinstance(allowed_keys, set):
+            allowed_keys = set(allowed_keys or ())
+            refresh_state["allowed_keys"] = allowed_keys
+        allowed_keys.update(slate_ids_by_key)
+        canonical_player_ids = refresh_state.setdefault("canonical_player_ids", {})
+        if not isinstance(canonical_player_ids, dict):
+            canonical_player_ids = {}
+            refresh_state["canonical_player_ids"] = canonical_player_ids
+        canonical_player_ids.update(slate_ids_by_key)
+
+        if not candidate_rows:
+            summary["status"] = "no_height_candidates"
+            summary["remaining_budget"] = max(
+                0, int(refresh_state.get("remaining", 0) or 0)
+            )
+            cache["height_hydration"] = summary
+            return summary
 
         canonical_names = sorted({
             str(profile.get("name") or "").strip()
@@ -480,35 +514,6 @@ class TAFeatureCalculator:
             states = summary["evidence_states"]
             states[candidate.evidence_state] = states.get(candidate.evidence_state, 0) + 1
 
-        # Keep the old hand-only fallback available for every canonical player
-        # on this slate.  The ordered browser batch itself still receives only
-        # missing-height candidates; these extra IDs merely let later feature
-        # calls use any remaining budget without reopening name-only identity.
-
-        refresh_state = cache.setdefault("atp_profile_refresh", {})
-        refresh_state["require_evidenced_positives"] = True
-        if "remaining" not in refresh_state:
-            refresh_state["remaining"] = _run_height_hydration_limit()
-        existing_player_ids = refresh_state.get("canonical_player_ids") or {}
-        if not isinstance(existing_player_ids, dict):
-            existing_player_ids = {}
-        for key, player_id in slate_ids_by_key.items():
-            existing_id = existing_player_ids.get(key)
-            if existing_id is not None and int(existing_id) != player_id:
-                raise UnsafeToInferError(
-                    "height hydration cache key changed canonical player within run: "
-                    f"{key}"
-                )
-        allowed_keys = refresh_state.setdefault("allowed_keys", set())
-        if not isinstance(allowed_keys, set):
-            allowed_keys = set(allowed_keys or ())
-            refresh_state["allowed_keys"] = allowed_keys
-        allowed_keys.update(slate_ids_by_key)
-        canonical_player_ids = refresh_state.setdefault("canonical_player_ids", {})
-        if not isinstance(canonical_player_ids, dict):
-            canonical_player_ids = {}
-            refresh_state["canonical_player_ids"] = canonical_player_ids
-        canonical_player_ids.update(slate_ids_by_key)
         attempted_before = set(refresh_state.get("attempted_keys") or ())
 
         resolved = batch_get_profiles(

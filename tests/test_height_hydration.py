@@ -440,22 +440,27 @@ def test_feature_store_reads_autocommit_writes_root_transaction_and_closes(
     calc.close_store()  # idempotent
 
 
-def test_canonical_display_key_collision_fails_before_refresh_state_or_cache(
-    monkeypatch,
+def test_hand_only_canonical_display_collision_fails_without_persisting_shared_hand(
+    monkeypatch, tmp_path,
 ):
     monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.setattr(scraper, "CACHE_PATH", tmp_path / "heights.json")
+    monkeypatch.setattr(scraper, "HANDS_CACHE_PATH", tmp_path / "hands.json")
+    monkeypatch.setattr(scraper, "PROFILE_LOOKUP_META_PATH", tmp_path / "meta.json")
+    scraper.CACHE_PATH.write_text('{"shared canonical name": 189}')
+    scraper.HANDS_CACHE_PATH.write_text('{"shared canonical name": "L"}')
     profiles = {
         "alpha alias": {
             "player_id": 10,
             "name": "Shared Canonical Name",
-            "height_cm": None,
-            "hand": "R",
+            "height_cm": 188,
+            "hand": "U",
         },
         "beta alias": {
             "player_id": 20,
             "name": "Shared Canonical Name",
-            "height_cm": None,
-            "hand": "L",
+            "height_cm": 190,
+            "hand": "U",
         },
     }
     monkeypatch.setattr(
@@ -473,6 +478,10 @@ def test_canonical_display_key_collision_fails_before_refresh_state_or_cache(
     calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
     calc.use_store = True
     calc._store = lambda: object()
+    persisted = []
+    calc._persist_player_field = lambda profile, field, value: persisted.append(
+        (profile["player_id"], field, value)
+    )
     session_cache = {}
 
     with pytest.raises(ta_feature_module.UnsafeToInferError, match="multiple canonical"):
@@ -486,6 +495,63 @@ def test_canonical_display_key_collision_fails_before_refresh_state_or_cache(
         )
 
     assert "atp_profile_refresh" not in session_cache
+    assert persisted == []
+    assert json.loads(scraper.HANDS_CACHE_PATH.read_text()) == {
+        "shared canonical name": "L"
+    }
+
+
+def test_hand_only_slate_installs_canonical_strict_refresh_state(monkeypatch):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    profiles = {
+        "alpha player": {
+            "player_id": 10,
+            "name": "Alpha Player",
+            "height_cm": 188,
+            "hand": "U",
+        },
+        "beta player": {
+            "player_id": 20,
+            "name": "Beta Player",
+            "height_cm": 190,
+            "hand": "U",
+        },
+    }
+    monkeypatch.setattr(
+        store_history,
+        "get_profile",
+        lambda _conn, name: dict(profiles[str(name).strip().casefold()]),
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "batch_get_profiles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("height batch must not run without height candidates")
+        ),
+    )
+    calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calc.use_store = True
+    calc._store = lambda: object()
+    session_cache = {}
+
+    summary = calc.prehydrate_slate_profiles(
+        pd.DataFrame([{
+            "player1_normalized": "Alpha Player",
+            "player2_normalized": "Beta Player",
+            "event": "Challenger - Test",
+        }]),
+        session_cache=session_cache,
+    )
+
+    assert summary["status"] == "no_height_candidates"
+    refresh = session_cache["atp_profile_refresh"]
+    assert refresh["require_evidenced_positives"] is True
+    assert refresh["remaining"] == 32
+    assert refresh["allowed_keys"] == {"alpha player", "beta player"}
+    assert refresh["canonical_player_ids"] == {
+        "alpha player": 10,
+        "beta player": 20,
+    }
 
 
 def test_extract_features_prefilters_ineligible_hydration_and_propagates_conflict():

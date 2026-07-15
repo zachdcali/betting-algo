@@ -163,7 +163,8 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   Challenger before ITF, fresh negatives deferred, and one shared official ATP
   profile browser capped by `ATP_PROFILE_RUN_HYDRATION_LIMIT` (default 32).
   Only URL/full-name/canonical-ID/body-hash-bound values in [150, 230] may
-  improve completeness; misses remain default-marked and ineligible.
+  improve completeness; misses remain default-marked and ineligible. The
+  all-slate canonical key/allowlist gate also covers hand-only fallback.
 - Exact feature lineage stores the ordered 141-feature schema SHA-256 and vector
   SHA-256. Inference and GOLD verification require a structurally valid, finite
   persisted vector with valid binary/cardinality one-hot groups; a corrupt file,
