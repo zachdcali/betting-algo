@@ -257,6 +257,43 @@ test("matching skip evidence remains visible beside a snapshot", () => {
   assert.ok(classification.reasons.includes("one_hot_cardinality:round:0"));
 });
 
+test("administrative identity tombstone blocks an accepted immutable snapshot", () => {
+  const snapshot = completeSlateRow({
+    record_status: "pending",
+    features_complete: true,
+  });
+  const audit = {
+    run_id: "run_collision",
+    match_uid: snapshot.match_uid,
+    feature_snapshot_id: snapshot.feature_snapshot_id,
+    prediction_uid: snapshot.prediction_uid,
+    p1: snapshot.p1,
+    p2: snapshot.p2,
+    stage: "administrative_quarantine",
+    skip_reason_code: "match_identity_conflict",
+    skip_reason_detail: "operational prediction tombstoned; immutable snapshots retained",
+    match_start_at_utc: snapshot.match_start_at_utc,
+  };
+
+  // The immutable snapshot intentionally remains unchanged. Its exact-run
+  // skipped-live audit is the browser-facing tombstone.
+  const classification = Logic.classifySlateEvidence(snapshot, [audit], NOW);
+  assert.equal(classification.state, "blocked");
+  assert.ok(classification.reasons.includes(
+    "Skipped at administrative quarantine: match identity conflict",
+  ));
+  assert.equal(
+    Logic.primaryBlockerGroup({
+      row: snapshot,
+      source: "snapshot",
+      featureReference: "verified",
+      auditRows: [audit],
+      classification,
+    }),
+    "Identity conflict",
+  );
+});
+
 test("blocked rows receive one mutually exclusive primary group", () => {
   const featureFailure = {
     row: completeSlateRow({ features_complete: false, model_p1_prob: null }),

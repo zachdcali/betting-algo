@@ -315,7 +315,10 @@ class TAFeatureCalculator:
         if prof is None:
             return None
         prof["slug"] = slug
-        prof["current_rank"] = get_player_rank(prof["name"])
+        prof["current_rank"] = get_player_rank(
+            prof["name"],
+            player_url=prof.get("atp_url", ""),
+        )
         return prof
 
     def _store_history_frame(self, profile: dict, session_cache: Optional[Dict]) -> pd.DataFrame:
@@ -1265,7 +1268,11 @@ class TAFeatureCalculator:
         # and the loud print keeps it visible.
         for label, profile in [('P1', profile1), ('P2', profile2)]:
             if profile.get('current_rank') is None and profile.get('name'):
-                profile['current_rank'] = get_player_rank(profile['name'], self._atp_rankings)
+                profile['current_rank'] = get_player_rank(
+                    profile['name'],
+                    self._atp_rankings,
+                    player_url=profile.get('atp_url', ''),
+                )
             if profile.get('current_rank') is None and profile.get('player_id') is not None:
                 # deeper than the rankings file reaches (~1500): use the latest
                 # rank recorded on their matches — the exact lineage training saw
@@ -1336,6 +1343,7 @@ class TAFeatureCalculator:
             ta_rank: float,
             player_label: str,
             player_id=None,
+            player_url: str = '',
         ) -> float:
             """Look up ATP points from rankings cache with rank cross-validation."""
             if use_shared_semantics:
@@ -1350,9 +1358,17 @@ class TAFeatureCalculator:
 
             # Frozen live-legacy behavior: permissive name lookup followed by
             # curve interpolation when a ranked player has no matched points.
-            pts = get_player_points(display_name, self._atp_rankings)
+            pts = get_player_points(
+                display_name,
+                self._atp_rankings,
+                player_url=player_url,
+            )
             if pts is not None:
-                atp_rank = get_player_rank(display_name, self._atp_rankings)
+                atp_rank = get_player_rank(
+                    display_name,
+                    self._atp_rankings,
+                    player_url=player_url,
+                )
                 if atp_rank is not None and abs(atp_rank - ta_rank) > 20:
                     print(f"  RANK MISMATCH for {display_name}: TA={int(ta_rank)}, ATP={atp_rank} (using TA rank, ATP points={pts})")
                 return float(pts)
@@ -1422,6 +1438,7 @@ class TAFeatureCalculator:
                 float(profile1['current_rank']),
                 'P1',
                 profile1.get('player_id'),
+                profile1.get('atp_url', ''),
             ),
         }
         s2 = {
@@ -1435,6 +1452,7 @@ class TAFeatureCalculator:
                 float(profile2['current_rank']),
                 'P2',
                 profile2.get('player_id'),
+                profile2.get('atp_url', ''),
             ),
         }
         if use_shared_semantics:

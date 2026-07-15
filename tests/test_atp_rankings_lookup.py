@@ -9,20 +9,48 @@ PRODUCTION_DIR = REPO_ROOT / "production"
 if str(PRODUCTION_DIR) not in sys.path:
     sys.path.insert(0, str(PRODUCTION_DIR))
 
-from scraping.atp_rankings_scraper import get_player_points, get_player_rank
+from scraping.atp_rankings_scraper import (
+    get_player_points,
+    get_player_rank,
+    get_player_url,
+)
 
 
 def _abbreviated_rankings() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"rank": 18, "player_name": "L. Darderi", "points": 2210},
-            {"rank": 43, "player_name": "M. Berrettini", "points": 1075},
-            {"rank": 109, "player_name": "Y. Bu", "points": 604},
-            {"rank": 257, "player_name": "D. Dedura", "points": 219},
-            {"rank": 434, "player_name": "A. Boitan", "points": 108},
-            {"rank": 546, "player_name": "J. Berrettini", "points": 74},
-            {"rank": 969, "player_name": "Micah Braswell", "points": 24},
-            {"rank": 1125, "player_name": "Seongwoo Cho", "points": 28},
+            {
+                "rank": 18, "player_name": "L. Darderi", "points": 2210,
+                "player_url": "/en/players/luciano-darderi/d0fj/overview",
+            },
+            {
+                "rank": 43, "player_name": "M. Berrettini", "points": 1075,
+                "player_url": "/en/players/matteo-berrettini/bk40/overview",
+            },
+            {
+                "rank": 109, "player_name": "Y. Bu", "points": 604,
+                "player_url": "/en/players/yunchaokete-bu/y09v/overview",
+            },
+            {
+                "rank": 257, "player_name": "D. Dedura", "points": 219,
+                "player_url": "/en/players/diego-dedura/d0lj/overview",
+            },
+            {
+                "rank": 434, "player_name": "A. Boitan", "points": 108,
+                "player_url": "/en/players/adrian-boitan/b0c0/overview",
+            },
+            {
+                "rank": 546, "player_name": "J. Berrettini", "points": 74,
+                "player_url": "/en/players/jacopo-berrettini/b0g9/overview",
+            },
+            {
+                "rank": 969, "player_name": "Micah Braswell", "points": 24,
+                "player_url": "/en/players/micah-braswell/b0j8/overview",
+            },
+            {
+                "rank": 1125, "player_name": "Seongwoo Cho", "points": 28,
+                "player_url": "/en/players/seongwoo-cho/c0nx/overview",
+            },
         ]
     )
 
@@ -99,3 +127,74 @@ def test_reversed_and_surname_only_fallbacks_fail_closed_without_given_evidence(
 
     assert get_player_rank("Bu Zhao", rankings) is None
     assert get_player_rank("Darderi", rankings) is None
+
+
+def test_same_initial_abbreviation_requires_full_profile_url_identity():
+    rankings = pd.DataFrame([{
+        "rank": 18,
+        "player_name": "V. Example",
+        "points": 2210,
+        "player_url": "/en/players/victor-example/e001/overview",
+    }])
+
+    # An initial-only display cannot silently bind a different same-initial
+    # full name. The official URL slug supplies the disambiguating identity.
+    assert get_player_rank("Vito Example", rankings) is None
+    assert get_player_rank("Victor Example", rankings) == 18
+    assert get_player_url("Victor Example", rankings) == (
+        "/en/players/victor-example/e001/overview"
+    )
+
+    no_url = rankings.drop(columns=["player_url"])
+    assert get_player_rank("Victor Example", no_url) is None
+
+
+def test_canonical_player_url_is_an_exact_fail_closed_lookup_key():
+    rankings = pd.DataFrame([
+        {
+            "rank": 18,
+            "player_name": "J. Cerundolo",
+            "points": 2210,
+            "player_url": "/en/players/juan-manuel-cerundolo/c0c1/overview",
+        },
+        {
+            "rank": 22,
+            "player_name": "J. Cerundolo",
+            "points": 1880,
+            "player_url": "/en/players/juan-martin-cerundolo/c0c2/overview",
+        },
+    ])
+
+    assert get_player_rank("Juan Manuel Cerundolo", rankings) == 18
+    assert get_player_rank("Juan Martin Cerundolo", rankings) == 22
+    assert get_player_rank("J. Cerundolo", rankings) is None
+    assert get_player_rank(
+        "J. Cerundolo",
+        rankings,
+        player_url="https://www.atptour.com/en/players/juan-martin-cerundolo/c0c2/overview/",
+    ) == 22
+    assert get_player_rank(
+        "J. Cerundolo",
+        rankings,
+        player_url="/en/players/not-present/z999/overview",
+    ) is None
+
+
+def test_profile_identity_allows_ordered_middle_name_and_compound_spacing():
+    rankings = pd.DataFrame([
+        {
+            "rank": 360,
+            "player_name": "D. Stricker",
+            "points": 140,
+            "player_url": "/en/players/dominic-stricker/s0la/overview",
+        },
+        {
+            "rank": 155,
+            "player_name": "S. Kwon",
+            "points": 410,
+            "player_url": "/en/players/soonwoo-kwon/kf17/overview",
+        },
+    ])
+
+    assert get_player_rank("Dominic Stephan Stricker", rankings) == 360
+    assert get_player_rank("Soon Woo Kwon", rankings) == 155
