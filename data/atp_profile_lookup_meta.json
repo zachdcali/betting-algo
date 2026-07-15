@@ -673,6 +673,19 @@
     "source_uri": "atp-rankings://unmapped/joao%20dinis%20silva",
     "status": "no_url"
   },
+  "joaquim almeida": {
+    "canonical_player_id": 212760,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T19:48:59+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/joaquim%20almeida",
+    "status": "no_url"
+  },
   "johan oscar lien": {
     "identity_binding": "",
     "missing_fields": [
@@ -733,6 +746,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jose%20murariu",
     "status": "no_url"
+  },
+  "joshua charlton": {
+    "canonical_player_id": 206916,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T19:49:09+00:00",
+    "observed_values": {},
+    "source_content_sha256": "8b1e217c0012ba98d3bbce7c31c1d4069f6ecda2ace85ea601d44fa79dd93147",
+    "source_uri": "https://www.atptour.com/en/players/joshua-charlton/c09y/overview",
+    "status": "identity_mismatch"
   },
   "joshua peck": {
     "canonical_player_id": 200234,
@@ -1053,6 +1079,19 @@
     "source_content_sha256": "43b167ef98cd082869e2f616bd0d4db20c9113a4dbae674c0f5ffadea4252715",
     "source_uri": "https://www.atptour.com/en/players/max-schoenhaus/s0vu/overview",
     "status": "identity_mismatch"
+  },
+  "maxime st hilaire": {
+    "canonical_player_id": 212636,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T19:48:59+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/maxime%20st%20hilaire",
+    "status": "no_url"
   },
   "maximilian figl": {
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -1555,6 +1594,19 @@
     "source_uri": "atp-rankings://unmapped/simon%20caldwell",
     "status": "no_url"
   },
+  "spencer johnson": {
+    "canonical_player_id": 212958,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-15T19:49:04+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 191
+    },
+    "source_content_sha256": "1608a1bccc87087e51b33221a037d05b2ddda49982cb727c7299834363765930",
+    "source_uri": "https://www.atptour.com/en/players/spencer-johnson/j0f2/overview",
+    "status": "resolved"
+  },
   "stefano dagostino": {
     "identity_binding": "",
     "missing_fields": [
@@ -1589,6 +1641,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/sven%20corbinais",
+    "status": "no_url"
+  },
+  "tai leonard sach": {
+    "canonical_player_id": 212740,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T19:48:59+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/tai%20leonard%20sach",
     "status": "no_url"
   },
   "teodor davidov": {
@@ -1799,6 +1864,19 @@
     "source_content_sha256": "747707155259bbe80ad8089c2f4e6099a72b190d9dd1f7d331315c3d049049ac",
     "source_uri": "https://www.atptour.com/en/players/yuta-tomida/t0j8/overview",
     "status": "identity_mismatch"
+  },
+  "zachary viiala": {
+    "canonical_player_id": 212303,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T19:48:59+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/zachary%20viiala",
+    "status": "no_url"
   },
   "zhao zhao": {
     "identity_binding": "",
