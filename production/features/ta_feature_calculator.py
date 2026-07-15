@@ -174,8 +174,29 @@ class TAFeatureCalculator:
         if self._store_conn is None:
             sys.path.insert(0, str(Path(__file__).parent.parent))
             import canonical_store
-            self._store_conn = canonical_store.connect()
+            conn = canonical_store.connect()
+            try:
+                # This is a long-lived run-scoped connection.  Reads must not
+                # leave an implicit outer transaction open; otherwise the
+                # explicit write-through transaction below is only a savepoint
+                # and its update can roll back when the runner exits.
+                conn.autocommit = True
+            except Exception:
+                conn.close()
+                raise
+            self._store_conn = conn
         return self._store_conn
+
+    def close_store(self) -> None:
+        """Close the run-owned compatibility-store connection exactly once."""
+        conn = getattr(self, "_store_conn", None)
+        self._store_conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception as exc:
+            print(f"      ⚠️ canonical feature-store close failed: {exc}")
 
     def _persist_player_field(self, profile: dict, field: str, value) -> None:
         """Preserve the legacy write-through until explicit ops cutover.
@@ -199,6 +220,8 @@ class TAFeatureCalculator:
             return
         try:
             conn = self._store()
+            # ``_store`` owns an autocommit connection, so this is always a
+            # root transaction whose successful exit durably commits.
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute(

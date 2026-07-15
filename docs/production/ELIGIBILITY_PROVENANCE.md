@@ -125,7 +125,8 @@ Legacy mode continues to read and write `data/atp_heights.json` and
 files. It reads one derived bundle:
 
 Before live feature construction, legacy mode now plans one bounded current-
-slate ATP profile batch. Players are deduplicated by canonical store ID;
+slate ATP profile batch using only matches that pass the same pre-start clock
+guard as inference. Players are deduplicated by canonical store ID;
 lookups that can complete a matchup are prioritized, Challenger precedes ITF,
 and unobserved/expired evidence precedes a fresh source-bound negative. One
 browser page is reused for up to 32 official-profile attempts by default
@@ -133,6 +134,10 @@ browser page is reused for up to 32 official-profile attempts by default
 only when the official URL, rendered full name, canonical player ID, body
 SHA-256, observed value, and physical range all bind. Every attempt persists
 its exact status; unresolved players remain default-marked and ineligible.
+The run-owned feature-store connection uses autocommit for reads, explicit root
+transactions for profile write-through, and closes in the pipeline `finally`
+path so a prior `SELECT` cannot turn a durable update into an uncommitted
+savepoint.
 
 - `eligibility_profiles_bundle.json` contains normalized name bindings,
   canonical player IDs, and accepted height/hand values;

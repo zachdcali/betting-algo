@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -19,6 +20,8 @@ from features.height_hydration import (  # noqa: E402
 from features import ta_feature_calculator as ta_feature_module  # noqa: E402
 from features.ta_feature_calculator import TAFeatureCalculator  # noqa: E402
 from scraping import atp_height_scraper as scraper  # noqa: E402
+import canonical_store  # noqa: E402
+import main as production_main  # noqa: E402
 import store_history  # noqa: E402
 
 
@@ -348,3 +351,214 @@ def test_slate_prehydration_uses_one_canonical_batch_and_shared_32_lookup_budget
     assert (10, "height_cm", 188.0) in persisted
     assert (10, "hand", "L") in persisted
     assert session_cache["height_hydration"] == summary
+
+
+class _OwnedCursor:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, query, params=None):
+        self.connection.calls.append((str(query), params))
+        if str(query).lstrip().upper().startswith("SELECT"):
+            if not self.connection.autocommit:
+                self.connection.outer_transaction = True
+
+
+class _OwnedConnection:
+    def __init__(self):
+        self._autocommit = False
+        self.outer_transaction = False
+        self.in_transaction = False
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+        self.calls = []
+
+    @property
+    def autocommit(self):
+        return self._autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        if self.outer_transaction:
+            raise RuntimeError("cannot change autocommit inside a transaction")
+        self._autocommit = bool(value)
+
+    def cursor(self):
+        return _OwnedCursor(self)
+
+    @contextmanager
+    def transaction(self):
+        assert self.autocommit is True
+        assert self.outer_transaction is False
+        assert self.in_transaction is False
+        self.in_transaction = True
+        try:
+            yield
+        except Exception:
+            self.rollbacks += 1
+            raise
+        else:
+            self.commits += 1
+        finally:
+            self.in_transaction = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_feature_store_reads_autocommit_writes_root_transaction_and_closes(
+    monkeypatch,
+):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    connection = _OwnedConnection()
+    monkeypatch.setattr(canonical_store, "connect", lambda: connection)
+    calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calc._store_conn = None
+    calc.use_store = True
+
+    owned = calc._store()
+    with owned.cursor() as cursor:
+        cursor.execute("SELECT player_id FROM players", None)
+
+    assert owned.autocommit is True
+    assert owned.outer_transaction is False
+    calc._persist_player_field({"player_id": 42}, "height_cm", 188)
+    assert owned.commits == 1
+    assert owned.rollbacks == 0
+    assert any("UPDATE players" in query for query, _params in owned.calls)
+
+    calc.close_store()
+    assert connection.closed is True
+    assert calc._store_conn is None
+    calc.close_store()  # idempotent
+
+
+def test_canonical_display_key_collision_fails_before_refresh_state_or_cache(
+    monkeypatch,
+):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    profiles = {
+        "alpha alias": {
+            "player_id": 10,
+            "name": "Shared Canonical Name",
+            "height_cm": None,
+            "hand": "R",
+        },
+        "beta alias": {
+            "player_id": 20,
+            "name": "Shared Canonical Name",
+            "height_cm": None,
+            "hand": "L",
+        },
+    }
+    monkeypatch.setattr(
+        store_history,
+        "get_profile",
+        lambda _conn, name: dict(profiles[str(name).strip().casefold()]),
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "profile_lookup_evidence_states",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ambiguous identity must fail before cache inspection")
+        ),
+    )
+    calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calc.use_store = True
+    calc._store = lambda: object()
+    session_cache = {}
+
+    with pytest.raises(ta_feature_module.UnsafeToInferError, match="multiple canonical"):
+        calc.prehydrate_slate_profiles(
+            pd.DataFrame([{
+                "player1_normalized": "Alpha Alias",
+                "player2_normalized": "Beta Alias",
+                "event": "Challenger - Test",
+            }]),
+            session_cache=session_cache,
+        )
+
+    assert "atp_profile_refresh" not in session_cache
+
+
+def test_extract_features_prefilters_ineligible_hydration_and_propagates_conflict():
+    captured = []
+
+    class _ConflictingEngine:
+        def prehydrate_slate_profiles(self, odds_df, *, session_cache=None):
+            captured.append(odds_df.copy())
+            raise ta_feature_module.UnsafeToInferError("canonical key collision")
+
+        def build_141_features(self, **_kwargs):
+            raise AssertionError("per-match fallback must not run after ambiguity")
+
+    orchestrator = production_main.LiveBettingOrchestrator.__new__(
+        production_main.LiveBettingOrchestrator
+    )
+    orchestrator.run_id = "run_height_guard"
+    orchestrator.run_metrics = {}
+    orchestrator._session_cache = {}
+    orchestrator.feature_engine = _ConflictingEngine()
+    reasons = {
+        "future": "",
+        "started": "scheduled_start_passed",
+        "": "match_start_time_missing",
+    }
+    orchestrator.get_inference_guard_reason = lambda match_time: (
+        None, reasons[match_time]
+    )
+    odds = pd.DataFrame([
+        {
+            "player1_raw": "Future One",
+            "player2_raw": "Future Two",
+            "event": "Challenger - Future",
+            "match_time": "future",
+        },
+        {
+            "player1_raw": "Started One",
+            "player2_raw": "Started Two",
+            "event": "Challenger - Started",
+            "match_time": "started",
+        },
+        {
+            "player1_raw": "No Clock One",
+            "player2_raw": "No Clock Two",
+            "event": "ITF Men No Clock",
+            "match_time": "",
+        },
+    ])
+
+    with pytest.raises(ta_feature_module.UnsafeToInferError, match="collision"):
+        orchestrator.extract_features(odds)
+
+    assert len(captured) == 1
+    assert captured[0]["match_time"].tolist() == ["future"]
+
+
+def test_pipeline_finally_closes_feature_store_after_failure(capsys):
+    class _Engine:
+        def __init__(self):
+            self.closed = 0
+
+        def close_store(self):
+            self.closed += 1
+
+    orchestrator = production_main.LiveBettingOrchestrator.__new__(
+        production_main.LiveBettingOrchestrator
+    )
+    orchestrator.feature_engine = _Engine()
+    orchestrator._start_run_context = lambda: (_ for _ in ()).throw(
+        RuntimeError("early failure")
+    )
+    orchestrator._persist_run_state = lambda **_kwargs: None
+
+    assert orchestrator.run_full_pipeline() is False
+    assert orchestrator.feature_engine.closed == 1
+    capsys.readouterr()

@@ -157,8 +157,9 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   but settlement and bet reconciliation need the operational row.
 - A skipped/error feature build must persist `build_status` and can never be
   labeled `features_complete=True` merely because no default list was emitted.
-- Legacy live runs hydrate current-slate missing heights once before feature
-  construction: canonical-player-ID dedupe, match-completion impact first,
+- Legacy live runs hydrate pre-start-eligible current-slate missing heights
+  once before feature construction: canonical-player-ID dedupe,
+  match-completion impact first,
   Challenger before ITF, fresh negatives deferred, and one shared official ATP
   profile browser capped by `ATP_PROFILE_RUN_HYDRATION_LIMIT` (default 32).
   Only URL/full-name/canonical-ID/body-hash-bound values in [150, 230] may
