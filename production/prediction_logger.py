@@ -2,11 +2,13 @@
 """Append or update a prediction in prediction_log.csv."""
 import pandas as pd
 import os
+import re
 from datetime import datetime, date
 from pathlib import Path
 
 try:
     from logging_utils import (
+        LIVE_PLAYER_IDENTITY_SCHEMA_VERSION,
         append_unique_row,
         build_feature_snapshot_id,
         build_match_uid,
@@ -18,6 +20,7 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover - package import path
     from .logging_utils import (
+        LIVE_PLAYER_IDENTITY_SCHEMA_VERSION,
         append_unique_row,
         build_feature_snapshot_id,
         build_match_uid,
@@ -36,7 +39,8 @@ SCHEMA_VERSION = 'prediction_log_v2'
 
 COLUMNS = [
     'logged_at', 'match_date', 'tournament', 'surface', 'level', 'round',
-    'p1', 'p2',
+    'p1', 'p2', 'p1_identity_key', 'p2_identity_key',
+    'player_identity_schema_version',
     'p1_rank', 'p2_rank',
     'model_p1_prob', 'model_p2_prob',
     'xgb_p1_prob', 'xgb_p2_prob',
@@ -72,7 +76,8 @@ COLUMNS = [
 SNAPSHOT_COLUMNS = [
     'prediction_uid',
     'logged_at', 'match_date', 'tournament', 'surface', 'level', 'round',
-    'p1', 'p2',
+    'p1', 'p2', 'p1_identity_key', 'p2_identity_key',
+    'player_identity_schema_version',
     'run_id', 'match_uid', 'feature_snapshot_id',
     'p1_rank', 'p2_rank',
     'p1_hand', 'p2_hand',
@@ -110,6 +115,9 @@ ODDS_HISTORY_COLUMNS = [
     'round',
     'p1',
     'p2',
+    'p1_identity_key',
+    'p2_identity_key',
+    'player_identity_schema_version',
     'odds_scraped_at',
     'match_start_time',
     'match_start_at_utc',
@@ -241,6 +249,78 @@ def _validate_live_match_uid(
         )
 
 
+def _identity_players(
+    *, p1: str, p2: str, identity_p1: str | None, identity_p2: str | None,
+) -> tuple[str, str]:
+    """Resolve the exact oriented player inputs used by live lineage IDs.
+
+    Display names remain first-class audit/UI values.  Optional identity
+    overrides let the orchestrator prove IDs created from sportsbook matching
+    keys without rewriting display text.  Supplying only one side would make
+    orientation unverifiable, so it fails closed.
+    """
+    key1 = _clean_text(identity_p1)
+    key2 = _clean_text(identity_p2)
+    if bool(key1) != bool(key2):
+        raise LiveMatchIdentityError(
+            'identity_p1 and identity_p2 must be supplied together'
+        )
+    if key1 and key2:
+        display1 = _comparable_identity_key(p1)
+        display2 = _comparable_identity_key(p2)
+        canonical1 = _comparable_identity_key(key1)
+        canonical2 = _comparable_identity_key(key2)
+        if not display1 or display1 != canonical1:
+            raise LiveMatchIdentityError(
+                'identity_p1 is not equivalent to p1 display name'
+            )
+        if not display2 or display2 != canonical2:
+            raise LiveMatchIdentityError(
+                'identity_p2 is not equivalent to p2 display name'
+            )
+        if canonical1 == canonical2:
+            raise LiveMatchIdentityError(
+                'identity player keys collapse both opponents to one player'
+            )
+        return key1, key2
+    return p1, p2
+
+
+def _comparable_identity_key(value) -> str:
+    """Compare identity spellings under the existing live UID semantics."""
+    # Keep digits so synthetic/test players and any source suffixes remain
+    # distinct.  Remove punctuation (the incident was ``J.J.`` vs ``jj``) and
+    # treat hyphens as spaces, matching the long-standing UID contract.
+    text = re.sub(r'[^a-z0-9\s]', '', normalize_name(value))
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _row_identity_player(row, side: str) -> str:
+    return _clean_text(row.get(f'{side}_identity_key')) or _clean_text(
+        row.get(side)
+    )
+
+
+def _same_identity_orientation(existing, incoming) -> bool:
+    existing_p1 = _comparable_identity_key(
+        _row_identity_player(existing, 'p1')
+    )
+    existing_p2 = _comparable_identity_key(
+        _row_identity_player(existing, 'p2')
+    )
+    incoming_p1 = _comparable_identity_key(
+        _row_identity_player(incoming, 'p1')
+    )
+    incoming_p2 = _comparable_identity_key(
+        _row_identity_player(incoming, 'p2')
+    )
+    return bool(
+        existing_p1 and existing_p2 and incoming_p1 and incoming_p2
+        and existing_p1 == incoming_p1
+        and existing_p2 == incoming_p2
+    )
+
+
 def _unsettled_pair_mask(
     df: pd.DataFrame,
     *,
@@ -248,10 +328,22 @@ def _unsettled_pair_mask(
     p2: str,
 ) -> pd.Series:
     """Return same-player unsettled rows, independent of player order."""
-    p1_key = normalize_name(p1)
-    p2_key = normalize_name(p2)
-    left = df.get('p1', pd.Series('', index=df.index)).fillna('').map(normalize_name)
-    right = df.get('p2', pd.Series('', index=df.index)).fillna('').map(normalize_name)
+    p1_key = _comparable_identity_key(p1)
+    p2_key = _comparable_identity_key(p2)
+    left_display = df.get('p1', pd.Series('', index=df.index)).fillna('')
+    right_display = df.get('p2', pd.Series('', index=df.index)).fillna('')
+    left_identity = df.get(
+        'p1_identity_key', pd.Series('', index=df.index)
+    ).fillna('').astype(str)
+    right_identity = df.get(
+        'p2_identity_key', pd.Series('', index=df.index)
+    ).fillna('').astype(str)
+    left = left_identity.where(
+        left_identity.str.strip().ne(''), left_display,
+    ).map(_comparable_identity_key)
+    right = right_identity.where(
+        right_identity.str.strip().ne(''), right_display,
+    ).map(_comparable_identity_key)
     unsettled = df.get('actual_winner', pd.Series(pd.NA, index=df.index)).isna()
     status = df.get(
         'record_status', pd.Series('', index=df.index)
@@ -340,8 +432,7 @@ def _is_safe_round_enrichment(existing: pd.Series, incoming: dict) -> bool:
         and not existing_complete
         and incoming_complete
         and existing_status not in _PRESERVED_IDENTITY_STATUSES
-        and normalize_name(existing.get('p1')) == normalize_name(incoming.get('p1'))
-        and normalize_name(existing.get('p2')) == normalize_name(incoming.get('p2'))
+        and _same_identity_orientation(existing, incoming)
     )
 
 
@@ -540,6 +631,8 @@ def log_prediction(
     match_uid: str = None,
     feature_snapshot_id: str = None,
     identity_event_key: str = '',
+    identity_p1: str = None,
+    identity_p2: str = None,
     p1_rank: float = None, p2_rank: float = None,
     p1_odds_american: float = None, p2_odds_american: float = None,
     p1_odds_decimal: float = None, p2_odds_decimal: float = None,
@@ -600,10 +693,16 @@ def log_prediction(
         canonicalize_live_event_key(identity_event_key)
         if _clean_text(identity_event_key) else ''
     )
-    _validate_live_match_uid(
-        match_uid=match_uid,
+    identity_player1, identity_player2 = _identity_players(
         p1=p1,
         p2=p2,
+        identity_p1=identity_p1,
+        identity_p2=identity_p2,
+    )
+    _validate_live_match_uid(
+        match_uid=match_uid,
+        p1=identity_player1,
+        p2=identity_player2,
         match_date=match_date_str,
         tournament=tournament,
         identity_event_key=identity_event_key,
@@ -614,8 +713,8 @@ def log_prediction(
         match_uid=match_uid,
         feature_snapshot_id=feature_snapshot_id,
         run_id=run_id,
-        p1=p1,
-        p2=p2,
+        p1=identity_player1,
+        p2=identity_player2,
     )
     logged_at = datetime.now().isoformat()
     prediction_uid = build_prediction_uid(match_uid or '', model_version, logged_at, p1, p2)
@@ -635,6 +734,9 @@ def log_prediction(
     if valid_winner and rf_p1_prob is not None:
         rf_correct = int((actual_winner == 1) == (rf_p1_prob > 0.5))
 
+    explicit_player_identity = bool(
+        _clean_text(identity_p1) and _clean_text(identity_p2)
+    )
     row = {
         'logged_at': logged_at,
         'match_date': match_date_str,
@@ -643,6 +745,13 @@ def log_prediction(
         'level': level,
         'round': round_code,
         'p1': p1, 'p2': p2,
+        'p1_identity_key': identity_player1 if explicit_player_identity else '',
+        'p2_identity_key': identity_player2 if explicit_player_identity else '',
+        'player_identity_schema_version': (
+            LIVE_PLAYER_IDENTITY_SCHEMA_VERSION
+            if explicit_player_identity
+            else ''
+        ),
         'p1_rank': p1_rank,
         'p2_rank': p2_rank,
         'model_p1_prob': round(model_p1_prob, 4) if model_p1_prob is not None else None,
@@ -725,7 +834,8 @@ def log_prediction(
     incoming_uid = _clean_text(match_uid)
     if allow_update and not df.empty:
         nearby = _nearby_unsettled_pair_mask(
-            df, p1=p1, p2=p2, match_date=match_date_str,
+            df, p1=identity_player1, p2=identity_player2,
+            match_date=match_date_str,
         )
         if incoming_uid:
             stored_uids = df.get(
@@ -751,10 +861,7 @@ def log_prediction(
                 incompatible_fields: set[str] = set()
                 for candidate_idx in exact_indices:
                     candidate = df.loc[candidate_idx]
-                    if not (
-                        normalize_name(candidate.get('p1')) == normalize_name(p1)
-                        and normalize_name(candidate.get('p2')) == normalize_name(p2)
-                    ):
+                    if not _same_identity_orientation(candidate, row):
                         incompatible_fields.add('player_orientation')
                     incompatible_fields.update(
                         _identity_metadata_differences(candidate, row)
@@ -827,9 +934,9 @@ def log_prediction(
                     alias_compatible = alias_compatible and (
                         not candidate_differences or candidate_round_enrichment
                     )
-                    orientations_match = orientations_match and (
-                        normalize_name(candidate.get('p1')) == normalize_name(p1)
-                        and normalize_name(candidate.get('p2')) == normalize_name(p2)
+                    orientations_match = (
+                        orientations_match
+                        and _same_identity_orientation(candidate, row)
                     )
                 if not orientations_match:
                     differences.add('player_orientation')
@@ -968,6 +1075,11 @@ def log_prediction(
             'round': round_code,
             'p1': p1,
             'p2': p2,
+            'p1_identity_key': identity_player1,
+            'p2_identity_key': identity_player2,
+            'player_identity_schema_version': row[
+                'player_identity_schema_version'
+            ],
             'odds_scraped_at': odds_scraped_at,
             'match_start_time': match_start_time,
             'match_start_at_utc': match_start_at_utc,
@@ -1069,6 +1181,12 @@ def log_prediction(
         df.at[idx, 'latest_match_start_time'] = match_start_time
         df.at[idx, 'latest_match_start_at_utc'] = match_start_at_utc
         df.at[idx, 'latest_match_date'] = match_date_str
+        for identity_column in (
+            'p1_identity_key', 'p2_identity_key',
+            'player_identity_schema_version',
+        ):
+            if not _clean_text(df.at[idx, identity_column]):
+                df.at[idx, identity_column] = row[identity_column]
         if action == 'identity_conflict':
             df.at[idx, 'record_status'] = row['record_status']
             df.at[idx, 'record_note'] = row['record_note']

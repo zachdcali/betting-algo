@@ -189,6 +189,12 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   `docs/production/FEATURE_LINEAGE_AUTHORITY.md`.
 - Bovada display times are interpreted in `America/New_York`; immutable
   prediction/odds lineage also stores `match_start_at_utc`.
+- Keep player display text separate from the oriented live identity inputs.
+  New live rows carry `p1_identity_key`, `p2_identity_key`, and
+  `player_identity_schema_version=live_player_name@1.0.0`; those exact keys
+  must flow from odds ingestion through feature IDs, prediction validation,
+  market joins, snapshots, and refresh/dedupe comparisons. Never rebuild a
+  snapshot UID from punctuated display text or rewrite historical UIDs.
 - Missing odds evidence is null, never a fabricated 50/50 market probability.
   A genuine observed even-money market remains a valid 0.5.
 - Only `actual_winner in {1, 2}` is settled model ground truth. Voids and

@@ -43,6 +43,7 @@ from shadow.performance_v1_shadow import (
 )
 from audit_logger import log_skipped_live_match, upsert_run_history
 from logging_utils import (
+    LIVE_PLAYER_IDENTITY_SCHEMA_VERSION,
     build_feature_snapshot_id,
     build_match_uid,
     canonicalize_live_event_key,
@@ -72,6 +73,18 @@ def primary_prediction_probability(row) -> float | None:
             if 0.0 <= probability <= 1.0:
                 return probability
     return None
+
+
+def _first_present_text(row, *fields: str) -> str:
+    """Return the first nonblank scalar text value from a row-like object."""
+    for field in fields:
+        value = row.get(field)
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def exact_feature_snapshot_id(
@@ -850,6 +863,16 @@ class LiveBettingOrchestrator:
                 'feature_count': feature_count,
                 'player1_raw': row.get('player1_raw', p1),
                 'player2_raw': row.get('player2_raw', p2),
+                # Preserve the exact oriented player inputs that produced the
+                # immutable match and feature-snapshot IDs.  Display names can
+                # contain punctuation that the sportsbook matching key omits
+                # (for example ``J.J. Wolf`` -> ``jj wolf``), so downstream
+                # validation must never have to reconstruct these inputs.
+                'meta_identity_p1': p1,
+                'meta_identity_p2': p2,
+                'meta_player_identity_schema_version': (
+                    LIVE_PLAYER_IDENTITY_SCHEMA_VERSION
+                ),
                 'event': row.get('event', ''),
                 'timestamp': row.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                 'match_time': row.get('match_time', ''),
@@ -1173,8 +1196,22 @@ class LiveBettingOrchestrator:
                 # in the immutable successful-prediction snapshot stream.
                 if pred_row.get("prediction_status") != "success":
                     continue
-                p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
-                p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
+                identity_p1 = _first_present_text(
+                    pred_row, 'meta_identity_p1', 'player1_normalized',
+                    'player1_raw',
+                )
+                identity_p2 = _first_present_text(
+                    pred_row, 'meta_identity_p2', 'player2_normalized',
+                    'player2_raw',
+                )
+                p1 = _first_present_text(
+                    pred_row, 'player1_raw', 'meta_identity_p1',
+                    'player1_normalized',
+                )
+                p2 = _first_present_text(
+                    pred_row, 'player2_raw', 'meta_identity_p2',
+                    'player2_normalized',
+                )
 
                 # Skip futures/outrights ("vs The Field", "futures" in event name)
                 if 'field' in str(p2).lower() or 'field' in str(p1).lower():
@@ -1204,19 +1241,8 @@ class LiveBettingOrchestrator:
                 # Try to get market odds from odds_df — match BOTH players to avoid
                 # picking up futures/outright lines (e.g. Alcaraz vs The Field)
                 # instead of the correct H2H matchup.
-                p1_lower = str(p1).lower()
-                p2_lower = str(p2).lower()
-                match_odds = odds_df[
-                    (
-                        (odds_df['player1_normalized'].str.lower() == p1_lower) &
-                        (odds_df['player2_normalized'].str.lower() == p2_lower)
-                    ) | (
-                        (odds_df['player1_normalized'].str.lower() == p2_lower) &
-                        (odds_df['player2_normalized'].str.lower() == p1_lower)
-                    )
-                ]
-                if not match_odds.empty:
-                    o_row = match_odds.iloc[0]
+                o_row = self._find_odds_row(identity_p1, identity_p2, odds_df)
+                if o_row is not None:
                     mkt_p1_raw = pd.to_numeric(o_row.get('player1_implied_prob'), errors='coerce')
                     mkt_p2_raw = pd.to_numeric(o_row.get('player2_implied_prob'), errors='coerce')
                     # De-vig: normalize so probs sum to 1.0
@@ -1291,6 +1317,7 @@ class LiveBettingOrchestrator:
                 identity_conflict_group: set[str] = set()
                 action = log_prediction(
                     p1=p1, p2=p2,
+                    identity_p1=identity_p1, identity_p2=identity_p2,
                     tournament=tournament, surface=surface, level=level,
                     round_code=pred_row.get('meta_round_input', '') or None,
                     match_date=match_date,
@@ -1374,6 +1401,9 @@ class LiveBettingOrchestrator:
         return stats
 
     def _find_odds_row(self, p1: str, p2: str, odds_df: pd.DataFrame):
+        required = {'player1_normalized', 'player2_normalized'}
+        if odds_df.empty or not required.issubset(odds_df.columns):
+            return None
         p1_lower = str(p1).lower()
         p2_lower = str(p2).lower()
         match_odds = odds_df[
@@ -1404,9 +1434,15 @@ class LiveBettingOrchestrator:
                 continue
             if not bool(pred_row.get('performance_v1_features_available', False)):
                 continue
-            p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
-            p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
-            odds_row = self._find_odds_row(p1, p2, odds_df)
+            identity_p1 = _first_present_text(
+                pred_row, 'meta_identity_p1', 'player1_normalized',
+                'player1_raw',
+            )
+            identity_p2 = _first_present_text(
+                pred_row, 'meta_identity_p2', 'player2_normalized',
+                'player2_raw',
+            )
+            odds_row = self._find_odds_row(identity_p1, identity_p2, odds_df)
             for predictor, result in self.performance_shadow_predictor.predict_match_probabilities(pred_row.to_dict()):
                 stats['attempts'] += 1
                 shadow_rows.append(

@@ -13,10 +13,12 @@ import prediction_logger as PL  # noqa: E402
 import auto_settle as AS  # noqa: E402
 from main import exclude_identity_conflicts  # noqa: E402
 from logging_utils import (  # noqa: E402
+    LIVE_PLAYER_IDENTITY_SCHEMA_VERSION,
     build_feature_snapshot_id,
     build_match_uid,
     canonicalize_live_event_key,
     normalize_name,
+    normalize_live_player_key,
     stable_hash,
 )
 
@@ -147,6 +149,233 @@ def test_feature_snapshot_for_another_match_fails_before_any_write(tmp_path, mon
     assert not Path(PL.LOG_PATH).exists()
     assert not Path(PL.SNAPSHOT_LOG_PATH).exists()
     assert not Path(PL.ODDS_HISTORY_LOG_PATH).exists()
+
+
+def test_punctuated_display_name_keeps_exact_identity_and_market_lineage(
+    tmp_path, monkeypatch,
+):
+    """Regression for the 2026-07-15 J.J. Wolf cloud-run failure."""
+    import main
+
+    _configure_paths(monkeypatch, tmp_path)
+    run_id = "run_20260715T193502Z"
+    match_uid = build_match_uid(
+        "jj wolf", "spencer johnson", "2026-07-15",
+        "Challenger - Lincoln (3)", "R16", "Hard",
+    )
+    feature_snapshot_id = build_feature_snapshot_id(
+        match_uid, run_id, "jj wolf", "spencer johnson",
+    )
+    assert match_uid == "match_5969734f4b95e452f84c"
+    assert feature_snapshot_id == "feat_61f73d89f76ca921b3af"
+
+    predictions = pd.DataFrame([{
+        "player1_raw": "J.J. Wolf",
+        "player2_raw": "Spencer Johnson",
+        "meta_identity_p1": "jj wolf",
+        "meta_identity_p2": "spencer johnson",
+        "player1_win_prob": 0.61,
+        "prediction_status": "success",
+        "_has_defaulted_features": False,
+        "meta_match_date": "2026-07-15",
+        "meta_surface_input": "Hard",
+        "meta_level_input": "C",
+        "meta_round_input": "R16",
+        "meta_identity_event_key": "challenger - lincoln",
+        "run_id": run_id,
+        "match_uid": match_uid,
+        "feature_snapshot_id": feature_snapshot_id,
+        "feature_schema_sha256": "schema_hash",
+        "feature_vector_sha256": "vector_hash",
+    }])
+    odds = pd.DataFrame([{
+        "player1_normalized": "jj wolf",
+        "player2_normalized": "spencer johnson",
+        "player1_implied_prob": 0.55,
+        "player2_implied_prob": 0.50,
+        "player1_odds_american": -122,
+        "player2_odds_american": 108,
+        "player1_odds_decimal": 1.82,
+        "player2_odds_decimal": 2.08,
+        "tourney_name": "Lincoln",
+        "match_time": "7/15/26 7:10 PM",
+        "scrape_time_utc": "2026-07-15T19:39:49+00:00",
+    }])
+    orchestrator = main.LiveBettingOrchestrator.__new__(
+        main.LiveBettingOrchestrator,
+    )
+    orchestrator.run_id = run_id
+    orchestrator.run_started_at = "2026-07-15T19:35:02+00:00"
+
+    stats = orchestrator._log_all_predictions(
+        predictions, odds, pd.DataFrame(),
+    )
+
+    assert stats["attempts"] == 1
+    assert stats["created"] == 1
+    operational = pd.read_csv(PL.LOG_PATH, dtype=str, keep_default_na=False)
+    snapshots = pd.read_csv(
+        PL.SNAPSHOT_LOG_PATH, dtype=str, keep_default_na=False,
+    )
+    odds_history = pd.read_csv(
+        PL.ODDS_HISTORY_LOG_PATH, dtype=str, keep_default_na=False,
+    )
+    for frame in (operational, snapshots, odds_history):
+        assert frame.loc[0, "p1"] == "J.J. Wolf"
+        assert frame.loc[0, "p2"] == "Spencer Johnson"
+        assert frame.loc[0, "match_uid"] == match_uid
+        assert frame.loc[0, "p1_identity_key"] == "jj wolf"
+        assert frame.loc[0, "p2_identity_key"] == "spencer johnson"
+        assert frame.loc[0, "player_identity_schema_version"] == (
+            LIVE_PLAYER_IDENTITY_SCHEMA_VERSION
+        )
+    assert operational.loc[0, "feature_snapshot_id"] == feature_snapshot_id
+    assert snapshots.loc[0, "feature_snapshot_id"] == feature_snapshot_id
+    assert float(operational.loc[0, "p1_odds_decimal"]) == 1.82
+    assert float(operational.loc[0, "market_p1_prob"]) == pytest.approx(
+        0.5238,
+    )
+
+
+def test_player_identity_overrides_are_paired_and_remain_fail_closed(
+    tmp_path, monkeypatch,
+):
+    _configure_paths(monkeypatch, tmp_path)
+    run_id = "run_20260715T193502Z"
+    uid = build_match_uid(
+        "jj wolf", "spencer johnson", "2026-07-15",
+        "Challenger - Lincoln (3)", "R16", "Hard",
+    )
+    snapshot = build_feature_snapshot_id(
+        uid, run_id, "jj wolf", "spencer johnson",
+    )
+
+    with pytest.raises(
+        PL.LiveMatchIdentityError, match="must be supplied together",
+    ):
+        PL.log_prediction(
+            p1="J.J. Wolf", p2="Spencer Johnson",
+            identity_p1="jj wolf",
+            tournament="Lincoln", surface="Hard", level="C",
+            round_code="R16", match_date="2026-07-15",
+            run_id=run_id, match_uid=uid,
+            feature_snapshot_id=snapshot,
+            identity_event_key="challenger - lincoln",
+            model_p1_prob=0.61, model_p2_prob=0.39,
+            market_p1_prob=None, market_p2_prob=None,
+        )
+
+    assert not Path(PL.LOG_PATH).exists()
+    assert not Path(PL.SNAPSHOT_LOG_PATH).exists()
+    assert not Path(PL.ODDS_HISTORY_LOG_PATH).exists()
+
+
+def test_identity_override_cannot_impersonate_display_player(
+    tmp_path, monkeypatch,
+):
+    _configure_paths(monkeypatch, tmp_path)
+    with pytest.raises(PL.LiveMatchIdentityError, match="not equivalent"):
+        PL.log_prediction(
+            p1="Alice Player", p2="Bob Player",
+            identity_p1="mallory player", identity_p2="eve player",
+            tournament="Lincoln", surface="Hard", level="C",
+            round_code="R16", match_date="2026-07-15",
+            run_id="run_impersonation", match_uid="match_untrusted",
+            feature_snapshot_id="feat_untrusted",
+            identity_event_key="challenger - lincoln",
+            model_p1_prob=0.61, model_p2_prob=0.39,
+            market_p1_prob=None, market_p2_prob=None,
+        )
+
+    assert not Path(PL.LOG_PATH).exists()
+    assert not Path(PL.SNAPSHOT_LOG_PATH).exists()
+
+
+def test_pre_identity_key_operational_row_refreshes_without_orientation_error(
+    tmp_path, monkeypatch,
+):
+    _configure_paths(monkeypatch, tmp_path)
+    uid = build_match_uid(
+        "jj wolf", "spencer johnson", "2026-07-15",
+        "Challenger - Lincoln (3)", "R16", "Hard",
+    )
+    first_snapshot = build_feature_snapshot_id(
+        uid, "run_before_keys", "jj wolf", "spencer johnson",
+    )
+    second_snapshot = build_feature_snapshot_id(
+        uid, "run_after_keys", "jj wolf", "spencer johnson",
+    )
+    common = {
+        "tournament": "Lincoln", "surface": "Hard", "level": "C",
+        "round_code": "R16", "match_date": "2026-07-15",
+        "match_uid": uid, "identity_event_key": "challenger - lincoln",
+        "model_p1_prob": 0.61, "model_p2_prob": 0.39,
+        "market_p1_prob": None, "market_p2_prob": None,
+        "features_complete": True,
+    }
+    assert PL.log_prediction(
+        p1="jj wolf", p2="spencer johnson",
+        run_id="run_before_keys", feature_snapshot_id=first_snapshot,
+        **common,
+    ) == "created"
+
+    assert PL.log_prediction(
+        p1="J.J. Wolf", p2="Spencer Johnson",
+        identity_p1="jj wolf", identity_p2="spencer johnson",
+        run_id="run_after_keys", feature_snapshot_id=second_snapshot,
+        **common,
+    ) == "updated"
+
+    operational = pd.read_csv(PL.LOG_PATH, dtype=str, keep_default_na=False)
+    assert len(operational) == 1
+    assert operational.loc[0, "match_uid"] == uid
+    assert operational.loc[0, "p1_identity_key"] == "jj wolf"
+    assert operational.loc[0, "player_identity_schema_version"] == (
+        LIVE_PLAYER_IDENTITY_SCHEMA_VERSION
+    )
+
+
+def test_bovada_and_lineage_share_one_live_player_key_contract():
+    from odds.fetch_bovada import normalize_name as normalize_bovada_name
+
+    examples = {
+        "J.J. Wolf": "jj wolf",
+        "Maxime St-Hilaire": "maxime st-hilaire",
+        "Christopher O'Connell": "christopher oconnell",
+        "Joao Fonseca": "joao fonseca",
+    }
+    for display, expected in examples.items():
+        assert normalize_live_player_key(display) == expected
+        assert normalize_bovada_name(display) == expected
+
+
+def test_punctuated_display_without_producing_identity_still_fails(
+    tmp_path, monkeypatch,
+):
+    _configure_paths(monkeypatch, tmp_path)
+    run_id = "run_20260715T193502Z"
+    uid = build_match_uid(
+        "jj wolf", "spencer johnson", "2026-07-15",
+        "Challenger - Lincoln (3)", "R16", "Hard",
+    )
+    snapshot = build_feature_snapshot_id(
+        uid, run_id, "jj wolf", "spencer johnson",
+    )
+
+    with pytest.raises(PL.LiveMatchIdentityError, match="match_uid"):
+        PL.log_prediction(
+            p1="J.J. Wolf", p2="Spencer Johnson",
+            tournament="Lincoln", surface="Hard", level="C",
+            round_code="R16", match_date="2026-07-15",
+            run_id=run_id, match_uid=uid,
+            feature_snapshot_id=snapshot,
+            identity_event_key="challenger - lincoln",
+            model_p1_prob=0.61, model_p2_prob=0.39,
+            market_p1_prob=None, market_p2_prob=None,
+        )
+
+    assert not Path(PL.LOG_PATH).exists()
+    assert not Path(PL.SNAPSHOT_LOG_PATH).exists()
 
 
 def test_identity_conflicts_are_removed_from_shadow_and_staking_inputs():
