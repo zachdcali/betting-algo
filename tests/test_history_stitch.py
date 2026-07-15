@@ -219,6 +219,41 @@ def test_tour_calendar_replaces_hub_monday_guess(monkeypatch):
     assert cache["atp_event_meta"][url]["start_date"] == "2026-07-12"
 
 
+def test_active_event_discovery_caches_raw_sources_but_keys_date_windows(monkeypatch):
+    import importlib
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    calls = {"hub": 0}
+    url = "https://www.atptour.com/en/scores/current/example/999/results"
+
+    def fake_hub():
+        calls["hub"] += 1
+        return [{
+            "event": "Example Open", "slug": "example", "id": "999",
+            "url": url, "level": "A", "surface": "Hard",
+        }]
+
+    monkeypatch.setattr(atp_results_scraper, "discover_active_events", fake_hub)
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame([{
+            "event": "Example Open", "slug": "example", "id": "999",
+            "url": url, "start_date": "2026-07-13", "surface": "Hard",
+        }])},
+    }
+
+    first = get_active_events("2026-07-14", cache)
+    second = get_active_events("2026-07-15", cache)
+
+    assert calls["hub"] == 1
+    assert next(event for event in first if event["id"] == "999")["start_date"] == "2026-07-13"
+    assert next(event for event in second if event["id"] == "999")["start_date"] == "2026-07-13"
+    assert set(cache["atp_active_events_by_ref_date"]) == {"2026-07-14", "2026-07-15"}
+
+
 def test_infer_next_round():
     from features.history_stitch import infer_next_round
     m1 = pd.DataFrame([{"event": "Wimbledon", "round": "R32", "date": pd.Timestamp("2026-06-29")}])

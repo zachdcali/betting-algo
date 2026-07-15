@@ -562,6 +562,27 @@ def test_auto_settle_prefers_latest_exact_utc_over_stale_display_time():
     assert reason == ""
 
 
+def test_auto_settle_uses_latest_match_date_for_source_and_legacy_age_binding():
+    import auto_settle
+
+    row = pd.Series(
+        {
+            "match_start_time": "8:00 AM",
+            "match_date": "2026-07-13",
+            "latest_match_date": "2026-07-14",
+        }
+    )
+
+    assert auto_settle._effective_settlement_match_date(row) == "2026-07-14"
+    eligible, reason = auto_settle._is_old_enough_to_settle(
+        row,
+        min_age_hours=18,
+        now=pd.Timestamp("2026-07-15 01:00:00").to_pydatetime(),
+    )
+    assert eligible is False
+    assert "match_start_age_hours=17.0" in reason
+
+
 def test_auto_settle_legacy_clock_accepts_an_aware_utc_reference():
     import auto_settle
 

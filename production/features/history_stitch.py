@@ -377,15 +377,24 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
     surface/level/start dates). Discovered events take their true start date
     from the challenger calendar when their id is listed there; otherwise
     Monday-snapped to the ref week (Slams' true start comes from the registry).
-    Cached per run."""
+    Raw calendars/hubs are cached per run; the derived event window is cached
+    per reference date. A single derived cache entry is unsafe for settlement
+    backlog rows from different weeks, while re-fetching Playwright pages for
+    every distinct date is prohibitively slow."""
     cache = session_cache if session_cache is not None else {}
-    if "atp_active_events" in cache:
-        return cache["atp_active_events"]
+    ref = pd.Timestamp(ref_date)
+    if ref.tzinfo is not None:
+        ref = ref.tz_localize(None)
+    ref = ref.normalize()
+    ref_key = ref.date().isoformat()
+    events_by_ref_date = cache.setdefault("atp_active_events_by_ref_date", {})
+    if ref_key in events_by_ref_date:
+        return events_by_ref_date[ref_key]
     try:
         from atp_results_scraper import discover_active_events
     except ImportError:
         from scraping.atp_results_scraper import discover_active_events
-    monday = _monday_of(pd.Timestamp(ref_date))
+    monday = _monday_of(ref)
     # calendar first: it carries each event's TRUE start date. A hub event
     # stamped with the scrape-week's Monday lands in the wrong week whenever a
     # finished event is still listed (e.g. Sunday finals scraped Monday) —
@@ -403,13 +412,16 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             cal_cache["df"] = parse_challenger_calendar(html)
         cal = cal_cache["df"]
     except Exception as exc:
+        cache.setdefault("atp_calendar", {})["df"] = pd.DataFrame()
         print(f"      ⚠️ calendar discovery unavailable ({exc})")
     cal_dates = {}
     if not cal.empty:
         cal_dates = dict(zip(cal["id"].astype(str), cal["start_date"].astype(str)))
     events: list[dict] = []
     try:
-        for ev in discover_active_events():
+        if "atp_hub_events" not in cache:
+            cache["atp_hub_events"] = discover_active_events()
+        for ev in cache["atp_hub_events"]:
             ev = dict(ev)
             official_date = cal_dates.get(str(ev.get("id")))
             if official_date:
@@ -423,12 +435,12 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
                 )
             events.append(ev)
     except Exception as exc:
+        cache.setdefault("atp_hub_events", [])
         print(f"      ⚠️ event discovery unavailable ({exc}); using static registry only")
     # calendar window: catches events Bovada prices before the live hub lists them
     try:
         if cal.empty:
             raise RuntimeError("challenger calendar parse returned no events")
-        ref = pd.Timestamp(ref_date)
         seen_ids = {e.get("id") for e in events}
         window = cal[(pd.to_datetime(cal["start_date"]) <= ref)
                      & (pd.to_datetime(cal["start_date"]) >= ref - pd.Timedelta(days=8))]
@@ -436,7 +448,8 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             if r["id"] in seen_ids:
                 continue
             ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
-                  "url": r["url"], "level": "C", "surface": ""}
+                  "url": r["url"], "level": "C",
+                  "surface": r.get("surface", "")}
             events.append(_set_event_date(
                 ev, r["start_date"], source="challenger_calendar", verified=True,
             ))
@@ -456,7 +469,6 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             tcal_cache["df"] = parse_tour_calendar(html)
         tcal = tcal_cache["df"]
         if tcal is not None and not tcal.empty:
-            ref = pd.Timestamp(ref_date)
             seen_ids = {e.get("id") for e in events}
             win = tcal[(pd.to_datetime(tcal["start_date"]) <= ref + pd.Timedelta(days=5))
                        & (pd.to_datetime(tcal["start_date"]) >= ref - pd.Timedelta(days=8))]
@@ -478,11 +490,12 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
                     continue
                 events.append(ev)
     except Exception as exc:
+        cache.setdefault("atp_tour_calendar", {})["df"] = pd.DataFrame()
         print(f"      ⚠️ tour calendar discovery unavailable ({exc})")
     static_slugs = set()
     for sev in CURRENT_EVENT_REGISTRY:
         lo, hi = pd.Timestamp(sev["window"][0]), pd.Timestamp(sev["window"][1])
-        if lo <= pd.Timestamp(ref_date) <= hi:
+        if lo <= ref <= hi:
             static_slugs.add(sev["event"].lower())
             events = [e for e in events if sev["event"].lower() not in e["event"].lower()
                       and e.get("slug", "") != sev["event"].lower()]
@@ -490,7 +503,7 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             registry_event.setdefault("date_verified", True)
             registry_event.setdefault("date_source", "static_registry")
             events.append(registry_event)
-    cache["atp_active_events"] = events
+    events_by_ref_date[ref_key] = events
     return events
 
 

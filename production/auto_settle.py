@@ -522,6 +522,19 @@ def _parse_exact_match_start_utc(row: pd.Series):
     return None
 
 
+def _effective_settlement_match_date(row: pd.Series) -> str:
+    """Best corrected calendar date for every settlement decision.
+
+    ``match_date`` is immutable opening lineage. Odds refreshes can correct a
+    stale Bovada date into ``latest_match_date``; ordering already honored that
+    correction, so result-source selection and auditing must use it too.
+    """
+    return (
+        _clean_optional(row.get("latest_match_date"))
+        or _clean_optional(row.get("match_date"))
+    )
+
+
 def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime | None = None) -> tuple[bool, str]:
     exact_start = _parse_exact_match_start_utc(row)
     if exact_start is not None:
@@ -551,7 +564,7 @@ def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime
         now = reference.to_pydatetime()
     start_dt = _parse_match_start_time(
         str(row.get("match_start_time", "")),
-        str(row.get("match_date", "")),
+        _effective_settlement_match_date(row),
         now=now,
     )
     if start_dt is None:
@@ -629,11 +642,7 @@ def _order_settlement_candidates(
     ordered["_start_sort"] = ordered["_start_sort"].where(
         ordered["_start_sort"].notna(), legacy_start
     )
-    effective_date = ordered.apply(
-        lambda row: _clean_optional(row.get("latest_match_date"))
-        or _clean_optional(row.get("match_date")),
-        axis=1,
-    )
+    effective_date = ordered.apply(_effective_settlement_match_date, axis=1)
     date_rank = pd.to_datetime(
         effective_date,
         errors="coerce",
@@ -937,17 +946,31 @@ def try_settle_from_ta(p1: str, p2: str, match_date_str: str,
 # ATP results fallback (secondary source when TA has not posted results yet)
 # ---------------------------------------------------------------------------
 
-# Tournament -> live results URL. TA can lag days-to-weeks behind an in-progress
-# event (e.g. it posted nothing between Halle and mid-Wimbledon 2026); the ATP
-# scores page is current same-day. Keyed by (label substring, surface, month
-# window) so Bovada's generic "Men's Singles" label maps to the right Slam.
+# Tournament -> immutable official results instance for labels that cannot be
+# resolved through ATP event discovery. TA can lag days-to-weeks behind an
+# event (e.g. it posted nothing between Halle and mid-Wimbledon 2026). A static
+# binding must never use ATP's mutable ``/current/`` route: that route can go
+# empty after completion or roll to a later edition while the configured ID,
+# start date, and evidence still claim the old tournament. Explicit event
+# labels may be contained in a richer Bovada title; generic bucket labels must
+# match exactly so a title such as "French Open Men's Singles" can never be
+# rebound to Wimbledon merely because its surface/date fields are also bad.
 _ATP_FALLBACK_EVENTS = [
     {
-        "labels": ("wimbledon", "men s singles"),  # normalized: apostrophes strip to spaces
+        "explicit_labels": ("wimbledon",),
+        "generic_labels": ("men s singles",),  # normalized: apostrophe strips to a space
         "surface": "grass",
-        "months": (6, 7),
         "event_name": "Wimbledon",
-        "url": "https://www.atptour.com/en/scores/current/wimbledon/540/results",
+        "id": "540",
+        "start_date": "2026-06-29",
+        # The official results page includes qualifying matches from the week
+        # before the main draw.  Keep that explicit rather than weakening the
+        # general event/date contract for every other tournament.
+        "match_window_start": "2026-06-21",
+        "match_window_end": "2026-07-13",
+        "date_verified": True,
+        "date_source": "static_registry",
+        "url": "https://www.atptour.com/en/scores/archive/wimbledon/540/2026/results",
     },
 ]
 
@@ -966,35 +989,299 @@ _ATP_SETTLEMENT_CONFIDENCE = 90  # both full names matched on the official ATP r
 def _atp_results_source_for(tournament: str, surface: str, match_date_str: str) -> dict | None:
     label = _normalize_text(tournament)
     surf = _normalize_text(surface)
-    month = pd.to_datetime(match_date_str, errors="coerce")
-    month = int(month.month) if pd.notna(month) else None
+    match_date = pd.to_datetime(match_date_str, errors="coerce")
+    # Static URLs deliberately bind generic labels to one event. They are safe
+    # only with explicit compatible surface and date evidence; missing evidence
+    # must not silently bypass those guards.
+    if not label or not surf or pd.isna(match_date):
+        return None
+    match_date = pd.Timestamp(match_date).normalize()
     for ev in _ATP_FALLBACK_EVENTS:
-        if not any(l in label for l in ev["labels"]):
+        explicit_match = any(l in label for l in ev.get("explicit_labels", ()))
+        generic_match = label in set(ev.get("generic_labels", ()))
+        if not (explicit_match or generic_match):
             continue
-        if ev["surface"] and surf and ev["surface"] not in surf:
+        if ev["surface"] and ev["surface"] not in surf:
             continue
-        if month is not None and month not in ev["months"]:
+        window_start = pd.to_datetime(ev.get("match_window_start"), errors="coerce")
+        window_end = pd.to_datetime(ev.get("match_window_end"), errors="coerce")
+        if pd.isna(window_start) or pd.isna(window_end):
+            continue
+        if not (pd.Timestamp(window_start).normalize()
+                <= match_date
+                <= pd.Timestamp(window_end).normalize()):
             continue
         return ev
     return None
 
 
-def _active_atp_events(cache: dict) -> list[dict]:
-    """Active events for the settlement fallback: auto-discovered from the ATP
-    live-scores hubs + the static registry. Cached per settlement run."""
-    if "_events" in cache:
-        return cache["_events"]
-    events = [{"event": ev["event_name"], "url": ev["url"]} for ev in _ATP_FALLBACK_EVENTS]
+def _candidate_match_date(value) -> pd.Timestamp | None:
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return None
+    return pd.Timestamp(parsed).tz_convert(None).normalize()
+
+
+def _archive_atp_events(match_date: pd.Timestamp, cache: dict) -> list[dict]:
+    """Official results-archive events for a candidate's calendar year.
+
+    Old pending rows must not be compared with this week's similarly named
+    event.  The archive URL carries the event ID, year, and official start
+    date, and is fetched at most once per year in a settlement run.
+    """
+    archive_cache = cache.setdefault("_results_archive_by_year", {})
+    events: list[dict] = []
+    # A late-December event can finish in January. Load every year touched by
+    # the conservative event/qualifying lookback, then dedupe by official
+    # event instance instead of silently ignoring the prior-year archive.
+    years = {
+        int(match_date.year),
+        int((match_date - pd.Timedelta(days=16)).year),
+    }
+    for year in sorted(years):
+        if year not in archive_cache:
+            year_events: list[dict] = []
+            try:
+                from scraping.atp_results_scraper import _fetch_rendered, parse_results_archive
+
+                url = f"https://www.atptour.com/en/scores/results-archive?year={year}"
+                html = _fetch_rendered(url, "a[href*='/en/scores/archive/']")
+                frame = parse_results_archive(html, year)
+                for _, row in frame.iterrows():
+                    event_url = _clean_optional(row.get("url"))
+                    event_id = _clean_optional(row.get("id"))
+                    start_date = _clean_optional(row.get("start_date"))
+                    if not event_url or not event_id or not start_date:
+                        continue
+                    year_events.append({
+                        "event": _clean_optional(row.get("event")),
+                        "slug": _clean_optional(row.get("slug")),
+                        "id": event_id,
+                        "url": event_url,
+                        "start_date": start_date,
+                        "date_verified": True,
+                        "date_source": "results_archive",
+                        "surface": _clean_optional(row.get("surface")),
+                        "static_binding": False,
+                    })
+            except Exception as exc:
+                print(f"  ⚠️ ATP results-archive discovery unavailable for {year}: {exc}")
+            archive_cache[year] = year_events
+        events.extend(archive_cache[year])
+    return events
+
+
+def _event_identity(event: dict) -> tuple[str, ...]:
+    event_id = str(event.get("id") or "").strip()
+    start_date = str(event.get("start_date") or "").strip()
+    if event_id and start_date:
+        return ("official", event_id, start_date)
+    return ("url", str(event.get("url") or "").strip())
+
+
+def _active_atp_events(cache: dict, *, match_date: str = "") -> list[dict]:
+    """Active events for the settlement fallback.
+
+    Use the same hub + official calendar discovery as live feature building.
+    The ATP live-scores hubs occasionally render without event links even while
+    the tournament results pages are healthy; relying on the hub alone leaves
+    already-finished matches permanently pending.  Calendar discovery is the
+    durable fallback because it carries stable event IDs and results URLs.
+    """
+    candidate_date = _candidate_match_date(match_date)
+    if candidate_date is None:
+        return []
+    date_key = candidate_date.date().isoformat()
+    events_by_date = cache.setdefault("_events_by_match_date", {})
+    if date_key in events_by_date:
+        return events_by_date[date_key]
+
+    static_events = [
+        {
+            "event": ev["event_name"],
+            "slug": normalize_text(ev["event_name"]).replace(" ", "-"),
+            "id": str(ev.get("id") or ""),
+            "url": ev["url"],
+            "start_date": str(ev.get("start_date") or ""),
+            "date_verified": ev.get("date_verified") is True,
+            "date_source": str(ev.get("date_source") or "static_registry"),
+            "surface": str(ev.get("surface") or ""),
+            "static_binding": True,
+        }
+        for ev in _ATP_FALLBACK_EVENTS
+    ]
+    dynamic: dict[tuple[str, ...], dict] = {}
     try:
-        from scraping.atp_results_scraper import discover_active_events
-        known = {e["url"] for e in events}
-        for ev in discover_active_events():
-            if ev["url"] not in known:
-                events.append({"event": ev["event"], "url": ev["url"]})
+        from features.history_stitch import get_active_events
+
+        discovered = get_active_events(
+            candidate_date,
+            cache.setdefault("_event_discovery", {}),
+        )
+        for ev in discovered:
+            url = str(ev.get("url") or "").strip()
+            event_id = str(ev.get("id") or "").strip()
+            start_date = str(ev.get("start_date") or "").strip()
+            if not url or not event_id or not start_date:
+                continue
+            event = {
+                "event": str(ev.get("event") or ""),
+                "slug": str(ev.get("slug") or ""),
+                "id": event_id,
+                "url": url,
+                "start_date": start_date,
+                "date_verified": ev.get("date_verified") is True,
+                "date_source": str(ev.get("date_source") or ""),
+                "surface": str(ev.get("surface") or ""),
+                "static_binding": False,
+            }
+            dynamic[_event_identity(event)] = event
     except Exception as exc:
         print(f"  ⚠️ event discovery unavailable for settlement fallback: {exc}")
-    cache["_events"] = events
+
+    # Archive rows are year-pinned and therefore outrank a current/calendar URL
+    # for the same official event identity when replaying an old backlog row.
+    for event in _archive_atp_events(candidate_date, cache):
+        identity = _event_identity(event)
+        previous = dynamic.get(identity, {})
+        merged = {**previous, **event}
+        if not _clean_optional(event.get("surface")):
+            merged["surface"] = _clean_optional(previous.get("surface"))
+        dynamic[identity] = merged
+
+    events = [*static_events, *dynamic.values()]
+    events_by_date[date_key] = events
     return events
+
+
+def _date_compatible_events(
+    events: list[dict],
+    match_date: str,
+    *,
+    round_code: str = "",
+) -> list[dict]:
+    """Return one non-overlapping official event window for ``match_date``.
+
+    ATP pages expose tournament start dates rather than per-card dates.  Use a
+    conservative fourteen-day maximum, truncated at the day before the next
+    same-label candidate starts. This makes consecutive-week rematches bind to
+    one event instead of page iteration order. Unverified dates never qualify.
+    """
+    candidate_date = _candidate_match_date(match_date)
+    if candidate_date is None:
+        return []
+
+    dated: list[tuple[pd.Timestamp, dict]] = []
+    for event in events:
+        if event.get("date_verified") is not True:
+            continue
+        start = _candidate_match_date(event.get("start_date"))
+        if start is None:
+            continue
+        dated.append((start, event))
+    dated.sort(key=lambda item: (item[0], _event_identity(item[1])))
+
+    qualifying = _normalize_round(round_code).startswith("Q")
+    compatible: list[dict] = []
+    for index, (start, event) in enumerate(dated):
+        later_starts = [other for other, _ in dated[index + 1:] if other > start]
+        window_start = start - pd.Timedelta(days=3) if qualifying else start
+        end = start + pd.Timedelta(days=13)
+        if later_starts:
+            end = min(end, later_starts[0] - pd.Timedelta(days=1))
+        if window_start <= candidate_date <= end:
+            bound = dict(event)
+            bound.update({
+                "match_date_bound": candidate_date.date().isoformat(),
+                "selection_window_start": window_start.date().isoformat(),
+                "selection_window_end": end.date().isoformat(),
+            })
+            compatible.append(bound)
+    return compatible
+
+
+def _candidate_atp_events(
+    tournament: str,
+    cache: dict,
+    *,
+    surface: str = "",
+    match_date: str = "",
+    round_code: str = "",
+) -> list[dict]:
+    """Prefer the official event matching this operational tournament label.
+
+    Fetching every active ATP/Challenger page for each candidate is both slow
+    and unnecessary.  Exact/contained event or slug labels select the narrow
+    source set. A generic label may use the explicit, surface/date-bounded static
+    registry. Every other unmatched label fails closed: searching every calendar
+    event and accepting the first same-pair/same-round card can choose the wrong
+    rematch when the players met more than once. ITF has its own official API path
+    and should never fan out through ATP pages first.
+    """
+    tournament_key = _normalize_text(tournament)
+    candidate_date = _candidate_match_date(match_date)
+    if "itf" in tournament_key or candidate_date is None:
+        return []
+
+    if not tournament_key:
+        return []
+    events = _active_atp_events(cache, match_date=match_date)
+    surface_key = _normalize_text(surface)
+
+    matched: list[dict] = []
+    for event in events:
+        # Static generic-label mappings have stronger surface/date contracts
+        # below and cannot enter through ordinary label containment.
+        if bool(event.get("static_binding")):
+            continue
+        labels = {
+            _normalize_text(event.get("event", "")),
+            _normalize_text(event.get("slug", "")),
+        } - {""}
+        event_surface = _normalize_text(event.get("surface", ""))
+        if (
+            surface_key
+            and event_surface
+            and surface_key not in event_surface
+            and event_surface not in surface_key
+        ):
+            continue
+        if any(
+            tournament_key in label or label in tournament_key
+            for label in labels
+        ):
+            matched.append(event)
+    matched = _date_compatible_events(
+        matched,
+        match_date,
+        round_code=round_code,
+    )
+    if len(matched) == 1:
+        return matched
+    if matched:
+        return []
+
+    static_source = _atp_results_source_for(tournament, surface, match_date)
+    if static_source:
+        static_url = str(static_source.get("url") or "")
+        static_matches = [
+            event for event in events
+            if event.get("url") == static_url
+            and event.get("static_binding") is True
+            and event.get("date_verified") is True
+            and str(event.get("id") or "").strip()
+            and str(event.get("start_date") or "").strip()
+        ]
+        if len(static_matches) != 1:
+            return []
+        bound = dict(static_matches[0])
+        bound.update({
+            "match_date_bound": candidate_date.date().isoformat(),
+            "selection_window_start": str(static_source["match_window_start"]),
+            "selection_window_end": str(static_source["match_window_end"]),
+        })
+        return [bound]
+    return []
 
 
 def _fetch_atp_results_cached(url: str, cache: dict) -> pd.DataFrame:
@@ -1015,23 +1302,73 @@ def _combined_score(p1_sets: str, p2_sets: str) -> str:
     return " ".join(f"{x}-{y}" for x, y in zip(a, b))
 
 
+def _strict_full_name_key(value) -> str:
+    """Normalized full name for official-result orientation.
+
+    ATP cards publish full player names, so a one-token surname or a fuzzy
+    last-name fallback is neither needed nor safe. Requiring two normalized
+    tokens prevents Francisco/Juan Manuel Cerundolo from both matching the
+    same card side while still normalizing accents and hyphenation.
+    """
+    normalized = normalize_name(_clean_optional(value))
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized if len(normalized.split()) >= 2 else ""
+
+
+def _strict_full_names_match(left, right) -> bool:
+    left_key = _strict_full_name_key(left)
+    right_key = _strict_full_name_key(right)
+    return bool(left_key and right_key and left_key == right_key)
+
+
 def try_settle_from_atp(p1: str, p2: str, round_code: str,
-                        results: pd.DataFrame, event_name: str) -> dict | None:
+                        results: pd.DataFrame, event: dict) -> dict | None:
     """Settle from an ATP tournament-results page. Same result shape as
     try_settle_from_ta so the existing write path applies unchanged.
 
-    Conservative identity rule: BOTH names must match a single results card
-    (either orientation); a known round must corroborate. Ambiguity -> None.
+    Conservative identity rule: BOTH normalized full names must match a single
+    results card in exactly one orientation; a known round must corroborate.
+    The caller must also supply the verified official event instance that was
+    date-bound during source selection. Ambiguity or incomplete provenance
+    fails closed.
     """
     if results is None or results.empty:
+        return None
+    if not isinstance(event, dict):
+        return None
+
+    event_name = _clean_optional(event.get("event"))
+    event_id = _clean_optional(event.get("id"))
+    event_start_date = _clean_optional(event.get("start_date"))
+    event_date_source = _clean_optional(event.get("date_source"))
+    source_url = _clean_optional(event.get("url"))
+    match_date_bound = _clean_optional(event.get("match_date_bound"))
+    selection_window_start = _clean_optional(event.get("selection_window_start"))
+    selection_window_end = _clean_optional(event.get("selection_window_end"))
+    bound_date = _candidate_match_date(match_date_bound)
+    bound_start = _candidate_match_date(selection_window_start)
+    bound_end = _candidate_match_date(selection_window_end)
+    if (
+        not event_name
+        or not event_id
+        or _candidate_match_date(event_start_date) is None
+        or event.get("date_verified") is not True
+        or not event_date_source
+        or not source_url
+        or bound_date is None
+        or bound_start is None
+        or bound_end is None
+        or not (bound_start <= bound_date <= bound_end)
+    ):
         return None
 
     candidates = []
     for _, card in results.iterrows():
-        c1, c2 = str(card["p1"]), str(card["p2"])
-        if _names_match(c1, p1) and _names_match(c2, p2):
+        c1, c2 = str(card.get("p1", "")), str(card.get("p2", ""))
+        if _strict_full_names_match(c1, p1) and _strict_full_names_match(c2, p2):
             candidates.append((card, False))  # our p1 == card p1
-        elif _names_match(c1, p2) and _names_match(c2, p1):
+        if _strict_full_names_match(c1, p2) and _strict_full_names_match(c2, p1):
             candidates.append((card, True))   # orientations flipped
 
     rc = _normalize_round(round_code)
@@ -1057,6 +1394,20 @@ def try_settle_from_atp(p1: str, p2: str, round_code: str,
     evidence = {
         "source": "atp_results",
         "event": event_name,
+        "event_id": event_id,
+        "event_start_date": event_start_date,
+        "start_date": event_start_date,
+        "event_instance": f"{event_id}:{event_start_date}",
+        "event_date_verified": True,
+        "date_verified": True,
+        "event_date_source": event_date_source,
+        "date_source": event_date_source,
+        "source_url": source_url,
+        "url": source_url,
+        "match_date_bound": match_date_bound,
+        "selection_window_start": selection_window_start,
+        "selection_window_end": selection_window_end,
+        "identity_binding": "strict_normalized_full_name",
         "card_p1": str(card["p1"]),
         "card_p2": str(card["p2"]),
         "card_round": str(card["round"]),
@@ -1070,10 +1421,10 @@ def try_settle_from_atp(p1: str, p2: str, round_code: str,
         "score": score,
         "settled_at": datetime.now().isoformat(),
         "ta_player_slug": "",
-        "ta_match_date_found": "",
+        "ta_match_date_found": event_start_date,
         "ta_event_found": event_name,
         "ta_round_found": str(card["round"]),
-        "ta_surface_found": "",
+        "ta_surface_found": _clean_optional(event.get("surface")),
         "settlement_score": _ATP_SETTLEMENT_CONFIDENCE,
         "settlement_evidence": evidence,
         "outcome_detail": (
@@ -1395,7 +1746,7 @@ def run(
     for idx, row in pending.iterrows():
         p1 = str(row['p1'])
         p2 = str(row['p2'])
-        match_date = str(row.get('match_date', ''))
+        match_date = _effective_settlement_match_date(row)
         print(f"\n[{idx}] {p1} vs {p2}  ({row.get('tournament', '')}  {match_date})")
         print(f"     Model: {float(row['model_p1_prob']):.0%} P1 | Market: {float(row['market_p1_prob']):.0%} P1")
 
@@ -1415,12 +1766,18 @@ def run(
         # results pages of every active event (source=atp_results). Both-name
         # identity + round corroboration keep this conservative.
         if result.get('status') != _TA_SETTLED_STATUS:
-            for ev in _active_atp_events(atp_results_cache):
+            for ev in _candidate_atp_events(
+                str(row.get('tournament', '')),
+                atp_results_cache,
+                surface=str(row.get('surface', '')),
+                match_date=match_date,
+                round_code=str(row.get('round', '')),
+            ):
                 atp_df = _fetch_atp_results_cached(ev["url"], atp_results_cache)
                 if atp_df is None or atp_df.empty:
                     continue
                 atp_result = try_settle_from_atp(
-                    p1, p2, str(row.get('round', '')), atp_df, ev["event"],
+                    p1, p2, str(row.get('round', '')), atp_df, ev,
                 )
                 if atp_result:
                     result = atp_result
