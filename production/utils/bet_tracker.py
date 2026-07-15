@@ -8,11 +8,30 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 import json
 
 from logging_utils import ensure_csv_columns, normalize_name
 from operations.operational_lock import locked_operational_csv
+from settlement_attribution import (
+    ATTRIBUTION_QUALITY_EXACT_UID,
+    ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED,
+    ATTRIBUTION_QUALITY_ROTATED_UID,
+    ATTRIBUTION_QUALITY_UID_UNLINKED,
+    ATTRIBUTION_QUALITY_UNVERIFIED,
+    SETTLEMENT_QUALITY_CANONICAL_ALIAS,
+    SETTLEMENT_QUALITY_COMPATIBILITY_PAIR,
+    SETTLEMENT_QUALITY_EXACT_UID,
+    SETTLEMENT_QUALITY_UNATTRIBUTED,
+    BoundResultEvidence,
+    FeatureAttributionEvidence,
+    bet_players_match_result,
+    feature_evidence_matches_bet,
+    normalize_evidence_sha256,
+    parse_actual_winner,
+    repair_settled_bet_attribution_frame,
+    result_evidence_matches_settlement,
+)
 
 
 BETS_COLUMNS = [
@@ -252,10 +271,29 @@ class BetTracker:
         return len(bet_records)
     
     @locked_operational_csv
-    def settle_bet(self, bet_id: str, won: bool, notes: str = "") -> float:
+    def settle_bet(
+        self,
+        bet_id: str,
+        won: bool,
+        notes: str = "",
+        *,
+        settlement_quality: str = SETTLEMENT_QUALITY_UNATTRIBUTED,
+        attribution_quality: str = ATTRIBUTION_QUALITY_UNVERIFIED,
+        metric_eligible: bool = False,
+        result_evidence_kind: str = "",
+        result_evidence_sha256: str = "",
+        exact_feature_evidence: Mapping[
+            str, FeatureAttributionEvidence
+        ] | None = None,
+        bound_result_evidence: BoundResultEvidence | None = None,
+    ) -> float:
         """Settle a specific bet and return profit/loss"""
-        all_bets_df = pd.read_csv(self.bets_file)
-        for col in ['status', 'outcome', 'settled_timestamp', 'notes']:
+        all_bets_df = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        for col in [
+            'status', 'outcome', 'settled_timestamp', 'notes',
+            'settlement_quality', 'attribution_quality', 'metric_eligible',
+            'result_evidence_kind', 'result_evidence_sha256',
+        ]:
             if col in all_bets_df.columns:
                 all_bets_df[col] = all_bets_df[col].astype(object)
         
@@ -290,6 +328,120 @@ class BetTracker:
         all_bets_df.loc[idx, 'actual_profit'] = actual_profit
         all_bets_df.loc[idx, 'settled_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         all_bets_df.loc[idx, 'notes'] = notes
+        def _metadata_text(value, default='') -> str:
+            if value is None or pd.isna(value):
+                return default
+            return str(value).strip() or default
+
+        settlement_value = _metadata_text(
+            settlement_quality, SETTLEMENT_QUALITY_UNATTRIBUTED
+        )
+        attribution_value = _metadata_text(
+            attribution_quality, ATTRIBUTION_QUALITY_UNVERIFIED
+        )
+        if metric_eligible is None or (
+            isinstance(metric_eligible, float) and np.isnan(metric_eligible)
+        ):
+            metric_requested = None
+        elif isinstance(metric_eligible, (bool, np.bool_)):
+            metric_requested = bool(metric_eligible)
+        else:
+            metric_text = str(metric_eligible).strip().lower()
+            if metric_text in {'true', '1', '1.0', 'yes', 'y'}:
+                metric_requested = True
+            elif metric_text in {'false', '0', '0.0', 'no', 'n'}:
+                metric_requested = False
+            else:
+                metric_requested = None
+        supplied_kind = _metadata_text(result_evidence_kind)
+        supplied_hash = normalize_evidence_sha256(result_evidence_sha256)
+        bound_valid = isinstance(bound_result_evidence, BoundResultEvidence)
+        if bound_valid:
+            bound_kind = _metadata_text(bound_result_evidence.kind)
+            bound_hash = normalize_evidence_sha256(bound_result_evidence.sha256)
+            # A caller may redundantly pass the persisted pair, but it may not
+            # contradict the exact in-memory payload used for authorization.
+            if (
+                (supplied_kind and supplied_kind != bound_kind)
+                or (supplied_hash and supplied_hash != bound_hash)
+            ):
+                bound_valid = False
+            else:
+                supplied_kind, supplied_hash = bound_kind, bound_hash
+
+        exact_feature_bound = feature_evidence_matches_bet(
+            bet,
+            bet.get('match_uid'),
+            exact_feature_evidence or {},
+        )
+        bound_valid = bool(
+            bound_valid
+            and result_evidence_matches_settlement(
+                bound_result_evidence,
+                match_uid=bound_result_evidence.match_uid,
+                p1=bound_result_evidence.p1,
+                p2=bound_result_evidence.p2,
+                actual_winner=bound_result_evidence.actual_winner,
+            )
+        )
+        result_bound = bool(
+            bound_valid
+            and _metadata_text(bet.get('match_uid'))
+            == _metadata_text(bound_result_evidence.match_uid)
+            and bet_players_match_result(
+                bet, bound_result_evidence.p1, bound_result_evidence.p2
+            )
+        )
+        if result_bound:
+            result_winner = (
+                bound_result_evidence.p1
+                if bound_result_evidence.actual_winner == 1
+                else bound_result_evidence.p2
+            )
+            result_loser = (
+                bound_result_evidence.p2
+                if bound_result_evidence.actual_winner == 1
+                else bound_result_evidence.p1
+            )
+            bet_on = normalize_name(_metadata_text(bet.get('bet_on')))
+            winner_norm = normalize_name(result_winner)
+            loser_norm = normalize_name(result_loser)
+            expected_won = (
+                True if bet_on == winner_norm
+                else False if bet_on == loser_norm
+                else None
+            )
+            result_bound = expected_won is not None and expected_won == bool(won)
+
+        metric_verified = bool(
+            metric_requested is True
+            and settlement_value == SETTLEMENT_QUALITY_EXACT_UID
+            and attribution_value == ATTRIBUTION_QUALITY_EXACT_UID
+            and exact_feature_bound
+            and result_bound
+        )
+        if metric_verified:
+            metric_value = 'true'
+        elif metric_requested is False:
+            metric_value = 'false'
+        elif settlement_value == SETTLEMENT_QUALITY_EXACT_UID:
+            # Direct UID settlement with temporarily incomplete proof remains
+            # repairable unknown. Downgrade the attribution in the same row
+            # write so an exact label can never survive failed proof.
+            metric_value = ''
+            attribution_value = ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED
+        else:
+            metric_value = 'false'
+        # A malformed or contradictory pair is not durable result evidence.
+        if not supplied_kind or not supplied_hash or not bound_valid:
+            supplied_kind = ''
+            supplied_hash = ''
+
+        all_bets_df.loc[idx, 'settlement_quality'] = settlement_value
+        all_bets_df.loc[idx, 'attribution_quality'] = attribution_value
+        all_bets_df.loc[idx, 'metric_eligible'] = metric_value
+        all_bets_df.loc[idx, 'result_evidence_kind'] = supplied_kind
+        all_bets_df.loc[idx, 'result_evidence_sha256'] = supplied_hash
         
         # Calculate new bankroll
         new_bankroll = equity_before + actual_profit
@@ -318,7 +470,26 @@ class BetTracker:
         """
         total_profit = 0.0
         for result in results:
-            profit = self.settle_bet(result['bet_id'], result['won'], result.get('notes', ''))
+            profit = self.settle_bet(
+                result['bet_id'],
+                result['won'],
+                result.get('notes', ''),
+                settlement_quality=result.get(
+                    'settlement_quality', SETTLEMENT_QUALITY_UNATTRIBUTED
+                ),
+                attribution_quality=result.get(
+                    'attribution_quality', ATTRIBUTION_QUALITY_UNVERIFIED
+                ),
+                metric_eligible=result.get('metric_eligible', False),
+                result_evidence_kind=result.get('result_evidence_kind', ''),
+                result_evidence_sha256=result.get(
+                    'result_evidence_sha256', ''
+                ),
+                exact_feature_evidence=result.get(
+                    'exact_feature_evidence', {}
+                ),
+                bound_result_evidence=result.get('bound_result_evidence'),
+            )
             total_profit += profit
         
         return total_profit
@@ -456,27 +627,55 @@ class BetTracker:
         p2: str = None,
         actual_winner: int = None,
         notes: str = "",
+        exact_feature_evidence: Mapping[
+            str, FeatureAttributionEvidence
+        ] | None = None,
+        result_evidence_kind: str = "",
+        result_evidence_sha256: str = "",
+        bound_result_evidence: BoundResultEvidence | None = None,
     ) -> int:
-        """Auto-settle any pending bets linked to a finished match."""
-        if actual_winner not in (1, 2):
+        """Auto-settle linked bets and classify attribution independently.
+
+        A direct UID is metric-eligible only when the caller supplied verified
+        persisted feature evidence and a canonical result payload whose digest,
+        UID, ordered players, and winner revalidate at the write boundary. The
+        bet itself must match the feature snapshot, run, player pair, and side.
+        Aliases and the legacy blank-UID pair fallback remain accounting-only.
+        """
+        strict_winner = parse_actual_winner(actual_winner)
+        if strict_winner is None:
             return 0
 
         pending = self.get_pending_bets()
         if pending.empty:
             return 0
 
+        def _clean(value) -> str:
+            if value is None or pd.isna(value):
+                return ''
+            return str(value).strip()
+
         candidates = pd.DataFrame()
-        allowed_uids = {
-            str(value).strip()
-            for value in [match_uid, *(alias_match_uids or [])]
-            if str(value or '').strip()
+        direct_uid = _clean(match_uid)
+        alias_uids = {
+            _clean(value)
+            for value in (alias_match_uids or [])
+            if _clean(value)
         }
+        alias_uids.discard(direct_uid)
+        allowed_uids = {direct_uid, *alias_uids} - {''}
         if match_uid and 'match_uid' in pending.columns:
             candidates = pending[
                 pending['match_uid'].fillna('').astype(str).str.strip().isin(allowed_uids)
             ]
 
-        if candidates.empty and p1 and p2:
+        if (
+            candidates.empty
+            and not direct_uid
+            and p1
+            and p2
+            and 'match_uid' in pending.columns
+        ):
             p1_norm = normalize_name(p1)
             p2_norm = normalize_name(p2)
 
@@ -486,33 +685,117 @@ class BetTracker:
                     return False
                 return parts == [p1_norm, p2_norm] or parts == [p2_norm, p1_norm]
 
-            pair_pool = pending
-            if match_uid and 'match_uid' in pending.columns:
-                # Player-only matching is a compatibility path for legacy bets
-                # that predate immutable IDs. A different nonblank UID may be a
-                # different round/event and must never be settled fuzzily.
-                pair_pool = pending[
-                    pending['match_uid'].fillna('').astype(str).str.strip().eq('')
-                ]
+            # Pair-only matching is a legacy blank-to-blank compatibility
+            # contract. A result with a UID or a bet with a UID must never enter
+            # this path, even when the participant names happen to match.
+            pair_pool = pending[
+                pending['match_uid'].fillna('').astype(str).str.strip().eq('')
+            ]
             candidates = pair_pool[pair_pool['match'].apply(_match_pair)]
 
         settled = 0
         auto_note = notes or "Auto-settled from Tennis Abstract"
-        def _as_bool(value) -> bool:
-            if isinstance(value, (bool, np.bool_)):
-                return bool(value)
-            return str(value).strip().lower() in {'true', '1', 'yes', 'y'}
+
+        winner_name = p1 if strict_winner == 1 else p2
+        loser_name = p2 if strict_winner == 1 else p1
+        winner_norm = normalize_name(_clean(winner_name))
+        loser_norm = normalize_name(_clean(loser_name))
+        if not winner_norm or not loser_norm or winner_norm == loser_norm:
+            print(
+                "⚠️  Automatic settlement requires two distinct result "
+                "participants; leaving linked bets pending"
+            )
+            return 0
 
         for _, bet in candidates.iterrows():
-            bet_on_player1 = _as_bool(bet['bet_on_player1'])
-            won = bool(
-                (actual_winner == 1 and bet_on_player1)
-                or (actual_winner == 2 and not bet_on_player1)
+            bet_uid = _clean(bet.get('match_uid'))
+            bet_on_norm = normalize_name(_clean(bet.get('bet_on')))
+            # Winner identity is stable across P1/P2 orientation changes.
+            # Require the complete pair too; one overlapping player is not
+            # enough to bind a result to a paper exposure.
+            if (
+                not bet_players_match_result(bet, p1, p2)
+                or bet_on_norm not in {winner_norm, loser_norm}
+            ):
+                print(
+                    f"⚠️  Bet {bet['bet_id']} players do not match result "
+                    "participants; leaving pending"
+                )
+                continue
+            won = bet_on_norm == winner_norm
+
+            if direct_uid and bet_uid == direct_uid:
+                settlement_quality = SETTLEMENT_QUALITY_EXACT_UID
+                feature_attribution_verified = bool(
+                    winner_norm
+                    and loser_norm
+                    and feature_evidence_matches_bet(
+                        bet,
+                        direct_uid,
+                        exact_feature_evidence or {},
+                    )
+                )
+                result_attribution_verified = (
+                    result_evidence_matches_settlement(
+                        bound_result_evidence,
+                        match_uid=direct_uid,
+                        p1=p1,
+                        p2=p2,
+                        actual_winner=strict_winner,
+                    )
+                )
+                metric_eligible = bool(
+                    feature_attribution_verified
+                    and result_attribution_verified
+                )
+                attribution_quality = (
+                    ATTRIBUTION_QUALITY_EXACT_UID
+                    if metric_eligible
+                    else ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED
+                )
+                if not metric_eligible:
+                    metric_eligible = None
+            elif bet_uid and bet_uid in alias_uids:
+                settlement_quality = SETTLEMENT_QUALITY_CANONICAL_ALIAS
+                attribution_quality = ATTRIBUTION_QUALITY_ROTATED_UID
+                metric_eligible = False
+            else:
+                settlement_quality = SETTLEMENT_QUALITY_COMPATIBILITY_PAIR
+                attribution_quality = ATTRIBUTION_QUALITY_UID_UNLINKED
+                metric_eligible = False
+
+            self.settle_bet(
+                bet['bet_id'],
+                won=won,
+                notes=auto_note,
+                settlement_quality=settlement_quality,
+                attribution_quality=attribution_quality,
+                metric_eligible=metric_eligible,
+                result_evidence_kind=result_evidence_kind,
+                result_evidence_sha256=result_evidence_sha256,
+                exact_feature_evidence=exact_feature_evidence,
+                bound_result_evidence=bound_result_evidence,
             )
-            self.settle_bet(bet['bet_id'], won=won, notes=auto_note)
             settled += 1
 
         return settled
+
+    @locked_operational_csv
+    def repair_settled_bet_attribution(
+        self,
+        predictions: pd.DataFrame,
+        feature_evidence: Mapping[str, FeatureAttributionEvidence],
+    ) -> int:
+        """Repair only wholly blank settled rows with complete exact proof."""
+        bets = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        repaired_bets, repaired = repair_settled_bet_attribution_frame(
+            bets, predictions, feature_evidence
+        )
+        if repaired:
+            repaired_bets.reindex(columns=BETS_COLUMNS).to_csv(
+                self.bets_file, index=False
+            )
+        return repaired
     
     @locked_operational_csv
     def end_session(self, session_id: str) -> Dict:

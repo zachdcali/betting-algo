@@ -10,21 +10,49 @@ as documented.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from pathlib import Path
 import json
 import os
+import re
 import shutil
 import tempfile
 
 import pandas as pd
 
 from operations.operational_lock import operational_csv_lock
+from settlement_attribution import (
+    ATTRIBUTION_QUALITY_EXACT_UID,
+    ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED,
+    SETTLEMENT_QUALITY_EXACT_UID,
+    bet_accounting_matches_outcome,
+)
 
 
 BASE = Path(__file__).resolve().parent
 CONTROL_COLUMNS = {"dashboard_row_key", "sync_id"}
 IDENTITY_TERMINAL_STATUSES = {"identity_conflict", "superseded_identity"}
+BET_TERMINAL_STATUSES = {
+    "settled", "void", "voided", "cancel", "cancelled", "canceled",
+}
+BET_TERMINAL_OUTCOMES = {
+    "win", "loss", "void", "voided", "cancel", "cancelled", "canceled",
+}
+BET_CANONICAL_STATUSES = {"pending", "settled", "void", "cancelled"}
+BET_ATTRIBUTION_FIELDS = (
+    "settlement_quality", "attribution_quality", "metric_eligible",
+    "result_evidence_kind", "result_evidence_sha256",
+)
+BET_EXPOSURE_FIELDS = (
+    "match", "match_uid", "feature_snapshot_id", "run_id", "bet_on",
+    "bet_on_player1", "stake", "odds_decimal",
+)
+BET_TERMINAL_FIELDS = (
+    "status", "outcome", "actual_profit", "bankroll_after",
+    "settled_timestamp",
+)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -113,6 +141,266 @@ def _true(value) -> bool:
     return _clean(value).lower() in {"true", "1", "yes", "y"}
 
 
+def _canonical_bet_value(field: str, value) -> str:
+    """Normalize representation only; semantic differences remain conflicts."""
+    text = _clean(value)
+    if not text:
+        return ""
+    lower = text.lower()
+    if field in {"metric_eligible", "bet_on_player1"}:
+        if lower in {"true", "1", "1.0", "yes", "y"}:
+            return "true"
+        if lower in {"false", "0", "0.0", "no", "n"}:
+            return "false"
+        return lower
+    if field in {"stake", "odds_decimal", "actual_profit", "bankroll_after"}:
+        try:
+            number = Decimal(text)
+        except InvalidOperation:
+            return lower
+        if not number.is_finite():
+            return lower
+        if number == 0:
+            return "0"
+        return format(number.normalize(), "f")
+    if field == "settled_timestamp":
+        parsed = pd.to_datetime(text, errors="coerce", utc=True)
+        if pd.notna(parsed):
+            return parsed.isoformat()
+    if field in {"status", "outcome"}:
+        aliases = {
+            "cancel": "cancelled",
+            "canceled": "cancelled",
+            "voided": "void",
+        }
+        return aliases.get(lower, lower)
+    if field in {
+        "settlement_quality", "attribution_quality", "result_evidence_kind",
+        "result_evidence_sha256", "match_uid", "feature_snapshot_id", "run_id",
+    }:
+        return lower
+    return lower
+
+
+def _explicit_bet_values(group: pd.DataFrame, field: str) -> set[str]:
+    if field not in group.columns:
+        return set()
+    return {
+        canonical
+        for canonical in group[field].map(
+            lambda value: _canonical_bet_value(field, value)
+        )
+        if canonical
+    }
+
+
+def _finite_decimal(value) -> Decimal | None:
+    text = _clean(value)
+    if not text:
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
+def _validate_bet_row(row: pd.Series, row_key_value: str) -> None:
+    """Validate one exposure/accounting row before any quality reconciliation."""
+    status = _canonical_bet_value("status", row.get("status", ""))
+    outcome = _canonical_bet_value("outcome", row.get("outcome", ""))
+    metric = _canonical_bet_value(
+        "metric_eligible", row.get("metric_eligible", "")
+    )
+    settlement = _canonical_bet_value(
+        "settlement_quality", row.get("settlement_quality", "")
+    )
+    attribution = _canonical_bet_value(
+        "attribution_quality", row.get("attribution_quality", "")
+    )
+    kind = _canonical_bet_value(
+        "result_evidence_kind", row.get("result_evidence_kind", "")
+    )
+    digest = _canonical_bet_value(
+        "result_evidence_sha256", row.get("result_evidence_sha256", "")
+    )
+    bundle_present = any((metric, settlement, attribution, kind, digest))
+
+    if status not in BET_CANONICAL_STATUSES:
+        raise RuntimeError(
+            f"invalid canonical bet status for {row_key_value}: "
+            f"{status or '<blank>'}"
+        )
+
+    if status == "pending":
+        if bundle_present:
+            raise RuntimeError(
+                f"nonterminal bet carries attribution bundle for {row_key_value}"
+            )
+        if any(
+            _clean(row.get(field, ""))
+            for field in (
+                "outcome", "actual_profit", "bankroll_after", "settled_timestamp",
+            )
+        ):
+            raise RuntimeError(
+                f"pending bet carries terminal state for {row_key_value}"
+            )
+        if "stake" in row.index or "odds_decimal" in row.index:
+            stake = _finite_decimal(row.get("stake"))
+            odds = _finite_decimal(row.get("odds_decimal"))
+            if stake is None or stake <= 0 or odds is None or odds <= 1:
+                raise RuntimeError(
+                    f"pending bet has invalid exposure arithmetic for {row_key_value}"
+                )
+        return
+
+    if status == "settled":
+        if outcome not in {"win", "loss"}:
+            raise RuntimeError(
+                f"settled bet has invalid outcome for {row_key_value}"
+            )
+        accounting_fields = {"stake", "odds_decimal", "actual_profit"}
+        if accounting_fields & set(row.index) and not bet_accounting_matches_outcome(row):
+            raise RuntimeError(
+                f"settled bet has invalid P&L arithmetic for {row_key_value}"
+            )
+        if (
+            "bankroll_after" in row.index
+            and _finite_decimal(row.get("bankroll_after")) is None
+        ):
+            raise RuntimeError(
+                f"settled bet has invalid bankroll for {row_key_value}"
+            )
+        if "settled_timestamp" in row.index:
+            timestamp = pd.to_datetime(
+                _clean(row.get("settled_timestamp")), errors="coerce", utc=True,
+            )
+            if pd.isna(timestamp):
+                raise RuntimeError(
+                    f"settled bet has invalid timestamp for {row_key_value}"
+                )
+    elif status in {"void", "cancelled"}:
+        if outcome != status:
+            raise RuntimeError(
+                f"void/cancelled bet has incoherent outcome for {row_key_value}"
+            )
+        profit = _finite_decimal(row.get("actual_profit"))
+        if "actual_profit" in row.index and (profit is None or profit != 0):
+            raise RuntimeError(
+                f"void/cancelled bet is not refunded for {row_key_value}"
+            )
+        if (
+            "bankroll_after" in row.index
+            and _finite_decimal(row.get("bankroll_after")) is None
+        ):
+            raise RuntimeError(
+                f"void/cancelled bet has invalid bankroll for {row_key_value}"
+            )
+        if "settled_timestamp" in row.index:
+            timestamp = pd.to_datetime(
+                _clean(row.get("settled_timestamp")), errors="coerce", utc=True,
+            )
+            if pd.isna(timestamp):
+                raise RuntimeError(
+                f"void/cancelled bet has invalid timestamp for {row_key_value}"
+            )
+        if bundle_present and metric != "false":
+            raise RuntimeError(
+                f"void/cancelled bet cannot be metric eligible for "
+                f"{row_key_value}"
+            )
+    if not bundle_present:
+        # Historical settled rows without any assertion remain repairable legacy
+        # unknowns; every partial assertion below fails closed.
+        return
+    if bool(kind) != bool(digest) or (
+        digest and not _SHA256_RE.fullmatch(digest)
+    ):
+        raise RuntimeError(
+            f"invalid terminal bet result evidence bundle for {row_key_value}"
+        )
+    if metric == "":
+        if (
+            settlement != SETTLEMENT_QUALITY_EXACT_UID
+            or attribution != ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED
+        ):
+            raise RuntimeError(
+                f"invalid repairable bet attribution state for {row_key_value}"
+            )
+        return
+    if metric not in {"true", "false"} or not settlement or not attribution:
+        raise RuntimeError(
+            f"incomplete terminal bet attribution bundle for {row_key_value}"
+        )
+    if metric == "true" and (
+        settlement != SETTLEMENT_QUALITY_EXACT_UID
+        or attribution != ATTRIBUTION_QUALITY_EXACT_UID
+        or not kind
+        or not digest
+    ):
+        raise RuntimeError(
+            f"unproven terminal bet metric eligibility for {row_key_value}"
+        )
+
+
+def _validate_bet_group(group: pd.DataFrame, row_key_value: str) -> None:
+    """Reject contradictory immutable exposure, attribution, or P&L facts."""
+    for _, row in group.iterrows():
+        _validate_bet_row(row, row_key_value)
+
+    for field in (
+        *BET_EXPOSURE_FIELDS,
+        "settlement_quality", "result_evidence_kind", "result_evidence_sha256",
+    ):
+        values = _explicit_bet_values(group, field)
+        if len(values) > 1:
+            raise RuntimeError(
+                f"conflicting immutable bet {field} for {row_key_value}: "
+                f"{sorted(values)}"
+            )
+
+    metrics = _explicit_bet_values(group, "metric_eligible")
+    if len(metrics) > 1:
+        raise RuntimeError(
+            f"conflicting immutable bet metric_eligible for {row_key_value}: "
+            f"{sorted(metrics)}"
+        )
+    attributions = _explicit_bet_values(group, "attribution_quality")
+    if len(attributions) > 1:
+        allowed_upgrade = attributions == {
+            ATTRIBUTION_QUALITY_EXACT_UID_UNVERIFIED,
+            ATTRIBUTION_QUALITY_EXACT_UID,
+        }
+        settlements = _explicit_bet_values(group, "settlement_quality")
+        if (
+            not allowed_upgrade
+            or "false" in metrics
+            or settlements != {SETTLEMENT_QUALITY_EXACT_UID}
+        ):
+            raise RuntimeError(
+                f"conflicting immutable bet attribution_quality for "
+                f"{row_key_value}: {sorted(attributions)}"
+            )
+
+    status = group.get(
+        "status", pd.Series("", index=group.index)
+    ).map(_clean).str.lower()
+    outcome = group.get(
+        "outcome", pd.Series("", index=group.index)
+    ).map(_clean).str.lower()
+    terminal = group[
+        status.isin(BET_TERMINAL_STATUSES)
+        | outcome.isin(BET_TERMINAL_OUTCOMES)
+    ]
+    for field in BET_TERMINAL_FIELDS:
+        values = _explicit_bet_values(terminal, field)
+        if len(values) > 1:
+            raise RuntimeError(
+                f"conflicting terminal bet {field} for {row_key_value}: "
+                f"{sorted(values)}"
+            )
+
 def _quality(frame: pd.DataFrame, mode: str) -> pd.Series:
     score = pd.Series(0, index=frame.index, dtype="int64")
     if mode == "prediction":
@@ -127,8 +415,39 @@ def _quality(frame: pd.DataFrame, mode: str) -> pd.Series:
     elif mode == "bet":
         status = frame.get("status", pd.Series("", index=frame.index)).map(_clean).str.lower()
         outcome = frame.get("outcome", pd.Series("", index=frame.index)).map(_clean).str.lower()
-        score = (status.isin({"settled", "void", "cancelled", "canceled"})
-                 | outcome.isin({"win", "loss", "void", "cancelled", "canceled"})).astype(int) * 100
+        terminal = (
+            status.isin(BET_TERMINAL_STATUSES)
+            | outcome.isin(BET_TERMINAL_OUTCOMES)
+        )
+        metric = frame.get(
+            "metric_eligible", pd.Series("", index=frame.index)
+        ).map(_clean).str.lower()
+        classified = metric.isin({
+            "true", "1", "yes", "y", "false", "0", "no", "n"
+        })
+        has_attribution = frame.get(
+            "attribution_quality", pd.Series("", index=frame.index)
+        ).map(_clean).ne("")
+        has_settlement = frame.get(
+            "settlement_quality", pd.Series("", index=frame.index)
+        ).map(_clean).ne("")
+        has_evidence_kind = frame.get(
+            "result_evidence_kind", pd.Series("", index=frame.index)
+        ).map(_clean).ne("")
+        has_evidence_hash = frame.get(
+            "result_evidence_sha256", pd.Series("", index=frame.index)
+        ).map(_clean).str.fullmatch(r"[0-9a-fA-F]{64}")
+        # Attribution enrichment is monotonic durable state. A stale local
+        # settled copy with blank classification must not erase a repaired
+        # Supabase row merely because both share the same terminal outcome.
+        score = (
+            terminal.astype(int) * 100
+            + classified.astype(int) * 40
+            + has_settlement.astype(int) * 8
+            + has_attribution.astype(int) * 4
+            + has_evidence_kind.astype(int) * 2
+            + has_evidence_hash.astype(int)
+        )
     elif mode == "run":
         status = frame.get("status", pd.Series("", index=frame.index)).map(_clean).str.lower()
         score = (~status.isin({"", "running", "started"})).astype(int) * 100
@@ -256,6 +575,9 @@ def merge_state_frames(existing: pd.DataFrame, incoming: pd.DataFrame,
     combined["_quality"] = _quality(combined, spec.quality_mode)
     combined["_freshness"] = _freshness(combined)
     combined["_source_order"] = range(len(combined))
+    if spec.quality_mode == "bet":
+        for row_key_value, group in combined.groupby("_row_key", sort=False):
+            _validate_bet_group(group, row_key_value)
     if spec.quality_mode == "prediction":
         combined = _reconcile_prediction_groups(combined, ordered_columns)
     else:
