@@ -70,6 +70,31 @@ def test_skipped_feature_build_cannot_be_marked_complete(tmp_path, monkeypatch):
     assert str(row["features_complete"]).lower() == "false"
 
 
+def test_blank_id_diagnostic_never_replaces_exact_id_incomplete_row(tmp_path, monkeypatch):
+    path = tmp_path / "feature_vectors.csv"
+    monkeypatch.setattr(feature_log, "PATH", str(path))
+    incomplete = _features(_defaulted_features="Player1_Height")
+
+    feature_log.save_feature_vector(
+        "A", "B", "2026-07-13", "run_exact", incomplete, False,
+        match_uid="match_exact", feature_snapshot_id="feat_exact",
+        build_status="ok",
+    )
+    feature_log.save_feature_vector(
+        "A", "B", "2026-07-13", "run_skip", {}, False,
+        match_uid="match_exact", feature_snapshot_id="",
+        build_status="skip",
+    )
+
+    rows = pd.read_csv(path, keep_default_na=False)
+    assert len(rows) == 2
+    exact = rows.loc[rows["feature_snapshot_id"].eq("feat_exact")].iloc[0]
+    diagnostic = rows.loc[rows["feature_snapshot_id"].eq("")].iloc[0]
+    assert exact["build_status"] == "ok"
+    assert str(exact["features_complete"]).lower() == "false"
+    assert diagnostic["build_status"] == "skip"
+
+
 def test_incomplete_or_non_finite_vector_cannot_claim_exact_lineage(tmp_path, monkeypatch):
     path = tmp_path / "feature_vectors.csv"
     monkeypatch.setattr(feature_log, "PATH", str(path))

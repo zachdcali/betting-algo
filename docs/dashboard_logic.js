@@ -254,6 +254,82 @@
     return clean(row && (row.feature_snapshot_id || row.latest_feature_snapshot_id));
   }
 
+  function slateEvidenceKey(row, fallback = "") {
+    const uid = clean(row && row.match_uid);
+    if (uid) return `match:${uid}`;
+    const featureId = exactFeatureId(row);
+    if (featureId) return `feature:${featureId}`;
+    const players = [clean(row && row.p1), clean(row && row.p2)]
+      .map((value) => value.toLowerCase());
+    if (players.length === 2 && players.every(Boolean)) {
+      return `pair:${players.sort().join("|")}|${clean(row && row.match_date)}`;
+    }
+    return `row:${clean(fallback)}`;
+  }
+
+  function acceptedSlateFunnel(entries = [], acceptedFeatureIds = new Set()) {
+    const featureIds = acceptedFeatureIds instanceof Set
+      ? acceptedFeatureIds
+      : new Set(acceptedFeatureIds || []);
+    const unique = new Map();
+    entries.forEach((entry, index) => {
+      const key = slateEvidenceKey(entry && entry.row, `accepted:${index}`);
+      if (!unique.has(key)) unique.set(key, entry);
+    });
+    const accepted = [...unique.entries()].map(([key, entry]) => ({ key, entry }));
+    const finite = accepted.filter(({ entry }) => (
+      clean(entry && entry.source).toLowerCase() === "snapshot"
+      && numberOrNull(entry && entry.row && entry.row.model_p1_prob) !== null
+    ));
+    const complete = finite.filter(({ entry }) => {
+      const featureId = exactFeatureId(entry && entry.row);
+      return Boolean(featureId && featureIds.has(featureId));
+    });
+    const identityClean = complete.filter(({ entry }) => {
+      const row = entry && entry.row ? entry.row : {};
+      const audits = entry && Array.isArray(entry.auditRows) ? entry.auditRows : [];
+      const reasons = entry && entry.classification && Array.isArray(entry.classification.reasons)
+        ? entry.classification.reasons
+        : [];
+      const evidence = [
+        clean(row.record_status),
+        ...audits.map((audit) => clean(audit.skip_reason_code)),
+        ...reasons,
+      ].join(" | ").toLowerCase();
+      return !evidence.includes("identity_conflict") && !evidence.includes("identity conflict");
+    });
+    const dataValidNow = identityClean.filter(({ entry }) => (
+      clean(entry && entry.classification && entry.classification.state).toLowerCase() === "eligible"
+    ));
+    const stageKeys = {
+      accepted: accepted.map(({ key }) => key),
+      finite: finite.map(({ key }) => key),
+      complete: complete.map(({ key }) => key),
+      identityClean: identityClean.map(({ key }) => key),
+      dataValidNow: dataValidNow.map(({ key }) => key),
+    };
+    const subset = (left, right) => {
+      const parent = new Set(right);
+      return left.every((key) => parent.has(key));
+    };
+    const monotone = (
+      subset(stageKeys.finite, stageKeys.accepted)
+      && subset(stageKeys.complete, stageKeys.finite)
+      && subset(stageKeys.identityClean, stageKeys.complete)
+      && subset(stageKeys.dataValidNow, stageKeys.identityClean)
+    );
+    return {
+      counts: Object.fromEntries(
+        Object.entries(stageKeys).map(([name, keys]) => [name, keys.length]),
+      ),
+      stageKeys,
+      monotone,
+      expired: accepted.filter(({ entry }) => (
+        clean(entry && entry.classification && entry.classification.state).toLowerCase() === "expired"
+      )).length,
+    };
+  }
+
   function featureReferenceStatus(row, featureIds, referenceLoaded = false, seenFeatureIds = null) {
     const featureId = exactFeatureId(row);
     if (!featureId) return "missing_id";
@@ -266,6 +342,8 @@
   function blockedReasons(row) {
     const reasons = [];
     const defaults = clean(row.defaulted_features);
+    const recordStatus = clean(row.record_status).toLowerCase();
+    if (recordStatus === "identity_conflict") reasons.push("Match identity conflict");
     if (!clean(row.match_uid)) reasons.push("Immutable match ID missing");
     if (!clean(row.prediction_uid)) reasons.push("Immutable prediction snapshot ID missing");
     if (!clean(row.tournament)) reasons.push("Tournament unresolved");
@@ -317,6 +395,84 @@
       return { state: "expired", reasons, startAt };
     }
     return { state: "blocked", reasons, startAt };
+  }
+
+  function mergeReasons(...groups) {
+    const seen = new Set();
+    const merged = [];
+    groups.flat().forEach((reason) => {
+      const text = clean(reason);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      merged.push(text);
+    });
+    return merged;
+  }
+
+  function classifySlateEvidence(row, auditRows = [], now = Date.now()) {
+    const snapshot = classifySlateRow(row, now);
+    if (!auditRows.length || snapshot.state === "settled") return snapshot;
+    const audits = auditRows.map((audit) => classifySkippedRow(audit, now));
+    const auditExpired = audits.some((audit) => audit.state === "expired");
+    return {
+      state: snapshot.state === "expired" || auditExpired ? "expired" : "blocked",
+      reasons: mergeReasons(
+        snapshot.reasons,
+        audits.flatMap((audit) => audit.reasons),
+      ),
+      startAt: snapshot.startAt ?? audits.find((audit) => audit.startAt !== null)?.startAt ?? null,
+    };
+  }
+
+  function primaryBlockerGroup(entry) {
+    const row = entry && entry.row ? entry.row : {};
+    const auditRows = entry && Array.isArray(entry.auditRows) ? entry.auditRows : [];
+    const classification = entry && entry.classification ? entry.classification : { reasons: [] };
+    const source = clean(entry && entry.source).toLowerCase();
+    const auditCodes = auditRows.map((audit) => clean(audit.skip_reason_code).toLowerCase());
+    const evidence = [
+      clean(row.record_status),
+      clean(row.record_note),
+      clean(row.defaulted_features),
+      ...(classification.reasons || []),
+      ...auditRows.flatMap((audit) => [
+        clean(audit.stage), clean(audit.skip_reason_code), clean(audit.skip_reason_detail),
+      ]),
+    ].join(" | ").toLowerCase();
+
+    if (auditCodes.some((code) => [
+      "scheduled_start_passed", "match_already_completed",
+      "inside_pre_match_buffer_5m", "match_start_time_missing",
+    ].includes(code))) return "Start time / pre-start guard";
+    if (
+      auditCodes.some((code) => (
+        code.startsWith("feature_")
+        || code.startsWith("prediction_")
+        || code === "no_features"
+        || code === "no_predictions"
+      ))
+    ) return "Feature / prediction build failed";
+    if (
+      clean(row.record_status).toLowerCase() === "identity_conflict"
+      || auditCodes.includes("match_identity_conflict")
+      || evidence.includes("identity conflict")
+      || evidence.includes("identity_conflict")
+    ) return "Identity conflict";
+    if (!isTrue(row.features_complete)) return "Feature values incomplete";
+
+    const featureReference = clean(entry && entry.featureReference).toLowerCase();
+    if (["unverified", "not_found", "invalid", "missing_id"].includes(featureReference)) {
+      return "Feature lineage / integrity";
+    }
+    if (numberOrNull(row.model_p1_prob) === null) return "Model output unavailable";
+    if (
+      numberOrNull(row.market_p1_prob) === null
+      || numberOrNull(row.p1_odds_decimal) === null
+      || numberOrNull(row.p2_odds_decimal) === null
+    ) return "Market price unavailable";
+    if (parseMatchStart(row) === null) return "Start time unavailable";
+    if (source === "skipped" || auditRows.length) return "Other pipeline skip";
+    return "Other required input";
   }
 
   function normalizeBetOutcome(bet) {
@@ -555,10 +711,15 @@
     parseMatchStart,
     validWinner,
     exactFeatureId,
+    slateEvidenceKey,
+    acceptedSlateFunnel,
     featureReferenceStatus,
     blockedReasons,
     classifySlateRow,
     classifySkippedRow,
+    mergeReasons,
+    classifySlateEvidence,
+    primaryBlockerGroup,
     normalizeBetOutcome,
     pendingBetSlaStatus,
     nextScheduledRun,

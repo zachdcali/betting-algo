@@ -54,6 +54,21 @@ test("current slate is snapshot and skipped-audit based, never canonical-latest 
   assert.match(client, /Logic\.numberOrNull\(row\.feature_count\) === 141/);
   assert.match(client, /Feature row exists but failed status, completeness, hash, or 141-feature integrity checks/);
   assert.doesNotMatch(client, /store\.predictions\s*\n\s*\.filter\(\(row\) => predictionRunId\(row\) === selectedRun\.id/);
+  assert.match(client, /Logic\.classifySlateEvidence\(row, auditRows, Date\.now\(\)\)/);
+  assert.match(client, /auditRows/);
+  assert.doesNotMatch(client, /if \(predictedMatchIds\.has\(matchKey\)\) return/);
+});
+
+test("accepted slate exposes a monotone eligibility funnel and primary blocker groups", () => {
+  for (const label of ["Accepted matches", "Finite NN outputs", "Complete vectors", "Identity-clean"]) {
+    assert.match(client, new RegExp(label));
+  }
+  assert.match(client, /Logic\.acceptedSlateFunnel\(/);
+  assert.match(client, /every stage is an explicit subset of the previous stage/);
+  assert.match(client, /Started \/ expired retained separately/);
+  assert.match(client, /Logic\.primaryBlockerGroup\(entry\)/);
+  assert.match(html, /id="slate-funnel"/);
+  assert.match(html, /One primary group per blocked row/);
 });
 
 test("operations UI exposes accepted generation, capital gate, and settlement backlog", () => {

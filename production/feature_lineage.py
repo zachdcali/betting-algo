@@ -357,6 +357,22 @@ def _require_immutable_duplicate(
             authority,
             candidate,
         )
+    if authority.status != "ok":
+        # Historical pipeline runs incorrectly assigned exact-looking IDs to
+        # skip/guard diagnostics.  The same match could therefore emit two
+        # different placeholder payloads under one ID (for example structural
+        # round failure followed by the pre-start time guard).  They are never
+        # decision-grade and remain in ``invalid_ids``; permit hydration only
+        # when their identity and non-ok status agree and neither row claims an
+        # exact stored vector hash.
+        if authority.stored_vector_sha256 or candidate.stored_vector_sha256:
+            _conflict(
+                authority.snapshot_id,
+                "has an exact hash claim on a non-decision-grade immutable row",
+                authority,
+                candidate,
+            )
+        return
     if not vectors_allclose(authority.vector, candidate.vector, ordered_names):
         _conflict(
             authority.snapshot_id,

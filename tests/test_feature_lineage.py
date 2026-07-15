@@ -113,6 +113,42 @@ def test_conflicting_immutable_sources_fail_closed():
         )
 
 
+def test_divergent_nondecision_immutable_diagnostics_remain_invalid_but_loadable():
+    first = _immutable(_vector(12.0))
+    second = _immutable(_vector(99.0))
+    for row in (first, second):
+        row.update(status="skip", feature_vector_sha256="")
+
+    result = resolve_feature_lineage(
+        ordered_names=EXACT_141_FEATURES,
+        immutable_sources=[(
+            "features_same_run.csv", pd.DataFrame([first, second]),
+        )],
+    )
+
+    assert "feature_1" in result.invalid_ids
+    assert result.referential_vector_hashes("feature_1") == frozenset()
+    assert len(result.occurrences_by_id["feature_1"]) == 2
+
+
+def test_nondecision_immutable_duplicate_cannot_claim_exact_hash():
+    first = _immutable(_vector(12.0))
+    second = _immutable(_vector(99.0))
+    first["status"] = "skip"
+    second.update(status="skip", feature_vector_sha256="")
+
+    with pytest.raises(
+        FeatureLineageConflict,
+        match="exact hash claim on a non-decision-grade immutable row",
+    ):
+        resolve_feature_lineage(
+            ordered_names=EXACT_141_FEATURES,
+            immutable_sources=[(
+                "features_same_run.csv", pd.DataFrame([first, second]),
+            )],
+        )
+
+
 def test_run_identity_mismatch_fails_closed():
     with pytest.raises(FeatureLineageConflict, match="run/match/schema identity"):
         resolve_feature_lineage(

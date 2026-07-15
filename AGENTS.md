@@ -118,15 +118,26 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   bet logging would be risky.
 - `BetTracker.log_bets()` should skip duplicate pending bets for the same match
   and bet side, so reruns do not double-log open recommendations.
-- Pending-bet reconciliation is read-only by default. Its manual phase-one
-  apply path requires a deterministic reviewed plan, exact plan digest,
-  explicit canonical private apply-audit and lock paths, unchanged file/row hashes, and
-  strict exact UID/pair/date/side/session/account gates. Apply bets, bankroll,
-  sessions, and the separate apply audit through the canonical shared
-  `logs/.operational_csv.lock` plus the durable fsynced recovery journal;
-  BetTracker and durable hydration must use the same lock. Verified replay is a
-  no-op and every conflict fails closed. Do not wire reconciliation itself into
-  automatic startup without a separate reviewed change.
+- Pending-bet reconciliation is read-only by default. Its manual
+  apply path uses plan/apply schema `1.1.0` and requires a deterministic
+  reviewed plan, exact plan digest, explicit canonical private apply-audit and
+  lock paths, unchanged file/row hashes, and strict result/identity/account
+  gates. Exact UID results are metric eligible. The opt-in `exact-pair-date`
+  mode may settle a rotated-UID exposure or a fully bet-bound official ATP
+  manifest record, but those rows remain `metric_eligible=false` with explicit
+  rotated/unlinked attribution quality; settlement truth must never be
+  promoted into model attribution or rewrite `prediction_log.csv`.
+- Pending reconciliation preserves durable `settlement_quality`,
+  `attribution_quality`, `metric_eligible`, `result_evidence_kind`, and
+  `result_evidence_sha256` on `all_bets.csv`. Distinct duplicate exposures
+  settle individually by unique `bet_id`. Missing or nonunique session lineage
+  uses global accounting only and must not fabricate a session row. Apply bets,
+  bankroll, applicable sessions, and the separate apply audit through the
+  canonical shared `logs/.operational_csv.lock` plus the durable fsynced
+  recovery journal; BetTracker and durable hydration must use the same lock.
+  Verified replay is a no-op and every conflict fails closed. Do not wire
+  reconciliation itself into automatic startup without a separate reviewed
+  change.
 - `logs/performance_v1_shadow_predictions.csv` is a side-model evaluation log,
   not an operational betting log. It can contain multiple `performance_v1`
   model families/versions and settlement scoring columns populated after the

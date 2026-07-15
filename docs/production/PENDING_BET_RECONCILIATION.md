@@ -67,40 +67,81 @@ decimal odds at or below `1.0` are reported in
 `invalid_exact_outcome_odds`; they are never silently treated as valid prices.
 JSON output rejects NaN and Infinity rather than emitting non-standard JSON.
 
-## Phase-one deterministic settlement plan
+## Manual deterministic settlement plan
 
-An explicit phase-one apply path exists for the narrow subset that passes every
-safety gate. It is not wired into pipeline startup, hourly runs, hydration, or
-automatic settlement. Plan schema `1.0.0` and apply-audit schema `1.0.0` are
-versioned separately from the evidence report.
+An explicit manual apply path exists for the subset that passes every safety
+gate. It is not wired into pipeline startup, hourly runs, hydration, or
+automatic settlement. The evidence report, settlement plan, and apply-audit
+schemas are each `1.1.0` and remain independently versioned.
 
-A row is plan-eligible only when all of these are true:
+Result evidence has two modes:
+
+- `exact-uid` is the default. It accepts only a valid result attached to the
+  bet's exact `match_uid` in `prediction_log.csv`. This is exact settlement and
+  exact model attribution, so the row is `metric_eligible=true`.
+- `exact-pair-date` is an explicit plan-time recovery mode. If the original UID
+  is absent, it may use exactly one valid prediction-log result for the same
+  normalized player pair and operational match date. It settles the recorded
+  paper exposure, but does not assert that the rotated UID is the same model
+  prediction: `attribution_quality=unattributed_rotated_match_uid` and
+  `metric_eligible=false`. Multiple semantic result UIDs fail closed.
+
+The recovery mode may also consume a private official-result manifest. Manifest
+schema `pending_result_recovery_evidence@1.0.0` binds each result to one unique
+`bet_id`, the exact bet row and hash, its pair/date/side/stake/odds, one target
+prediction row and orientation, an ATP external match ID and HTTPS URL, and a
+retained raw artifact with byte count, observation time, and SHA-256. The
+manifest is also bound to the complete bet and prediction file hashes. The
+official winner must be the sole winner-marked player and the operational loser
+must be the sole nonwinner in the exact raw match segment. The match's ATP day,
+tournament ID, observation time, and operational-date shift are also bounded,
+and `model_metric_write_authorized` must be false. Winner names must normalize
+exactly unless a specific transliteration pair is explicitly code-reviewed; no
+general first-name, surname, or fuzzy fallback is allowed. A valid record can
+settle the paper account with `attribution_quality=uid_unlinked` and
+`metric_eligible=false`; it never rewrites `prediction_log.csv` or creates a
+model result.
+
+Settlement truth and model attribution are deliberately separate contracts. A
+known match winner can close a specific, hash-bound paper exposure without
+claiming that a broken or rotated internal UID is valid model lineage.
+
+A row is plan-eligible only when all applicable gates are true:
 
 - `bet_id` is nonblank and unique across the entire bet log;
 - the row is still `pending`, with blank outcome, profit, bankroll-after,
-  settlement timestamp, and settlement-note fields;
-- its nonblank exact `match_uid` resolves inside `prediction_log.csv`;
-- every observation for that UID has one exact normalized player pair and date,
-  every nonblank winner is `1` or `2`, and all valid winner observations resolve
-  to one normalized winner identity;
-- no void/cancellation marker, conflicting winner, incomplete identity, or
-  reused semantic UID exists;
+  settlement timestamp, settlement-note, and settlement-quality fields;
+- its selected evidence mode yields exactly one non-conflicting result under
+  the evidence rules above;
+- no void/cancellation marker, conflicting winner, incomplete identity, reused
+  semantic UID, or official/internal evidence conflict exists;
 - the bet's normalized pair, date, selected player, and `bet_on_player1`
-  orientation exactly match the authoritative prediction identity;
-- the normalized pair/date/side identity occurs exactly once across all bet
-  rows, including pending and settled history;
+  orientation exactly match the bound result identity;
 - stake is finite and positive, and decimal odds are finite and greater than
   `1.0`;
-- the nonblank session ID maps to exactly one session, the bet does not predate
-  that session, and exactly one canonical `Session started` bankroll event has
-  the same timestamp and initial balance and occurs before the bet;
+- the session ID is nonblank. When it maps to exactly one session, the bet must
+  not predate that session and exactly one canonical `Session started` bankroll
+  event must have the same timestamp and initial balance and occur before the
+  bet;
 - global paper-account arithmetic is valid: statuses are supported, all odds,
   stakes, and session-summary inputs are finite, and every settled/void row has
   compatible outcome, timestamp, bankroll, and exact win/loss/refund math.
 
 Normalization only removes representational differences such as case, accents,
 and punctuation. It is not fuzzy identity matching. A wrong or orphan UID stays
-rejected even if player names and dates look similar.
+rejected in the default mode; recovery requires the explicit exact pair/date
+contract or a complete bet-bound official manifest.
+
+Recorded duplicate exposures are not collapsed. If two unique `bet_id` rows
+represent exposure to the same pair/date/side, each stake is a separate ledger
+fact and each eligible row settles independently. The plan and apply audit keep
+the group size, position, and member IDs so the duplication remains visible.
+
+Unavailable session lineage does not block otherwise valid global paper-account
+recovery. When a nonblank session ID is missing or nonunique, the plan records
+that quality explicitly, appends an accounting event with a blank accounting
+session ID, and does not fabricate or alter a session row. Exact session
+lineage continues to update its existing session summary.
 
 Build a plan from `production/`. The plan output remains an operator-chosen
 private review artifact. All four mutable recovery targets are canonical and
@@ -118,16 +159,41 @@ independently derivable from `logs/`; the apply audit must use
   --starting-capital 1000
 ```
 
+For reviewed rotated-UID and official-result recovery, opt in at plan time and
+pass the private manifest when one is used:
+
+```bash
+../tennis_env/bin/python -m operations.pending_reconciliation \
+  --prod-dir . \
+  --plan-output /secure/review/pending-recovery-plan.json \
+  --result-evidence-mode exact-pair-date \
+  --result-evidence-manifest /secure/evidence/official-results.json \
+  --apply-audit ./.private/pending_reconciliation_apply_audit.csv \
+  --lock-file ./logs/.operational_csv.lock \
+  --transaction-dir ./logs/.pending_reconciliation_transaction \
+  --starting-capital 1000
+```
+
 The plan is deterministic for identical input bytes and paths. It contains:
 
 - SHA-256 for the bet, prediction, bankroll, session, and pre-existing apply
   audit inputs;
 - a canonical SHA-256 plan digest;
-- source-row hashes for every eligible bet, prediction observation, and session;
+- source-row hashes for every eligible bet, prediction observation, and
+  available session, plus the official manifest and raw-artifact hashes when
+  used;
 - deterministic candidate ordering, expected result math, bankroll sequence,
   rejected rows, and machine-readable rejection reasons;
-- the exact intended post-apply bet, bankroll, and session rows plus their
-  hashes, so session repair is reviewed rather than derived only after approval.
+- settlement, attribution, metric-eligibility, result-evidence, exposure-group,
+  and session-lineage quality for every candidate;
+- the exact intended post-apply bet and bankroll rows, and applicable session
+  rows, plus their hashes, so the mutation is reviewed rather than derived only
+  after approval.
+
+The settled bet row durably records `settlement_quality`,
+`attribution_quality`, `metric_eligible`, `result_evidence_kind`, and
+`result_evidence_sha256`. `BetTracker` preserves these additive columns on
+future writes.
 
 Rebuilding byte-identical content at the same plan path is a no-op. Different
 content never overwrites an existing plan; use a new review filename.
@@ -143,6 +209,20 @@ requires both the reviewed file and that digest:
   --prod-dir . \
   --apply-plan /secure/review/pending-plan.json \
   --expected-plan-digest <64-lowercase-hex-digest> \
+  --apply-audit ./.private/pending_reconciliation_apply_audit.csv \
+  --lock-file ./logs/.operational_csv.lock \
+  --transaction-dir ./logs/.pending_reconciliation_transaction
+```
+
+If the reviewed plan used an official-result manifest, apply must receive the
+same manifest path as well:
+
+```bash
+../tennis_env/bin/python -m operations.pending_reconciliation \
+  --prod-dir . \
+  --apply-plan /secure/review/pending-recovery-plan.json \
+  --expected-plan-digest <64-lowercase-hex-digest> \
+  --result-evidence-manifest /secure/evidence/official-results.json \
   --apply-audit ./.private/pending_reconciliation_apply_audit.csv \
   --lock-file ./logs/.operational_csv.lock \
   --transaction-dir ./logs/.pending_reconciliation_transaction
@@ -173,16 +253,15 @@ bound input changes, even if the candidate row itself appears unchanged.
 ## Safe operating sequence
 
 1. Save the JSON/CSV outputs in a private review location.
-2. Resolve duplicate identities and orphan UID aliases through the separate
-   [Pending Identity Remediation](PENDING_IDENTITY_REMEDIATION.md) contract.
-   Candidate name/date or feature joins are not authority, and registry apply
-   does not itself alter the bet log.
+2. Review every recorded duplicate exposure as a separate stake; never collapse
+   distinct `bet_id` rows during settlement.
 3. Review exact UID outcomes and the proposed win/loss math row by row.
-4. Investigate orphan and ambiguous UIDs against source evidence. Preserve
-   void/cancellation semantics.
+4. For recovery, verify each exact pair/date result and each official manifest
+   record against its retained raw artifact. Keep recovered rotated/unlinked
+   rows metric-ineligible. Preserve void/cancellation semantics.
 5. Build and review a deterministic plan. Do not edit the plan after recording
    its digest.
 6. Back up the operational CSV set, then run the explicit digest-gated apply.
 7. Re-run the default read-only report and account/dashboard reconciliation.
-8. Keep automatic startup wiring disabled until this manual phase has produced
+8. Keep automatic startup wiring disabled until this manual path has produced
    reviewed production evidence.

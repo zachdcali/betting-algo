@@ -283,9 +283,113 @@ def test_prediction_terminal_status_rejects_all_failed_rows():
     assert (status, successes, errors) == ("no_predictions", 0, 2)
 
     status, successes, errors = main.prediction_terminal_status(pd.DataFrame([
-        {"prediction_status": "success"}, {"prediction_status": "error"},
+        {"prediction_status": "success", "player1_win_prob": 0.61},
+        {"prediction_status": "error", "player1_win_prob": None},
     ]))
     assert (status, successes, errors) == ("partial", 1, 1)
+
+    status, successes, errors = main.prediction_terminal_status(pd.DataFrame([
+        {"prediction_status": "success", "player1_win_prob": float("nan")},
+        {"prediction_status": "success", "player1_win_prob": 1.2},
+    ]))
+    assert (status, successes, errors) == ("no_predictions", 0, 2)
+
+
+def test_failed_or_nan_predictions_never_reach_snapshot_logger(monkeypatch):
+    import main
+
+    calls = []
+    monkeypatch.setattr(
+        main, "log_prediction", lambda **kwargs: calls.append(kwargs) or "created",
+    )
+    orchestrator = main.LiveBettingOrchestrator.__new__(
+        main.LiveBettingOrchestrator,
+    )
+    orchestrator.run_id = "run_failed_output"
+    orchestrator.run_started_at = "2026-07-14T18:00:00+00:00"
+    rows = pd.DataFrame([
+        {
+            "prediction_status": "skipped_missing_data",
+            "player1_win_prob": float("nan"),
+            "player1_raw": "Skipped One",
+            "player2_raw": "Skipped Two",
+        },
+        {
+            "prediction_status": "success",
+            "player1_win_prob": float("nan"),
+            "player1_raw": "Invalid One",
+            "player2_raw": "Invalid Two",
+        },
+    ])
+
+    stats = orchestrator._log_all_predictions(rows, pd.DataFrame(), pd.DataFrame())
+
+    assert calls == []
+    assert stats["attempts"] == 0
+    assert stats["skipped_incomplete"] == 1
+
+
+def test_generate_predictions_reclassifies_nan_success_and_audits_it(monkeypatch):
+    import main
+
+    audits = []
+    monkeypatch.setattr(
+        main,
+        "log_skipped_live_match",
+        lambda **kwargs: audits.append(kwargs),
+    )
+    orchestrator = main.LiveBettingOrchestrator.__new__(
+        main.LiveBettingOrchestrator,
+    )
+    orchestrator.run_id = "run_invalid_prediction"
+    orchestrator.run_started_at = "2026-07-14T18:00:00+00:00"
+    orchestrator.predictor = SimpleNamespace(
+        predict_slate=lambda _features: pd.DataFrame([{
+            "prediction_status": "success",
+            "player1_win_prob": float("nan"),
+            "player2_win_prob": float("nan"),
+            "player1_raw": "Player One",
+            "player2_raw": "Player Two",
+            "run_id": "run_invalid_prediction",
+            "match_uid": "match_invalid_prediction",
+            "feature_snapshot_id": "feat_invalid_prediction",
+            "meta_match_date": "2026-07-14",
+            "meta_surface_input": "Hard",
+            "meta_level_input": "C",
+            "meta_round_input": "R32",
+        }]),
+    )
+    orchestrator.xgb_predictor = SimpleNamespace(
+        is_loaded=False, load_model=lambda: False,
+    )
+    orchestrator.rf_predictor = SimpleNamespace(
+        is_loaded=False, load_model=lambda: False,
+    )
+
+    result = orchestrator.generate_predictions(pd.DataFrame([{"feature": 1.0}]))
+
+    assert result.loc[0, "prediction_status"] == "failed"
+    assert result.loc[0, "error"] == "invalid_primary_probability"
+    assert len(audits) == 1
+    assert audits[0]["stage"] == "prediction_generation"
+    assert audits[0]["skip_reason_code"] == "prediction_output_invalid"
+
+
+def test_only_ok_feature_rows_receive_exact_snapshot_ids():
+    import main
+
+    common = {
+        "match_uid": "match_exact",
+        "run_id": "run_exact",
+        "p1": "Player One",
+        "p2": "Player Two",
+    }
+
+    assert main.exact_feature_snapshot_id(status="skip", **common) == ""
+    assert main.exact_feature_snapshot_id(status="error", **common) == ""
+    assert main.exact_feature_snapshot_id(status="ok", **common).startswith(
+        "feat_"
+    )
 
 
 def test_missing_match_start_is_an_inference_guard():

@@ -54,14 +54,56 @@ from scraping.atp_rankings_scraper import resolve_rankings, save_rankings
 BOVADA_TIMEZONE = ZoneInfo("America/New_York")
 
 
+def primary_prediction_probability(row) -> float | None:
+    """Return a finite, bounded primary probability or ``None``.
+
+    Pandas represents a missing probability as ``NaN``.  ``NaN`` is neither
+    ``None`` nor falsey, so truthiness fallbacks such as ``a or b`` can let a
+    failed inference reach the immutable prediction logger.  Keep the
+    validation in one place and fail closed before any operational snapshot or
+    decision path sees the row.
+    """
+    for field in ("player1_win_prob", "p1_win_prob"):
+        if field not in row:
+            continue
+        value = pd.to_numeric(row.get(field), errors="coerce")
+        if pd.notna(value):
+            probability = float(value)
+            if 0.0 <= probability <= 1.0:
+                return probability
+    return None
+
+
+def exact_feature_snapshot_id(
+    *, status: str, match_uid: str, run_id: str, p1: str, p2: str,
+) -> str:
+    """Issue an immutable feature ID only for an inference-ready vector.
+
+    Skip/guard rows remain durable diagnostic evidence through ``match_uid``
+    and ``build_status``.  Giving them an exact-vector ID is dishonest and can
+    collide when two observations of the same match fail for different
+    reasons inside one run.
+    """
+    if str(status or "").strip().lower() != "ok":
+        return ""
+    return build_feature_snapshot_id(match_uid, run_id, p1, p2)
+
+
 def prediction_terminal_status(predictions: pd.DataFrame) -> tuple[str, int, int]:
     """Return terminal health plus success/error counts for inference output."""
     total = len(predictions)
     if total == 0:
         return "no_predictions", 0, 0
-    if "prediction_status" not in predictions.columns:
-        return "success", total, 0
-    success = int((predictions["prediction_status"] == "success").sum())
+    declared_success = (
+        predictions["prediction_status"].eq("success")
+        if "prediction_status" in predictions.columns
+        else pd.Series(True, index=predictions.index)
+    )
+    valid_output = predictions.apply(
+        lambda row: primary_prediction_probability(row) is not None,
+        axis=1,
+    )
+    success = int((declared_success & valid_output).sum())
     errors = total - success
     if success == 0:
         return "no_predictions", 0, errors
@@ -734,11 +776,12 @@ class LiveBettingOrchestrator:
                 resolved_round,
                 resolved_surface,
             )
-            feature_snapshot_id = build_feature_snapshot_id(
-                match_uid,
-                self.run_id,
-                p1,
-                p2,
+            feature_snapshot_id = exact_feature_snapshot_id(
+                status=status,
+                match_uid=match_uid,
+                run_id=self.run_id,
+                p1=p1,
+                p2=p2,
             )
 
             # Metadata (not fed to model)
@@ -849,6 +892,48 @@ class LiveBettingOrchestrator:
 
         print("🎯 Generating predictions...")
         predictions_df = self.predictor.predict_slate(features_df)
+
+        # A predictor can return ``prediction_status=success`` while its
+        # numeric output is NaN (for example after a non-finite input leaks
+        # through a model wrapper).  Convert that contradiction into explicit
+        # failed inference evidence before secondary models, snapshots, or
+        # staking are considered.
+        if not predictions_df.empty:
+            declared_success = predictions_df.get(
+                "prediction_status",
+                pd.Series("failed", index=predictions_df.index),
+            ).eq("success")
+            invalid_success = declared_success & predictions_df.apply(
+                lambda row: primary_prediction_probability(row) is None,
+                axis=1,
+            )
+            for idx in predictions_df.index[invalid_success]:
+                row = predictions_df.loc[idx]
+                predictions_df.at[idx, "prediction_status"] = "failed"
+                predictions_df.at[idx, "error"] = "invalid_primary_probability"
+                log_skipped_live_match(
+                    run_id=row.get("run_id", self.run_id),
+                    run_started_at=self.run_started_at,
+                    stage="prediction_generation",
+                    skip_reason_code="prediction_output_invalid",
+                    skip_reason_detail="primary probability is missing, non-finite, or outside [0, 1]",
+                    match_uid=row.get("match_uid", ""),
+                    feature_snapshot_id=row.get("feature_snapshot_id", ""),
+                    match_date=row.get("meta_match_date", ""),
+                    match_start_time=row.get("match_time", ""),
+                    match_start_dt_local=row.get("match_start_dt_local", ""),
+                    match_start_at_utc=self.match_start_at_utc(row.get("match_time", "")),
+                    odds_scraped_at=row.get("timestamp", ""),
+                    tournament=row.get("event", ""),
+                    event_title=row.get("event", ""),
+                    surface=row.get("meta_surface_input", ""),
+                    level=row.get("meta_level_input", ""),
+                    round_code=row.get("meta_round_input", ""),
+                    resolver_source=row.get("meta_resolver_source", ""),
+                    p1=row.get("player1_normalized") or row.get("player1_raw", ""),
+                    p2=row.get("player2_normalized") or row.get("player2_raw", ""),
+                    defaulted_features=row.get("meta_defaulted_features", ""),
+                )
 
         # Also run XGBoost on each match
         if not self.xgb_predictor.is_loaded:
@@ -1031,6 +1116,10 @@ class LiveBettingOrchestrator:
             today = datetime.now().date().isoformat()
 
             for _, pred_row in predictions_df.iterrows():
+                # Feature/inference failures belong in skipped-live audit, not
+                # in the immutable successful-prediction snapshot stream.
+                if pred_row.get("prediction_status") != "success":
+                    continue
                 p1 = pred_row.get('player1_normalized') or pred_row.get('player1_raw', '')
                 p2 = pred_row.get('player2_normalized') or pred_row.get('player2_raw', '')
 
@@ -1041,8 +1130,12 @@ class LiveBettingOrchestrator:
                 if 'futures' in event.lower() or 'outright' in event.lower():
                     continue
 
-                model_p1 = pred_row.get('player1_win_prob') or pred_row.get('p1_win_prob')
+                model_p1 = primary_prediction_probability(pred_row)
                 if model_p1 is None:
+                    # Defensive backstop for direct callers that bypassed
+                    # generate_predictions().  Never serialize NaN as a model
+                    # snapshot merely because it is not ``None``.
+                    stats['skipped_incomplete'] += 1
                     continue
                 stats['attempts'] += 1
                 model_p2 = 1.0 - float(model_p1)
