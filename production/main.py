@@ -543,6 +543,27 @@ class LiveBettingOrchestrator:
 
         self.run_metrics['odds_rows_candidate'] = len(odds_df)
 
+        # Hydrate the slate as one deterministic canonical-ID batch before
+        # match iteration can spend the bounded ATP profile budget in whatever
+        # order the sportsbook happened to return rows.  The compatibility
+        # hydrator is non-fatal and preserves the existing completeness gate:
+        # missing/invalid heights still default-mark the feature snapshot.
+        try:
+            hydration = self.feature_engine.prehydrate_slate_profiles(
+                odds_df,
+                session_cache=session_cache,
+            )
+            if hydration.get("planned_players"):
+                print(
+                    "   📏 Height hydration: "
+                    f"{hydration.get('resolved_heights', 0)}/"
+                    f"{hydration.get('planned_players', 0)} resolved; "
+                    f"{hydration.get('browser_attempts', 0)} official-page attempts; "
+                    f"{hydration.get('remaining_budget', 0)} budget remaining"
+                )
+        except Exception as hydration_exc:
+            print(f"   ⚠️ Height pre-hydration skipped (non-fatal): {hydration_exc}")
+
         feature_rows = []
         for idx, row in odds_df.iterrows():
             p1 = row.get('player1_normalized') or row.get('player1_raw', '')

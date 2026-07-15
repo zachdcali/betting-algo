@@ -124,6 +124,16 @@ Legacy mode continues to read and write `data/atp_heights.json` and
 `data/atp_hands.json` exactly as before. Required mode does not consume those
 files. It reads one derived bundle:
 
+Before live feature construction, legacy mode now plans one bounded current-
+slate ATP profile batch. Players are deduplicated by canonical store ID;
+lookups that can complete a matchup are prioritized, Challenger precedes ITF,
+and unobserved/expired evidence precedes a fresh source-bound negative. One
+browser page is reused for up to 32 official-profile attempts by default
+(`ATP_PROFILE_RUN_HYDRATION_LIMIT`). A positive can enter this run-level lane
+only when the official URL, rendered full name, canonical player ID, body
+SHA-256, observed value, and physical range all bind. Every attempt persists
+its exact status; unresolved players remain default-marked and ineligible.
+
 - `eligibility_profiles_bundle.json` contains normalized name bindings,
   canonical player IDs, and accepted height/hand values;
 - `eligibility_cache_manifest.json` pins its generation, projection seal, row
