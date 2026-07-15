@@ -93,7 +93,7 @@ def _load_feature_state(aggregate_path) -> pd.DataFrame:
         build_status = authority.status or "unknown"
 
         def hand(prefix: str) -> str:
-            for label in ("U", "L", "R"):
+            for label in ("U", "L", "R", "A"):
                 value = pd.to_numeric(source.get(f"{prefix}_Hand_{label}"), errors="coerce")
                 if pd.notna(value) and float(value) == 1.0:
                     return label

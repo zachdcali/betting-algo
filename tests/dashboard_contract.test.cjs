@@ -48,7 +48,11 @@ test("current slate is snapshot and skipped-audit based, never canonical-latest 
   assert.match(client, /fetchAll\("dash_skipped_live_matches"[^\n]+currentRunFilter\)/);
   assert.match(client, /store\.snapshots/);
   assert.match(client, /store\.skipped/);
-  assert.match(client, /fetchAll\("dash_features", "feature_snapshot_id,run_id,sync_id,build_status,features_complete,feature_schema_sha256,feature_vector_sha256,feature_count"[^\n]+currentRunFilter\)/);
+  assert.match(client, /fetchAll\("dash_features", "feature_snapshot_id,run_id,sync_id,build_status,features_complete,p1_hand,p2_hand,feature_schema_sha256,feature_vector_sha256,feature_count"[^\n]+currentRunFilter\)/);
+  assert.match(client, /Logic\.isStructurallyValidFeatureRow\(row\)/);
+  assert.match(client, /Logic\.hydrateSnapshotHands\(/);
+  assert.match(client, /featureReferenceLoaded \? store\.acceptedFeatures\.profiles \|\| \[\] : \[\]/);
+  assert.match(client, /featureProfilesById\.get\(Logic\.exactFeatureId\(row\)\)/);
   assert.match(client, /Logic\.featureReferenceStatus\(row, acceptedFeatureIds, featureReferenceLoaded, seenFeatureIds\)/);
   assert.match(client, /Feature snapshot ID is not present in the published immutable feature store/);
   assert.match(client, /Logic\.numberOrNull\(row\.feature_count\) === 141/);

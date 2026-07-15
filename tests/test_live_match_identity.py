@@ -47,6 +47,8 @@ def _log(
     match_uid=None,
     feature_snapshot_id=None,
     features_complete=True,
+    p1_hand="",
+    p2_hand="",
 ):
     uid = match_uid or build_match_uid(
         p1, p2, match_date, event_title, round_code, surface,
@@ -73,8 +75,28 @@ def _log(
         model_version="1.2.3",
         nn_model_version="1.2.3",
         features_complete=features_complete,
+        p1_hand=p1_hand,
+        p2_hand=p2_hand,
     )
     return action, uid, snapshot
+
+
+def test_prediction_snapshot_preserves_hands_used_by_live_inference(
+    tmp_path, monkeypatch,
+):
+    _configure_paths(monkeypatch, tmp_path)
+
+    _log(
+        p1="Player One", p2="Player Two", run_id="run_hands",
+        p1_hand="R", p2_hand="U",
+    )
+
+    operational = pd.read_csv(PL.LOG_PATH, dtype=str, keep_default_na=False)
+    snapshots = pd.read_csv(
+        PL.SNAPSHOT_LOG_PATH, dtype=str, keep_default_na=False,
+    )
+    assert operational.loc[0, ["p1_hand", "p2_hand"]].tolist() == ["R", "U"]
+    assert snapshots.loc[0, ["p1_hand", "p2_hand"]].tolist() == ["R", "U"]
 
 
 def test_bovada_bucket_counts_are_not_live_match_identity():

@@ -20,6 +20,7 @@
     "no_predictions",
   ]);
   const DEGRADED_STATUSES = new Set(["no_odds", "degraded", "partial"]);
+  const HAND_CODES = new Set(["R", "L", "A", "U"]);
 
   function clean(value) {
     if (value === null || value === undefined) return "";
@@ -252,6 +253,50 @@
 
   function exactFeatureId(row) {
     return clean(row && (row.feature_snapshot_id || row.latest_feature_snapshot_id));
+  }
+
+  function normalizedHandCode(value) {
+    const code = clean(value).toUpperCase();
+    return HAND_CODES.has(code) ? code : "";
+  }
+
+  function handDisplayLabel(value) {
+    const code = normalizedHandCode(value);
+    if (code === "R") return "right-handed";
+    if (code === "L") return "left-handed";
+    if (code === "A") return "ambidextrous";
+    return "hand unknown";
+  }
+
+  function isStructurallyValidFeatureRow(row) {
+    return Boolean(
+      exactFeatureId(row)
+      && clean(row && row.build_status).toLowerCase() === "ok"
+      && clean(row && row.feature_schema_sha256)
+      && clean(row && row.feature_vector_sha256)
+      && numberOrNull(row && row.feature_count) === 141
+    );
+  }
+
+  function hydrateSnapshotHands(snapshotRow, featureRow) {
+    const snapshot = {
+      ...(snapshotRow || {}),
+      p1_hand: normalizedHandCode(snapshotRow && snapshotRow.p1_hand),
+      p2_hand: normalizedHandCode(snapshotRow && snapshotRow.p2_hand),
+    };
+    const snapshotFeatureId = exactFeatureId(snapshot);
+    if (
+      !snapshotFeatureId
+      || !isStructurallyValidFeatureRow(featureRow)
+      || exactFeatureId(featureRow) !== snapshotFeatureId
+    ) {
+      return snapshot;
+    }
+    return {
+      ...snapshot,
+      p1_hand: normalizedHandCode(featureRow.p1_hand),
+      p2_hand: normalizedHandCode(featureRow.p2_hand),
+    };
   }
 
   function slateEvidenceKey(row, fallback = "") {
@@ -568,7 +613,7 @@
         side,
         player: clean(row && row[`p${side}`]),
         rank: numberOrNull(row && row[`p${side}_rank`]),
-        hand: clean(row && row[`p${side}_hand`]),
+        hand: normalizedHandCode(row && row[`p${side}_hand`]),
         oddsDecimal,
         rawBreakEven,
         marketProbability: invert(row && row.market_p1_prob),
@@ -711,6 +756,10 @@
     parseMatchStart,
     validWinner,
     exactFeatureId,
+    normalizedHandCode,
+    handDisplayLabel,
+    isStructurallyValidFeatureRow,
+    hydrateSnapshotHands,
     slateEvidenceKey,
     acceptedSlateFunnel,
     featureReferenceStatus,

@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-15.1";
+  const BUILD_ID = "2026-07-15.2";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -69,7 +69,7 @@
     predictions: [],
     snapshots: [],
     skipped: [],
-    acceptedFeatures: { syncId: "", runId: "", ids: [], seenIds: [] },
+    acceptedFeatures: { syncId: "", runId: "", ids: [], seenIds: [], profiles: [] },
     runs: [],
     bets: [],
     metrics: [],
@@ -325,11 +325,12 @@
       refreshResource("skipped", () => currentRunFilter ? fetchAll("dash_skipped_live_matches", SKIPPED_COLUMNS, "logged_at.desc.nullslast,skip_event_id.asc", currentRunFilter) : Promise.resolve([])),
       refreshResource(
         "acceptedFeatures",
-        () => currentRunFilter ? fetchAll("dash_features", "feature_snapshot_id,run_id,sync_id,build_status,features_complete,feature_schema_sha256,feature_vector_sha256,feature_count", "feature_snapshot_id.asc", currentRunFilter) : Promise.resolve([]),
+        () => currentRunFilter ? fetchAll("dash_features", "feature_snapshot_id,run_id,sync_id,build_status,features_complete,p1_hand,p2_hand,feature_schema_sha256,feature_vector_sha256,feature_count", "feature_snapshot_id.asc", currentRunFilter) : Promise.resolve([]),
         (rows) => ({
           syncId,
           runId: acceptedRunId,
           seenIds: rows.map((row) => Logic.clean(row.feature_snapshot_id)).filter(Boolean),
+          profiles: rows.filter((row) => Logic.isStructurallyValidFeatureRow(row)),
           ids: rows.filter((row) => (
             Logic.clean(row.build_status).toLowerCase() === "ok"
             && Logic.isTrue(row.features_complete)
@@ -396,6 +397,10 @@
       && store.acceptedFeatures.runId === acceptedRunId;
     const acceptedFeatureIds = new Set(store.acceptedFeatures.ids || []);
     const seenFeatureIds = new Set(store.acceptedFeatures.seenIds || []);
+    const featureProfilesById = new Map(
+      (featureReferenceLoaded ? store.acceptedFeatures.profiles || [] : [])
+        .map((row) => [Logic.exactFeatureId(row), row]),
+    );
 
     const byMatch = new Map();
     store.snapshots
@@ -429,7 +434,10 @@
             : "Feature snapshot ID has not been referentially verified";
         classification = { ...classification, state: "blocked", reasons: Logic.mergeReasons(classification.reasons, [referenceReason]) };
       }
-      const entry = { row, classification, source: "snapshot", featureReference, auditRows };
+      const displayRow = Logic.hydrateSnapshotHands(
+        row, featureProfilesById.get(Logic.exactFeatureId(row)),
+      );
+      const entry = { row: displayRow, classification, source: "snapshot", featureReference, auditRows };
       if (classification.state === "eligible") buckets.eligible.push(entry);
       else if (classification.state === "blocked") buckets.blocked.push(entry);
       else if (classification.state === "expired") buckets.expired.push(entry);
@@ -791,7 +799,7 @@
         element("strong", null, playerRow.player || `Player ${playerRow.side}`),
         element("span", null, [
           playerRow.rank === null ? "unranked" : `rank ${formatNumber(playerRow.rank)}`,
-          playerRow.hand ? `${playerRow.hand}-hand` : "hand unknown",
+          Logic.handDisplayLabel(playerRow.hand),
         ].join(" · ")),
       );
       playerCell.appendChild(identity);
