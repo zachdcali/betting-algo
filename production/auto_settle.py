@@ -499,12 +499,50 @@ def _parse_match_start_time(match_start_time: str, match_date: str = "", now: da
     return None
 
 
+def _parse_exact_match_start_utc(row: pd.Series):
+    """Return the best immutable match start as an aware UTC timestamp.
+
+    ``latest_match_start_at_utc`` is the dashboard's corrected start clock.
+    Older rows may only have the original exact UTC field, while legacy rows
+    fall back to the Eastern display-string parser below.
+    """
+    for column in ("latest_match_start_at_utc", "match_start_at_utc"):
+        value = _clean_optional(row.get(column, ""))
+        if not value:
+            continue
+        parsed = pd.to_datetime(value, errors="coerce", utc=True)
+        if pd.notna(parsed):
+            return parsed
+    return None
+
+
 def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime | None = None) -> tuple[bool, str]:
+    exact_start = _parse_exact_match_start_utc(row)
+    if exact_start is not None:
+        reference = pd.Timestamp(now if now is not None else utc_now())
+        if reference.tzinfo is None:
+            reference = reference.tz_localize("UTC")
+        else:
+            reference = reference.tz_convert("UTC")
+        age_hours = (reference - exact_start).total_seconds() / 3600
+        if age_hours < min_age_hours:
+            return False, (
+                f"match_start_age_hours={age_hours:.1f} < "
+                f"min_age_hours={min_age_hours:.1f}"
+            )
+        return True, ""
+
     # Bovada start times are US/Eastern display strings; comparing them naive
     # against the runner's local clock made eligibility depend on which
     # machine ran settlement (UTC cloud vs local laptop disagreed).
     from zoneinfo import ZoneInfo
-    now = now or datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    if now is None:
+        now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    else:
+        reference = pd.Timestamp(now)
+        if reference.tzinfo is not None:
+            reference = reference.tz_convert("America/New_York").tz_localize(None)
+        now = reference.to_pydatetime()
     start_dt = _parse_match_start_time(
         str(row.get("match_start_time", "")),
         str(row.get("match_date", "")),
@@ -516,6 +554,122 @@ def _is_old_enough_to_settle(row: pd.Series, min_age_hours: float, now: datetime
     if age_hours < min_age_hours:
         return False, f"match_start_age_hours={age_hours:.1f} < min_age_hours={min_age_hours:.1f}"
     return True, ""
+
+
+def _prioritize_tracked_pending_matches(
+    pending: pd.DataFrame,
+    pending_bets: pd.DataFrame,
+) -> pd.DataFrame:
+    """Mark prediction rows that can settle currently reserved paper capital.
+
+    Direct match UIDs are preferred. A related UID counts only when the
+    prediction logger already classified the relationship as a canonical
+    alias; conflict or merely-related metadata must never broaden settlement.
+    """
+    prioritized = pending.copy()
+    prioritized["_tracked_bet_priority"] = False
+    if prioritized.empty or pending_bets.empty:
+        return prioritized
+
+    bet_uids = {
+        str(value).strip()
+        for value in pending_bets.get(
+            "match_uid", pd.Series(dtype=object)
+        ).dropna()
+        if str(value).strip()
+    }
+    if not bet_uids:
+        return prioritized
+
+    direct = prioritized.get(
+        "match_uid", pd.Series("", index=prioritized.index)
+    ).fillna("").astype(str).str.strip().isin(bet_uids)
+
+    def _has_safe_alias(row: pd.Series) -> bool:
+        if _clean_optional(row.get("identity_status")).lower() != "canonical_alias":
+            return False
+        aliases = {
+            value.strip()
+            for value in _clean_optional(
+                row.get("identity_related_match_uid")
+            ).split("|")
+            if value.strip()
+        }
+        return bool(aliases & bet_uids)
+
+    alias = prioritized.apply(_has_safe_alias, axis=1)
+    prioritized["_tracked_bet_priority"] = direct | alias
+    return prioritized
+
+
+def _order_settlement_candidates(
+    pending: pd.DataFrame,
+    pending_bets: pd.DataFrame,
+    max_candidates: int | None,
+) -> tuple[pd.DataFrame, int]:
+    """Order the bounded lookup queue, reserving capacity for tracked bets."""
+    if pending.empty:
+        return pending.copy(), 0
+
+    ordered = _prioritize_tracked_pending_matches(pending, pending_bets)
+    ordered["_start_sort"] = ordered.apply(
+        lambda row: _parse_exact_match_start_utc(row), axis=1
+    )
+    legacy_start = pd.to_datetime(
+        ordered.get("match_start_time", pd.Series("", index=ordered.index)),
+        errors="coerce",
+        utc=True,
+    )
+    ordered["_start_sort"] = ordered["_start_sort"].where(
+        ordered["_start_sort"].notna(), legacy_start
+    )
+    effective_date = ordered.apply(
+        lambda row: _clean_optional(row.get("latest_match_date"))
+        or _clean_optional(row.get("match_date")),
+        axis=1,
+    )
+    date_rank = pd.to_datetime(
+        effective_date,
+        errors="coerce",
+        utc=True,
+    ).map(lambda value: value.timestamp() if pd.notna(value) else float("inf"))
+    # Oldest tracked exposure first. Prediction-only backlog keeps the prior
+    # newest-day-first policy so ancient zombies do not crowd out likely fresh
+    # official results after all reserved-capital candidates are queued.
+    ordered["_queue_date_sort"] = [
+        rank if tracked else (-rank if math.isfinite(rank) else rank)
+        for rank, tracked in zip(
+            date_rank,
+            ordered["_tracked_bet_priority"].fillna(False).astype(bool),
+        )
+    ]
+    sort_cols = [
+        column for column in
+        ["_tracked_bet_priority", "_queue_date_sort", "_start_sort", "p1", "p2"]
+        if column in ordered.columns
+    ]
+    if sort_cols:
+        ascending = [
+            column != "_tracked_bet_priority"
+            for column in sort_cols
+        ]
+        ordered = ordered.sort_values(sort_cols, ascending=ascending)
+
+    # One compatible operational duplicate may survive durable hydration. It
+    # should consume one external lookup, not one per CSV row.
+    ordered = _dedupe_pending_match_uids(ordered)
+    if max_candidates and max_candidates > 0:
+        ordered = ordered.head(max_candidates)
+    tracked_count = int(
+        ordered["_tracked_bet_priority"].fillna(False).astype(bool).sum()
+    )
+    return (
+        ordered.drop(
+            columns=["_start_sort", "_queue_date_sort", "_tracked_bet_priority"],
+            errors="ignore",
+        ),
+        tracked_count,
+    )
 
 
 def _recently_attempted_identity_keys(
@@ -1083,6 +1237,9 @@ def run(
             upsert_run_history(summary)
         return summary
 
+    tracker = BetTracker(str(Path(__file__).parent / "logs"))
+    tracked_pending_bets = tracker.get_pending_bets()
+
     pending = df[df['actual_winner'].isna()].copy()
     pending, identity_gate_counts = _settlement_uid_gate(df, pending)
     if 'record_status' in pending.columns:
@@ -1125,25 +1282,13 @@ def run(
         pending = pending[~recently_attempted].copy()
         recent_attempt_count = before_recent_filter - len(pending)
 
+    tracked_candidate_count = 0
     if not pending.empty:
-        sort_cols = [col for col in ["match_date", "match_start_time", "p1", "p2"] if col in pending.columns]
-        # newest match DAYS first (zombies to the back), earliest STARTS first
-        # within a day (most likely finished). Start times must be parsed —
-        # string order puts "11:00 AM" before "2:00 PM" and let same-day ITF
-        # floods crowd out finished tour matches.
-        if "match_start_time" in pending.columns:
-            pending["_start_sort"] = pd.to_datetime(
-                pending["match_start_time"], errors="coerce")
-        sort_cols = [c for c in ["match_date", "_start_sort", "p1", "p2"] if c in pending.columns]
-        if sort_cols:
-            ascending = [c != "match_date" for c in sort_cols]
-            pending = pending.sort_values(sort_cols, ascending=ascending)
-            pending = pending.drop(columns=["_start_sort"], errors="ignore")
-        # One compatible operational duplicate may survive durable hydration.
-        # It should consume one external settlement lookup, not one per CSV row.
-        pending = _dedupe_pending_match_uids(pending)
-        if max_candidates and max_candidates > 0:
-            pending = pending.head(max_candidates)
+        pending, tracked_candidate_count = _order_settlement_candidates(
+            pending,
+            tracked_pending_bets,
+            max_candidates,
+        )
 
     summary['settlement_candidates'] = len(pending)
     if pending.empty:
@@ -1172,6 +1317,11 @@ def run(
         return summary
 
     print(f"Found {len(pending)} unsettled prediction(s) to check")
+    if tracked_candidate_count:
+        print(
+            f"Prioritized {tracked_candidate_count} candidate(s) linked to "
+            "pending paper exposure"
+        )
     if age_skip_reasons:
         print(f"Skipped {len(age_skip_reasons)} too-recent prediction(s) before hitting TA")
     if recent_attempt_count:
@@ -1181,7 +1331,6 @@ def run(
     # Load player mapping once
     calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
     calc.player_slug_map = TAFeatureCalculator._load_player_mapping(calc)
-    tracker = BetTracker(str(Path(__file__).parent / "logs"))
     session_cache = {}
     atp_results_cache = {}
 

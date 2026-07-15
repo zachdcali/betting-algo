@@ -540,6 +540,149 @@ def test_auto_settle_skips_rows_before_settlement_grace_period():
     assert "min_age_hours=18.0" in reason
 
 
+def test_auto_settle_prefers_latest_exact_utc_over_stale_display_time():
+    import auto_settle
+
+    row = pd.Series(
+        {
+            "match_start_time": "7/14/26 8:00 AM",
+            "match_start_at_utc": "2026-07-14T12:00:00Z",
+            "latest_match_start_at_utc": "2026-07-14T08:00:00Z",
+            "match_date": "2026-07-14",
+        }
+    )
+
+    eligible, reason = auto_settle._is_old_enough_to_settle(
+        row,
+        min_age_hours=18,
+        now=pd.Timestamp("2026-07-15T02:30:00Z").to_pydatetime(),
+    )
+
+    assert eligible is True
+    assert reason == ""
+
+
+def test_auto_settle_legacy_clock_accepts_an_aware_utc_reference():
+    import auto_settle
+
+    row = pd.Series(
+        {
+            "match_start_time": "5/13/26 6:00 AM",
+            "match_date": "2026-05-13",
+        }
+    )
+
+    eligible, reason = auto_settle._is_old_enough_to_settle(
+        row,
+        min_age_hours=18,
+        now=pd.Timestamp("2026-05-13T16:00:00Z").to_pydatetime(),
+    )
+
+    assert eligible is False
+    assert "match_start_age_hours=6.0" in reason
+
+
+def test_auto_settle_prioritizes_only_direct_or_canonical_alias_pending_bets():
+    import auto_settle
+
+    pending = pd.DataFrame(
+        [
+            {"match_uid": "prediction-only", "identity_status": "canonical"},
+            {"match_uid": "direct-bet", "identity_status": "canonical"},
+            {
+                "match_uid": "safe-new-uid",
+                "identity_status": "canonical_alias",
+                "identity_related_match_uid": "old-bet-uid",
+            },
+            {
+                "match_uid": "unsafe-new-uid",
+                "identity_status": "conflict",
+                "identity_related_match_uid": "old-bet-uid",
+            },
+        ]
+    )
+    pending_bets = pd.DataFrame(
+        {"match_uid": ["direct-bet", "old-bet-uid"]}
+    )
+
+    prioritized = auto_settle._prioritize_tracked_pending_matches(
+        pending,
+        pending_bets,
+    )
+
+    assert prioritized["_tracked_bet_priority"].tolist() == [False, True, True, False]
+
+
+def test_auto_settle_tracked_bet_priority_is_applied_before_candidate_cap():
+    import auto_settle
+
+    pending = pd.DataFrame(
+        [
+            {
+                "match_uid": "newer-prediction-only",
+                "match_date": "2026-07-15",
+                "match_start_at_utc": "2026-07-15T08:00:00Z",
+                "p1": "New A",
+                "p2": "New B",
+            },
+            {
+                "match_uid": "tracked-bet",
+                "match_date": "2026-07-14",
+                "match_start_at_utc": "2026-07-14T08:00:00Z",
+                "p1": "Tracked A",
+                "p2": "Tracked B",
+            },
+        ]
+    )
+    pending_bets = pd.DataFrame({"match_uid": ["tracked-bet"]})
+
+    ordered, tracked_count = auto_settle._order_settlement_candidates(
+        pending,
+        pending_bets,
+        max_candidates=1,
+    )
+
+    assert ordered["match_uid"].tolist() == ["tracked-bet"]
+    assert tracked_count == 1
+
+
+def test_auto_settle_orders_oldest_tracked_exposure_before_newer_tracked_rows():
+    import auto_settle
+
+    pending = pd.DataFrame(
+        [
+            {
+                "match_uid": "tracked-new",
+                "match_date": "2026-07-15",
+                "match_start_at_utc": "2026-07-15T08:00:00Z",
+            },
+            {
+                "match_uid": "tracked-old",
+                "match_date": "2026-07-13",
+                "latest_match_date": "2026-07-14",
+                "match_start_at_utc": "2026-07-14T08:00:00Z",
+            },
+            {
+                "match_uid": "prediction-only",
+                "match_date": "2026-07-16",
+                "match_start_at_utc": "2026-07-16T08:00:00Z",
+            },
+        ]
+    )
+    pending_bets = pd.DataFrame(
+        {"match_uid": ["tracked-new", "tracked-old"]}
+    )
+
+    ordered, tracked_count = auto_settle._order_settlement_candidates(
+        pending,
+        pending_bets,
+        max_candidates=2,
+    )
+
+    assert ordered["match_uid"].tolist() == ["tracked-old", "tracked-new"]
+    assert tracked_count == 2
+
+
 def test_auto_settle_recent_attempt_backoff_ignores_dry_runs(tmp_path):
     import auto_settle
 

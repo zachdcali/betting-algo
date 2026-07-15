@@ -265,8 +265,115 @@ def load_odds_history(prod_dir: str) -> pd.DataFrame | None:
     return pd.read_csv(path, low_memory=False) if os.path.exists(path) else None
 
 
+def _oriented_player_keys(row: pd.Series | dict) -> tuple[str, str] | None:
+    """Return normalized (player1, player2), or no identity when incomplete."""
+    from logging_utils import normalize_name
+
+    p1 = normalize_name(
+        _identity_text(row.get("p1"))
+        or _identity_text(row.get("player1_raw"))
+    )
+    p2 = normalize_name(
+        _identity_text(row.get("p2"))
+        or _identity_text(row.get("player2_raw"))
+    )
+    if not p1 or not p2 or p1 == p2:
+        return None
+    return p1, p2
+
+
+def _semantic_match_key(row: pd.Series | dict) -> tuple[str, str, str, str] | None:
+    """Build the conservative evaluation identity, excluding volatile metadata.
+
+    Round and surface are intentionally absent: they are useful match metadata,
+    but changes to either have historically produced multiple operational UIDs
+    for one match.  Missing player, date, or event evidence returns ``None`` so
+    legacy/incomplete rows are never fuzzy-collapsed.
+    """
+    from logging_utils import canonicalize_live_event_key
+
+    players = _oriented_player_keys(row)
+    if players is None:
+        return None
+
+    date_key = ""
+    # The latest field is the operational correction/enrichment, while the
+    # original field remains the fallback for historical rows.
+    for field in ("latest_match_date", "match_date"):
+        value = _identity_text(row.get(field))
+        if not value:
+            continue
+        parsed = pd.to_datetime(value, errors="coerce")
+        if not pd.isna(parsed):
+            date_key = parsed.date().isoformat()
+            break
+
+    event_value = (
+        _identity_text(row.get("identity_event_key"))
+        or _identity_text(row.get("tournament"))
+    )
+    event_key = canonicalize_live_event_key(event_value)
+    if not date_key or not event_key:
+        return None
+
+    left, right = sorted(players)
+    return left, right, date_key, event_key
+
+
+def _semantic_representative_rank(row: pd.Series | dict) -> tuple[int, ...]:
+    """Rank equivalent UIDs by decision-grade evidence, never model results.
+
+    The fields are ordered from strongest lineage/cohort guarantees through
+    usable model coverage and canonical identity metadata.  Probability values
+    affect only whether evidence exists, not whether it was correct. UID text is
+    intentionally absent and is used only as the final deterministic tie-break.
+    """
+    truthy = {"true", "1", "1.0", "t", "yes"}
+
+    def as_bool(value) -> bool:
+        return str(value).strip().lower() in truthy
+
+    verified = as_bool(row.get("feature_snapshot_verified"))
+    complete = as_bool(row.get("features_complete"))
+    snapshot_v2 = (
+        _identity_text(row.get("logging_quality")).lower() == "snapshot_v2"
+    )
+    exact_rescore = (
+        _identity_text(row.get("rescore_quality")).lower()
+        == "exact_feature_snapshot"
+    )
+    decision_grade = verified and complete and snapshot_v2 and exact_rescore
+    model_coverage = sum(
+        _coerce_probability(row.get(column)) is not None
+        for column in MODEL_PROB_COLS.values()
+    )
+    identity_status = _identity_text(row.get("identity_status")).lower()
+    canonical_rank = {
+        "canonical_alias": 2,
+        "canonical": 1,
+    }.get(identity_status, 0)
+    return (
+        int(decision_grade),
+        int(verified),
+        int(complete),
+        int(snapshot_v2),
+        int(exact_rescore),
+        model_coverage,
+        canonical_rank,
+    )
+
+
 def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
-    """Authoritative match_uid -> y1 (1 if player1 won). Conflict-free, deduped."""
+    """Authoritative representative match_uid -> oriented binary outcome.
+
+    A complete semantic identity is normalized unordered players + effective
+    match date + canonical event key. Equivalent operational UIDs contribute
+    exactly one deterministic representative, selected by decision-grade
+    lineage/coverage quality with UID text only as the final tie-break. A
+    contradictory winner for that same semantic match excludes the whole group.
+    Rows without a complete semantic identity retain the legacy per-UID,
+    fail-closed behavior and are never merged across UIDs.
+    """
     winner = pd.to_numeric(pred_log["actual_winner"], errors="coerce")
     # Only explicit player 1/2 outcomes are ground truth. Historical void
     # sentinels such as -1 must never become an implicit player-two win.
@@ -279,14 +386,95 @@ def build_ground_truth(pred_log: pd.DataFrame) -> pd.Series:
         ].dropna()
     )
     identity_eligible = ~pred_log["match_uid"].isin(terminal_uids)
-    s = pred_log[winner.isin([1, 2]) & identity_eligible].copy()
-    s["y1"] = (pd.to_numeric(s["actual_winner"], errors="coerce") == 1).astype(int)
-    nunique = s.groupby("match_uid")["y1"].nunique()
-    consistent = nunique[nunique == 1].index
-    # keep="last" = the most recently logged row, matching the operational
-    # "latest prediction wins" semantics and the DB's INSERT OR REPLACE.
-    s = s[s["match_uid"].isin(consistent)].drop_duplicates("match_uid", keep="last")
-    return s.set_index("match_uid")["y1"]
+    settled = pred_log[winner.isin([1, 2]) & identity_eligible].copy()
+    settled = settled[
+        settled["match_uid"].map(_identity_text).ne("")
+    ]
+
+    # build_scored_frame uses the last operational row for each retained UID.
+    # Derive y1 against that exact row orientation, not whichever settlement
+    # observation happened to be encountered first.
+    latest_by_uid = pred_log.drop_duplicates("match_uid", keep="last").set_index(
+        "match_uid", drop=False
+    )
+    semantic_candidates: list[dict] = []
+    conflicted_semantic_keys: set[tuple[str, str, str, str]] = set()
+    legacy_results: dict[str, int] = {}
+
+    for uid, uid_rows in settled.groupby("match_uid", sort=True):
+        semantic_keys = [_semantic_match_key(row) for _, row in uid_rows.iterrows()]
+        complete_semantic = [key for key in semantic_keys if key is not None]
+
+        if complete_semantic:
+            # Partially described or semantically reused UIDs are not safe
+            # evidence. They must not fall back to positional winner integers.
+            if (
+                len(complete_semantic) != len(uid_rows)
+                or len(set(complete_semantic)) != 1
+            ):
+                conflicted_semantic_keys.update(complete_semantic)
+                continue
+            winner_players = set()
+            valid_outcomes = True
+            for (_, row), semantic_key in zip(uid_rows.iterrows(), semantic_keys):
+                players = _oriented_player_keys(row)
+                outcome = int(pd.to_numeric(row.get("actual_winner"), errors="coerce"))
+                if players is None or semantic_key is None:
+                    valid_outcomes = False
+                    break
+                winner_players.add(players[0] if outcome == 1 else players[1])
+            if not valid_outcomes or len(winner_players) != 1:
+                conflicted_semantic_keys.update(complete_semantic)
+                continue
+
+            reference = latest_by_uid.loc[uid]
+            reference_players = _oriented_player_keys(reference)
+            semantic_key = complete_semantic[0]
+            winner_player = next(iter(winner_players))
+            if (
+                reference_players is None
+                or _semantic_match_key(reference) != semantic_key
+                or winner_player not in reference_players
+            ):
+                conflicted_semantic_keys.add(semantic_key)
+                continue
+            semantic_candidates.append({
+                "match_uid": uid,
+                "semantic_key": semantic_key,
+                "winner_player": winner_player,
+                "y1": int(winner_player == reference_players[0]),
+                "representative_rank": _semantic_representative_rank(reference),
+            })
+            continue
+
+        # Legacy rows without enough semantic evidence keep the historical
+        # per-UID rule. Opposite positional outcomes remain a conflict.
+        positional = (
+            pd.to_numeric(uid_rows["actual_winner"], errors="coerce") == 1
+        ).astype(int)
+        if positional.nunique() == 1:
+            legacy_results[str(uid)] = int(positional.iloc[-1])
+
+    semantic_results: dict[str, int] = {}
+    if semantic_candidates:
+        candidates = pd.DataFrame(semantic_candidates)
+        for semantic_key, group in candidates.groupby("semantic_key", sort=True):
+            if semantic_key in conflicted_semantic_keys:
+                continue
+            # Resolve outcomes in canonical player space before choosing a UID;
+            # this is what makes reversed P1/P2 ordering safe.
+            if group["winner_player"].nunique() != 1:
+                continue
+            best_rank = max(group["representative_rank"])
+            safest = group[group["representative_rank"] == best_rank]
+            representative_uid = min(safest["match_uid"].astype(str))
+            representative = group[group["match_uid"] == representative_uid].iloc[0]
+            semantic_results[representative_uid] = int(representative["y1"])
+
+    results = {**legacy_results, **semantic_results}
+    ground_truth = pd.Series(results, dtype="int64", name="y1")
+    ground_truth.index.name = "match_uid"
+    return ground_truth.sort_index()
 
 
 def _coerce_bool(series: pd.Series) -> pd.Series:
