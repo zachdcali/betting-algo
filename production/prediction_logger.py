@@ -75,6 +75,7 @@ SNAPSHOT_COLUMNS = [
     'p1', 'p2',
     'run_id', 'match_uid', 'feature_snapshot_id',
     'p1_rank', 'p2_rank',
+    'p1_hand', 'p2_hand',
     'model_p1_prob', 'model_p2_prob',
     'xgb_p1_prob', 'xgb_p2_prob',
     'rf_p1_prob', 'rf_p2_prob',

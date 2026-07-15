@@ -112,6 +112,48 @@ test("feature IDs are distinguished from referentially verified feature rows", (
   assert.equal(Logic.featureReferenceStatus({ ...row, feature_snapshot_id: "" }, new Set(), true), "missing_id");
 });
 
+test("snapshot hands hydrate only from the exact structurally valid feature row", () => {
+  const snapshot = completeSlateRow({ p1_hand: "", p2_hand: "" });
+  const feature = {
+    feature_snapshot_id: "feat_exact_1",
+    build_status: "ok",
+    features_complete: false,
+    feature_schema_sha256: "schema-hash",
+    feature_vector_sha256: "vector-hash",
+    feature_count: "141",
+    p1_hand: "r",
+    p2_hand: "U",
+  };
+
+  assert.equal(Logic.isStructurallyValidFeatureRow(feature), true);
+  assert.deepEqual(
+    Logic.hydrateSnapshotHands(snapshot, feature),
+    { ...snapshot, p1_hand: "R", p2_hand: "U" },
+  );
+  assert.deepEqual(
+    Logic.hydrateSnapshotHands(snapshot, { ...feature, feature_snapshot_id: "feat_other" }),
+    snapshot,
+  );
+  assert.deepEqual(
+    Logic.hydrateSnapshotHands(snapshot, { ...feature, feature_count: 140 }),
+    snapshot,
+  );
+  assert.deepEqual(
+    Logic.hydrateSnapshotHands(snapshot, { ...feature, p1_hand: "right", p2_hand: "L" }),
+    { ...snapshot, p1_hand: "", p2_hand: "L" },
+  );
+  assert.deepEqual(
+    Logic.hydrateSnapshotHands({ ...snapshot, p1_hand: "R", p2_hand: "invalid" }, null),
+    { ...snapshot, p1_hand: "R", p2_hand: "" },
+  );
+  assert.equal(Logic.normalizedHandCode("a"), "A");
+  assert.equal(Logic.handDisplayLabel("R"), "right-handed");
+  assert.equal(Logic.handDisplayLabel("L"), "left-handed");
+  assert.equal(Logic.handDisplayLabel("A"), "ambidextrous");
+  assert.equal(Logic.handDisplayLabel("U"), "hand unknown");
+  assert.equal(Logic.handDisplayLabel("invalid"), "hand unknown");
+});
+
 test("slate fallback identity requires both players", () => {
   assert.equal(
     Logic.slateEvidenceKey({ p1: "Alpha", p2: "Beta", match_date: "2026-07-13" }, "both"),
@@ -406,6 +448,10 @@ test("two-player decision rows preserve player orientation and invert every P1 p
   assert.equal(missingDriver[1].nnProbability, null);
   assert.equal(missingDriver[0].edge, null);
   assert.equal(missingDriver[1].edge, null);
+  assert.equal(
+    Logic.playerDecisionRows(completeSlateRow({ p1_hand: "right" }))[0].hand,
+    "",
+  );
 });
 
 test("EV edge bands honor the configured two-point gate and increasing intensity", () => {

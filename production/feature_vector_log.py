@@ -54,9 +54,9 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
     # surface handedness as first-class columns (dashboard slate badges unknown
     # hand — a missingness proxy the models lean on; see FEATURE_AUDIT.md)
     def _hand(pref):
-        if float(features.get(f"{pref}_Hand_U", 0) or 0) == 1: return "U"
-        if float(features.get(f"{pref}_Hand_L", 0) or 0) == 1: return "L"
-        if float(features.get(f"{pref}_Hand_R", 0) or 0) == 1: return "R"
+        for code in ("U", "L", "R", "A"):
+            if float(features.get(f"{pref}_Hand_{code}", 0) or 0) == 1:
+                return code
         return ""
     row = {
         "p1": str(p1).strip(), "p2": str(p2).strip(),

@@ -162,14 +162,11 @@ def _itf_surface(event_label: str, session_cache: dict):
         return None
 
 def _hand_of(pred_row: dict, pref: str) -> str:
-    """Handedness one-hot -> 'R'/'L'/'U' for the prediction row (dashboard badge)."""
+    """Handedness one-hot -> canonical code for the prediction snapshot."""
     try:
-        if float(pred_row.get(f"{pref}_Hand_U", 0) or 0) == 1:
-            return "U"
-        if float(pred_row.get(f"{pref}_Hand_L", 0) or 0) == 1:
-            return "L"
-        if float(pred_row.get(f"{pref}_Hand_R", 0) or 0) == 1:
-            return "R"
+        for code in ("U", "L", "R", "A"):
+            if float(pred_row.get(f"{pref}_Hand_{code}", 0) or 0) == 1:
+                return code
     except (TypeError, ValueError):
         pass
     return ""

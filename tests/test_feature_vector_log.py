@@ -30,6 +30,7 @@ def test_feature_vectors_are_immutable_and_keyed_by_snapshot(tmp_path, monkeypat
     monkeypatch.setattr(feature_log, "PATH", str(path))
     features = _features(
         Player1_Rank=10, P1_Hand_U=0, P1_Hand_R=1,
+        P2_Hand_U=0, P2_Hand_A=1,
         _defaulted_features="",
     )
 
@@ -51,6 +52,8 @@ def test_feature_vectors_are_immutable_and_keyed_by_snapshot(tmp_path, monkeypat
     assert list(rows["run_id"]) == ["run_1", "run_2"]
     assert rows.loc[0, "match_uid"] == "match_1"
     assert rows.loc[0, "feature_count"] == 141
+    assert rows.loc[0, "p1_hand"] == "R"
+    assert rows.loc[0, "p2_hand"] == "A"
     assert len(rows.loc[0, "feature_schema_sha256"]) == 64
     assert len(rows.loc[0, "feature_vector_sha256"]) == 64
 
