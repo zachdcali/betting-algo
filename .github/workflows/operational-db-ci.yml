@@ -59,6 +59,7 @@ jobs:
           tests/test_eligibility_provenance.py
           tests/test_eligibility_cache_export.py
           tests/test_eligibility_cutover_gates.py
+          tests/test_height_hydration.py
 
       - name: Verify artifact, replay, lineage, and dashboard boundaries
         run: >-

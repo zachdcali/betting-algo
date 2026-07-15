@@ -260,6 +260,7 @@ def _positive_cache_field_is_evidenced(
     value,
     source_uri: str,
     now: Optional[datetime] = None,
+    canonical_player_id: Optional[int] = None,
 ) -> bool:
     """Validate opt-in evidence for one legacy positive cache field."""
     if field not in {"height_cm", "hand"} or not isinstance(entry, dict):
@@ -273,6 +274,12 @@ def _positive_cache_field_is_evidenced(
         return False
     if entry.get("identity_binding") != OFFICIAL_PAGE_IDENTITY_BINDING:
         return False
+    if canonical_player_id is not None:
+        try:
+            if int(entry.get("canonical_player_id")) != int(canonical_player_id):
+                return False
+        except (TypeError, ValueError, OverflowError):
+            return False
     if entry.get("status") not in {"resolved", "partial"}:
         return False
     content_hash = str(entry.get("source_content_sha256", "")).lower()
@@ -309,13 +316,14 @@ def _record_lookup(
     status: str,
     source_content_sha256: str = "",
     identity_binding: str = "",
+    canonical_player_id: Optional[int] = None,
 ) -> None:
     missing = []
     if height_cm is None:
         missing.append("height_cm")
     if hand is None:
         missing.append("hand")
-    metadata[key] = {
+    record = {
         "source_uri": source_uri,
         "observed_at": _utc_now().isoformat(timespec="seconds"),
         "status": status,
@@ -333,6 +341,12 @@ def _record_lookup(
             else {}
         ),
     }
+    if canonical_player_id is not None:
+        player_id = int(canonical_player_id)
+        if player_id <= 0:
+            raise ValueError("canonical_player_id must be positive")
+        record["canonical_player_id"] = player_id
+    metadata[key] = record
 
 
 def _provenance_required() -> bool:
@@ -484,6 +498,87 @@ def _scrape_profile(page, profile_url: str) -> Optional[int]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def profile_lookup_evidence_states(
+    player_names: list,
+    *,
+    now: Optional[datetime] = None,
+    require_evidenced_positives: bool = False,
+    canonical_player_ids: Optional[dict] = None,
+) -> dict:
+    """Describe current height evidence without fetching or mutating anything.
+
+    The run-level planner uses these exact source-bound states to order work.
+    Fresh negative evidence remains authoritative until its TTL expires; an
+    unobserved or expired source can enter the bounded browser batch.
+    """
+    if _provenance_required():
+        bundle = _load_required_bundle()
+        states = {}
+        for name in player_names:
+            profile = None if bundle is None else bundle.profile_for(name)
+            states[name] = {
+                "state": (
+                    "resolved"
+                    if profile is not None
+                    and _valid_cached_height(profile.get("height_cm")) is not None
+                    else "fresh_negative"
+                ),
+                "source_uri": "accepted-eligibility-bundle",
+                "has_profile_url": False,
+            }
+        return states
+
+    h_cache = _load_cache()
+    metadata = _load_profile_lookup_meta()
+    url_map = _load_url_map()
+    revalidate_positive = (
+        _revalidate_legacy_positives() or require_evidenced_positives
+    )
+    states = {}
+    for name in player_names:
+        key = _cache_key(name)
+        expected_player_id = (canonical_player_ids or {}).get(key)
+        bio_url = _find_profile_url(name, url_map)
+        source_uri = _absolute_profile_url(bio_url, key)
+        entry = metadata.get(key)
+        cached_height = _valid_cached_height(h_cache.get(key))
+        positive_is_accepted = cached_height is not None and (
+            not revalidate_positive
+            or _positive_cache_field_is_evidenced(
+                entry,
+                field="height_cm",
+                value=cached_height,
+                source_uri=source_uri,
+                now=now,
+                canonical_player_id=expected_player_id,
+            )
+        )
+        if positive_is_accepted:
+            state = "resolved"
+        elif _negative_cache_is_fresh(
+            entry,
+            source_uri=source_uri,
+            missing_fields={"height_cm"},
+            now=now,
+        ):
+            state = "fresh_negative"
+        elif (
+            isinstance(entry, dict)
+            and entry.get("source_uri") == source_uri
+            and "height_cm" in {
+                str(field) for field in (entry.get("missing_fields") or [])
+            }
+        ):
+            state = "expired_negative"
+        else:
+            state = "unobserved"
+        states[name] = {
+            "state": state,
+            "source_uri": source_uri,
+            "has_profile_url": bool(bio_url),
+        }
+    return states
 
 def get_height_cm(
     player_name: str,
@@ -641,10 +736,26 @@ def batch_get_profiles(
             }
         return results
 
+    state = refresh_state if refresh_state is not None else {}
+    canonical_player_ids = state.get("canonical_player_ids") or {}
+    if not isinstance(canonical_player_ids, dict):
+        canonical_player_ids = {}
+
+    def _canonical_player_id(key: str) -> Optional[int]:
+        value = canonical_player_ids.get(key)
+        try:
+            player_id = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return player_id if player_id > 0 else None
+
     h_cache = _load_cache()
     hd_cache = _load_hands_cache()
     metadata = _load_profile_lookup_meta()
-    revalidate_positive = _revalidate_legacy_positives()
+    revalidate_positive = (
+        _revalidate_legacy_positives()
+        or bool(state.get("require_evidenced_positives"))
+    )
     url_map = _load_url_map() if revalidate_positive else None
     results: dict = {}
     incomplete = []
@@ -662,6 +773,7 @@ def batch_get_profiles(
                 field="height_cm",
                 value=height,
                 source_uri=source_uri,
+                canonical_player_id=_canonical_player_id(key),
             ):
                 height = None
             if hand is not None and not _positive_cache_field_is_evidenced(
@@ -669,6 +781,7 @@ def batch_get_profiles(
                 field="hand",
                 value=hand,
                 source_uri=source_uri,
+                canonical_player_id=_canonical_player_id(key),
             ):
                 hand = None
         if height is not None and hand is not None:
@@ -683,7 +796,6 @@ def batch_get_profiles(
         url_map = _load_url_map()
     needs_scraping = []
     no_url = []
-    state = refresh_state if refresh_state is not None else {}
     if "remaining" not in state:
         state["remaining"] = _negative_refresh_limit()
     try:
@@ -694,6 +806,10 @@ def batch_get_profiles(
     if not isinstance(attempted_keys, set):
         attempted_keys = set(attempted_keys or ())
         state["attempted_keys"] = attempted_keys
+    allowed_keys = state.get("allowed_keys")
+    if allowed_keys is not None and not isinstance(allowed_keys, set):
+        allowed_keys = set(allowed_keys or ())
+        state["allowed_keys"] = allowed_keys
     for name, key, height, hand in incomplete:
         bio_url = _find_profile_url(name, url_map)
         source_uri = _absolute_profile_url(bio_url, key)
@@ -709,7 +825,11 @@ def batch_get_profiles(
             results[name] = {"height_cm": height, "hand": hand}
         elif not bio_url:
             no_url.append((name, key, height, hand, source_uri))
-        elif refresh_slots > 0 and key not in attempted_keys:
+        elif (
+            refresh_slots > 0
+            and key not in attempted_keys
+            and (allowed_keys is None or key in allowed_keys)
+        ):
             needs_scraping.append((name, key, height, hand, bio_url, source_uri))
             attempted_keys.add(key)
             refresh_slots -= 1
@@ -733,6 +853,7 @@ def batch_get_profiles(
             height_cm=height,
             hand=hand,
             status="no_url",
+            canonical_player_id=_canonical_player_id(key),
         )
         if verbose:
             print(f"  ATP: no URL for '{name}' — skipping profile lookup")
@@ -760,6 +881,7 @@ def batch_get_profiles(
                         height_cm=cached_height,
                         hand=cached_hand,
                         status="fetch_error",
+                        canonical_player_id=_canonical_player_id(key),
                     )
                     continue
                 if not _profile_text_matches_name(text, name):
@@ -777,6 +899,7 @@ def batch_get_profiles(
                         source_content_sha256=sha256(
                             text.encode("utf-8")
                         ).hexdigest(),
+                        canonical_player_id=_canonical_player_id(key),
                     )
                     continue
                 observed_height = _extract_height_cm(text)
@@ -805,6 +928,7 @@ def batch_get_profiles(
                         text.encode("utf-8")
                     ).hexdigest(),
                     identity_binding=OFFICIAL_PAGE_IDENTITY_BINDING,
+                    canonical_player_id=_canonical_player_id(key),
                 )
                 if verbose:
                     print(f"    {name}: {h or '?'}cm hand={hd or '?'}")
@@ -825,6 +949,7 @@ def batch_get_profiles(
                     height_cm=height,
                     hand=hand,
                     status="fetch_error",
+                    canonical_player_id=_canonical_player_id(key),
                 )
         finally:
             if pg is not None:

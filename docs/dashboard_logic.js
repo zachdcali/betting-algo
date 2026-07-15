@@ -532,6 +532,110 @@
     return status || "unknown";
   }
 
+  function currentAccountState(bankrollRows, bets, minStake = 1, trusted = true) {
+    const statuses = (bets || []).map((bet) => clean(bet && bet.status).toLowerCase());
+    const pendingCount = statuses.filter((status) => status === "pending").length;
+    const settledCount = statuses.filter((status) => status === "settled").length;
+    const pendingExposure = (bets || []).reduce((total, bet, index) => {
+      if (statuses[index] !== "pending") return total;
+      const stake = numberOrNull(bet && bet.stake);
+      return total + (stake !== null && stake >= 0 ? stake : 0);
+    }, 0);
+    if (!trusted) {
+      return {
+        verified: false,
+        equity: null,
+        pendingExposure: null,
+        available: null,
+        gate: "unverified",
+        observedAt: null,
+        reason: "manifest generation or account resources are unverified",
+      };
+    }
+    const tolerance = 1e-6;
+    const candidates = (bankrollRows || [])
+      .map((row) => ({
+        row,
+        at: parseTimestamp(row && row.timestamp),
+        equity: numberOrNull(row && (row.account_equity ?? row.bankroll)),
+        reportedPending: numberOrNull(row && row.pending_exposure),
+        reportedAvailable: numberOrNull(row && row.available_bankroll),
+        pendingCount: numberOrNull(row && row.num_pending_bets),
+        settledCount: numberOrNull(row && row.num_settled_bets),
+        rowKey: clean(row && row.dashboard_row_key),
+      }))
+      .filter((entry) => (
+        entry.equity !== null
+        && entry.reportedPending !== null
+        && Math.abs(entry.reportedPending - pendingExposure) <= tolerance
+        && entry.pendingCount === pendingCount
+        && entry.settledCount === settledCount
+      ))
+      .sort((a, b) => (
+        (b.at ?? Number.NEGATIVE_INFINITY) - (a.at ?? Number.NEGATIVE_INFINITY)
+        || b.rowKey.localeCompare(a.rowKey)
+      ));
+    const authority = candidates[0] || null;
+    if (!authority) {
+      return {
+        verified: false,
+        equity: null,
+        pendingExposure,
+        available: null,
+        gate: "unverified",
+        observedAt: null,
+        reason: "no bankroll row agrees with the manifest-pinned bet counts and pending stakes",
+      };
+    }
+    const available = Math.max(0, authority.equity - pendingExposure);
+    const availableAgrees = (
+      authority.reportedAvailable === null
+      || Math.abs(authority.reportedAvailable - available) <= tolerance
+    );
+    if (!availableAgrees) {
+      return {
+        verified: false,
+        equity: authority.equity,
+        pendingExposure,
+        available: null,
+        gate: "unverified",
+        observedAt: authority.at,
+        reason: "bankroll row available capital disagrees with equity minus pending exposure",
+      };
+    }
+    return {
+      verified: true,
+      equity: authority.equity,
+      pendingExposure,
+      available,
+      gate: available < minStake ? "blocked pending exposure" : "open",
+      observedAt: authority.at,
+      reason: "manifest-pinned bankroll row reconciled to bet counts and pending stakes",
+    };
+  }
+
+  function generationTrustIssue(state, countsOk, resourceNames = []) {
+    const current = state || {};
+    const errors = current.errors || {};
+    if (clean(errors.manifest)) return `manifest refresh failed: ${clean(errors.manifest)}`;
+    if (clean(errors.generation)) return `generation refresh failed: ${clean(errors.generation)}`;
+    const manifest = current.manifest || null;
+    if (!manifest) return "sync manifest is unavailable";
+    const status = clean(manifest.status).toLowerCase();
+    if (status !== "success") return `sync manifest status is ${status || "missing"}`;
+    const manifestSyncId = clean(manifest.sync_id);
+    const loadedSyncId = clean(current.loadedSyncId);
+    if (!manifestSyncId) return "sync manifest ID is missing";
+    if (!loadedSyncId || loadedSyncId !== manifestSyncId) {
+      return `loaded generation does not match manifest (${loadedSyncId || "none"} vs ${manifestSyncId})`;
+    }
+    if (!countsOk) return "manifest generation counts are unverified";
+    for (const name of resourceNames || []) {
+      if (clean(errors[name])) return `${name} refresh failed: ${clean(errors[name])}`;
+    }
+    return "";
+  }
+
   function pendingBetSlaStatus(bet, prediction, now = Date.now(), settlementHours = 18, unzonedHours = 72) {
     if (normalizeBetOutcome(bet) !== "pending") return { state: "not_pending", deadline: null, basis: "not pending" };
     const nowMs = now instanceof Date ? now.getTime() : Number(now);
@@ -558,7 +662,7 @@
     return { state: "unverified", deadline: null, basis: "missing match and placement time" };
   }
 
-  function nextScheduledRun(now = Date.now()) {
+  function nextScheduleTarget(now = Date.now()) {
     const nowDate = now instanceof Date ? new Date(now.getTime()) : new Date(now);
     const candidates = [];
     for (const offsetHours of [0, 1]) {
@@ -770,8 +874,10 @@
     classifySlateEvidence,
     primaryBlockerGroup,
     normalizeBetOutcome,
+    currentAccountState,
+    generationTrustIssue,
     pendingBetSlaStatus,
-    nextScheduledRun,
+    nextScheduleTarget,
     compareManifestCounts,
     playerDecisionRows,
     edgeBand,

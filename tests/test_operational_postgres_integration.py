@@ -76,6 +76,51 @@ def _test_url() -> str:
     return DATABASE_URL
 
 
+def test_feature_profile_write_through_commits_after_read_and_connection_closes(
+    monkeypatch,
+):
+    """Exercise the run-owned connection with real psycopg transaction state."""
+    import psycopg
+    from psycopg.pq import TransactionStatus
+
+    import canonical_store
+    from features.ta_feature_calculator import TAFeatureCalculator
+
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    connection = psycopg.connect(_test_url())
+    connection.execute(
+        """CREATE TEMP TABLE players (
+               player_id BIGINT PRIMARY KEY,
+               height_cm REAL,
+               hand TEXT,
+               updated_at TIMESTAMPTZ
+           )"""
+    )
+    connection.execute(
+        "INSERT INTO players (player_id, height_cm, hand) VALUES (42, NULL, 'U')"
+    )
+    connection.commit()
+    monkeypatch.setattr(canonical_store, "connect", lambda: connection)
+    calculator = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calculator._store_conn = None
+    calculator.use_store = True
+
+    owned = calculator._store()
+    assert owned.autocommit is True
+    owned.execute("SELECT player_id FROM players WHERE player_id = 42").fetchone()
+    assert owned.info.transaction_status is TransactionStatus.IDLE
+
+    calculator._persist_player_field({"player_id": 42}, "height_cm", 188)
+    calculator._persist_player_field({"player_id": 42}, "hand", "L")
+    assert owned.execute(
+        "SELECT height_cm, hand FROM players WHERE player_id = 42"
+    ).fetchone() == (188.0, "L")
+    assert owned.info.transaction_status is TransactionStatus.IDLE
+
+    calculator.close_store()
+    assert connection.closed is True
+
+
 def _ensure_migrations(connection) -> None:
     """Apply only missing versions, proving each new migration is replay-safe."""
     version_table = connection.execute(

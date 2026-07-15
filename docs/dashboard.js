@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-15.2";
+  const BUILD_ID = "2026-07-15.4";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -47,6 +47,12 @@
     "settlement_quality", "attribution_quality", "metric_eligible",
   ].join(",");
 
+  const BANKROLL_COLUMNS = [
+    "timestamp", "session_id", "bankroll", "account_equity", "pending_exposure",
+    "available_bankroll", "change_reason", "num_pending_bets", "num_settled_bets",
+    "dashboard_row_key",
+  ].join(",");
+
   // Current-run tables are small after run_id filtering. Selecting all columns
   // lets the UI tolerate additive logger migrations without inventing fallbacks.
   const SNAPSHOT_COLUMNS = "*";
@@ -72,6 +78,7 @@
     acceptedFeatures: { syncId: "", runId: "", ids: [], seenIds: [], profiles: [] },
     runs: [],
     bets: [],
+    bankroll: [],
     metrics: [],
     calibration: [],
     meta: {
@@ -81,7 +88,6 @@
       snapshots_total: null,
       skipped_total: null,
       settlement: null,
-      bankroll: null,
       sessions: null,
     },
     manifest: null,
@@ -342,6 +348,7 @@
       ),
       refreshResource("runs", () => fetchAll("dash_runs", RUN_COLUMNS, "started_at.desc.nullslast,run_id.desc", generationFilter)),
       refreshResource("bets", () => fetchAll("dash_bets", BET_COLUMNS, "timestamp.desc.nullslast,bet_id.desc", generationFilter)),
+      refreshResource("bankroll", () => fetchAll("dash_bankroll", BANKROLL_COLUMNS, "timestamp.desc.nullslast,dashboard_row_key.desc", generationFilter)),
       refreshResource("metrics", () => fetchAll("dash_model_metrics", MODEL_METRIC_COLUMNS, "tier.asc,log_loss.asc.nullslast,model.asc", generationFilter)),
       refreshResource("calibration", () => calibrationPublished
         ? fetchAll("dash_model_calibration", CALIBRATION_COLUMNS, "tier.asc,model.asc,bin_index.asc", generationFilter)
@@ -352,7 +359,6 @@
       refreshMeta("snapshots_total", () => fetchTableMeta("dash_snapshots", "logged_at,run_id,prediction_uid", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("skipped_total", () => fetchTableMeta("dash_skipped_live_matches", "logged_at,run_id,skip_event_id", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("settlement", () => fetchTableMeta("dash_settlement_audit", "logged_at,run_id,settlement_event_id", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("bankroll", () => fetchTableMeta("dash_bankroll", "timestamp,session_id", "timestamp.desc.nullslast", generationFilter)),
       refreshMeta("sessions", () => fetchTableMeta("dash_sessions", "start_time,session_id", "start_time.desc.nullslast", generationFilter)),
     ]);
 
@@ -504,7 +510,7 @@
       dash_skipped_live_matches: metaCount("skipped_total"),
       dash_settlement_audit: metaCount("settlement"),
       dash_features: metaCount("features"),
-      dash_bankroll: metaCount("bankroll"),
+      dash_bankroll: arrayCount("bankroll"),
       dash_sessions: metaCount("sessions"),
       dash_model_metrics: arrayCount("metrics"),
     };
@@ -513,6 +519,14 @@
     }
     const comparison = Logic.compareManifestCounts(expected, actual);
     return { ...comparison, expected, actual };
+  }
+
+  function currentGenerationTrustIssue(...resourceNames) {
+    return Logic.generationTrustIssue(store, generationCounts.ok, resourceNames);
+  }
+
+  function currentGenerationTrusted(...resourceNames) {
+    return !currentGenerationTrustIssue(...resourceNames);
   }
 
   function renderHealth() {
@@ -542,13 +556,19 @@
       acceptedPredictionRunId: Logic.clean(store.manifest && store.manifest.accepted_prediction_run_id),
       now: Date.now(),
     });
+    const accountTrusted = currentGenerationTrusted("bankroll", "bets");
+    const accountState = Logic.currentAccountState(store.bankroll, store.bets, 1, accountTrusted);
     const pendingBacklog = pendingBetDiagnostics();
-    if (pendingBacklog.overdue.length) {
+    if (accountState.verified && pendingBacklog.overdue.length) {
       health.reasons.push(`${pendingBacklog.overdue.length} pending paper bets (${formatMoney(pendingBacklog.overdueExposure, 0)}) are past the settlement SLA.`);
       if (health.state === "healthy") health.state = "degraded";
     }
-    if (pendingBacklog.unverified.length) {
+    if (accountState.verified && pendingBacklog.unverified.length) {
       health.reasons.push(`${pendingBacklog.unverified.length} pending paper bets lack enough time lineage to classify their settlement SLA.`);
+      if (health.state === "healthy") health.state = "degraded";
+    }
+    if (!accountState.verified) {
+      health.reasons.push(`Current account state is unverified: ${accountState.reason}.`);
       if (health.state === "healthy") health.state = "degraded";
     }
     currentSlate = generationCounts.ok ? buildCurrentSlate() : { eligible: [], blocked: [], expired: [] };
@@ -562,7 +582,7 @@
       failed: "Pipeline health cannot be trusted",
     };
     setText("health-title", titles[health.state]);
-    setText("health-message", health.reasons.length ? health.reasons.join(" ") : "Latest attempt and accepted predictions are inside the expected :17 / :47 cadence.");
+    setText("health-message", health.reasons.length ? health.reasons.join(" ") : "Latest attempt and accepted predictions are current. GitHub's :17 / :47 targets are best effort; delivery is not guaranteed.");
 
     if (health.latestAttempt) {
       const run = health.latestAttempt.run;
@@ -579,8 +599,10 @@
       ? `${acceptedSyncId} · ${acceptedSyncStatus} · counts ${generationCounts.ok ? "verified" : "unverified"}`
       : "manifest unavailable");
 
-    const nextRun = Logic.nextScheduledRun(Date.now());
-    setText("next-run", nextRun ? `${nextRun.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · :17 / :47 schedule` : ":17 / :47 schedule");
+    const nextTarget = Logic.nextScheduleTarget(Date.now());
+    setText("next-run", nextTarget
+      ? `${nextTarget.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} target · best effort; delivery not guaranteed`
+      : ":17 / :47 targets · best effort; delivery not guaranteed");
     setText("page-fetch-time", store.browserFetchedAt ? `Browser fetched ${new Date(store.browserFetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading data…");
   }
 
@@ -621,8 +643,10 @@
     setText("metric-expired", currentSlate.expired.length);
     setText("metric-settled", store.predictions.filter((row) => Logic.validWinner(row.actual_winner)).length.toLocaleString());
     const pending = pendingBetDiagnostics();
-    setText("metric-exposure", formatMoney(pending.activeExposure, 0));
-    setText("metric-overdue", `${pending.overdue.length} · ${formatMoney(pending.overdueExposure, 0)}`);
+    const accountTrusted = currentGenerationTrusted("bankroll", "bets");
+    const accountState = Logic.currentAccountState(store.bankroll, store.bets, 1, accountTrusted);
+    setText("metric-exposure", accountState.verified ? formatMoney(pending.activeExposure, 0) : "withheld");
+    setText("metric-overdue", accountState.verified ? `${pending.overdue.length} · ${formatMoney(pending.overdueExposure, 0)}` : "withheld");
   }
 
   function addDefinition(list, term, description) {
@@ -728,15 +752,19 @@
     });
 
     const pending = pendingBetDiagnostics();
+    const accountTrusted = currentGenerationTrusted("bankroll", "bets");
+    const accountState = Logic.currentAccountState(store.bankroll, store.bets, 1, accountTrusted);
     const account = byId("account-state");
     clear(account);
-    addDefinition(account, "Account equity", formatMoney(run && run.account_equity));
-    addDefinition(account, "Run-reported pending", formatMoney(run && run.pending_exposure));
-    addDefinition(account, "Active exposure", `${formatMoney(pending.activeExposure)} · ${pending.active.length} bets`);
-    addDefinition(account, "Overdue backlog", `${formatMoney(pending.overdueExposure)} · ${pending.overdue.length} bets`);
-    addDefinition(account, "Time unverified", `${formatMoney(pending.unverifiedExposure)} · ${pending.unverified.length} bets`);
-    addDefinition(account, "Available capital", formatMoney(run && run.available_bankroll));
-    addDefinition(account, "Exposure gate", Logic.clean(run && run.exposure_gate_status).replaceAll("_", " ") || "unreported");
+    addDefinition(account, "Current equity", accountState.verified ? formatMoney(accountState.equity) : "withheld");
+    addDefinition(account, "Current pending", accountState.verified ? formatMoney(accountState.pendingExposure) : "withheld");
+    addDefinition(account, "Latest pipeline equity", formatMoney(run && run.account_equity));
+    addDefinition(account, "Active exposure", accountState.verified ? `${formatMoney(pending.activeExposure)} · ${pending.active.length} bets` : "withheld");
+    addDefinition(account, "Overdue backlog", accountState.verified ? `${formatMoney(pending.overdueExposure)} · ${pending.overdue.length} bets` : "withheld");
+    addDefinition(account, "Time unverified", accountState.verified ? `${formatMoney(pending.unverifiedExposure)} · ${pending.unverified.length} bets` : "withheld");
+    addDefinition(account, "Available capital", accountState.verified ? formatMoney(accountState.available) : "withheld");
+    addDefinition(account, "Exposure gate", accountState.gate);
+    addDefinition(account, "Account authority", accountState.reason);
     addDefinition(account, "Settlement SLA", `${SETTLEMENT_SLA_HOURS}h after exact UTC start; ${CONSERVATIVE_UNZONED_PENDING_HOURS}h conservative fallback`);
   }
 
@@ -1634,7 +1662,11 @@
   }
 
   function renderBets() {
+    const betTrustIssue = currentGenerationTrustIssue("bets");
+    const betLedgerTrusted = !betTrustIssue;
     const pendingDiagnostics = pendingBetDiagnostics();
+    const accountTrusted = currentGenerationTrusted("bankroll", "bets");
+    const accountState = Logic.currentAccountState(store.bankroll, store.bets, 1, accountTrusted);
     const pendingSlaByBet = new Map(
       [...pendingDiagnostics.active, ...pendingDiagnostics.overdue, ...pendingDiagnostics.unverified]
         .map((item) => [item.bet, item.sla]),
@@ -1653,16 +1685,24 @@
     const roi = decidedStake ? realizedProfit / decidedStake : null;
     const metrics = byId("bet-metrics");
     clear(metrics);
-    renderMetricCard(metrics, "Settled decisions", decided.length.toLocaleString(), `${wins.length} wins · ${losses.length} losses`);
-    renderMetricCard(metrics, "Active pending", pendingDiagnostics.active.length.toLocaleString(), `${formatMoney(pendingDiagnostics.activeExposure, 0)} exposure`);
-    renderMetricCard(metrics, "Overdue backlog", pendingDiagnostics.overdue.length.toLocaleString(), `${formatMoney(pendingDiagnostics.overdueExposure, 0)} past settlement SLA`);
-    renderMetricCard(metrics, "Time unverified", pendingDiagnostics.unverified.length.toLocaleString(), `${formatMoney(pendingDiagnostics.unverifiedExposure, 0)} excluded from active`);
-    renderMetricCard(metrics, "Void / cancelled", voided.length.toLocaleString(), "excluded from decision ROI");
-    renderMetricCard(metrics, "Realized P&L", formatMoney(realizedProfit), "paper ledger actual_profit");
-    renderMetricCard(metrics, "Realized ROI", roi === null ? "—" : formatPercent(roi), `${formatMoney(decidedStake, 0)} decided stake`);
+    renderMetricCard(metrics, "Settled decisions", betLedgerTrusted ? decided.length.toLocaleString() : "withheld", betLedgerTrusted ? `${wins.length} wins · ${losses.length} losses` : betTrustIssue);
+    renderMetricCard(metrics, "Active pending", accountState.verified ? pendingDiagnostics.active.length.toLocaleString() : "withheld", accountState.verified ? `${formatMoney(pendingDiagnostics.activeExposure, 0)} exposure` : accountState.reason);
+    renderMetricCard(metrics, "Overdue backlog", accountState.verified ? pendingDiagnostics.overdue.length.toLocaleString() : "withheld", accountState.verified ? `${formatMoney(pendingDiagnostics.overdueExposure, 0)} past settlement SLA` : accountState.reason);
+    renderMetricCard(metrics, "Time unverified", accountState.verified ? pendingDiagnostics.unverified.length.toLocaleString() : "withheld", accountState.verified ? `${formatMoney(pendingDiagnostics.unverifiedExposure, 0)} excluded from active` : accountState.reason);
+    renderMetricCard(metrics, "Void / cancelled", betLedgerTrusted ? voided.length.toLocaleString() : "withheld", betLedgerTrusted ? "excluded from decision ROI" : betTrustIssue);
+    renderMetricCard(metrics, "Realized P&L", betLedgerTrusted ? formatMoney(realizedProfit) : "withheld", betLedgerTrusted ? "paper ledger actual_profit" : betTrustIssue);
+    renderMetricCard(metrics, "Realized ROI", betLedgerTrusted ? (roi === null ? "—" : formatPercent(roi)) : "withheld", betLedgerTrusted ? `${formatMoney(decidedStake, 0)} decided stake` : betTrustIssue);
 
     const body = byId("bets-table").tBodies[0];
     clear(body);
+    if (!betLedgerTrusted) {
+      const row = element("tr");
+      const cell = element("td", null, `Paper bet ledger withheld: ${betTrustIssue}.`);
+      cell.colSpan = 7;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
     categories
       .sort((a, b) => (Logic.parseTimestamp(b.bet.timestamp) || 0) - (Logic.parseTimestamp(a.bet.timestamp) || 0))
       .slice(0, 400)
@@ -1810,12 +1850,14 @@
     const inventory = byId("data-inventory");
     clear(inventory);
     const pending = pendingBetDiagnostics();
+    const accountTrusted = currentGenerationTrusted("bankroll", "bets");
+    const accountState = Logic.currentAccountState(store.bankroll, store.bets, 1, accountTrusted);
     const cards = [
       ["Prediction history", store.predictions.length, "canonical settlement/history rows; never current-slate cards"],
       ["Current snapshots", store.snapshots.length, `${store.meta.snapshots_total ? `${formatNumber(store.meta.snapshots_total.count)} generation-total · ` : "total unverified · "}${Logic.clean(store.manifest && store.manifest.accepted_prediction_run_id) || "accepted prediction run unavailable"}`],
       ["Skipped-live audit", store.skipped.length, store.errors.skipped ? `unavailable: ${store.errors.skipped}` : `${store.meta.skipped_total ? `${formatNumber(store.meta.skipped_total.count)} generation-total · ` : "total unverified · "}included in blocked / expired slate`],
       ["Run audit", store.runs.length, health.latestAttempt ? Logic.clean(health.latestAttempt.run.status) : "latest attempt unavailable"],
-      ["Paper bets", store.bets.length, `${pending.active.length} active · ${pending.overdue.length} overdue · ${pending.unverified.length} time unverified`],
+      ["Paper bets", store.bets.length, accountState.verified ? `${pending.active.length} active · ${pending.overdue.length} overdue · ${pending.unverified.length} time unverified` : `account state withheld: ${accountState.reason}`],
       ["Odds observations", store.meta.odds && store.meta.odds.count, store.meta.odds && store.meta.odds.latest ? formatDateTime(store.meta.odds.latest.logged_at) : "unavailable"],
       ["Shadow observations", store.meta.shadows && store.meta.shadows.count, "secondary; loaded per match"],
       ["Model metric rows", store.metrics.length, `${new Set(store.metrics.map((row) => Logic.clean(row.model))).size} promoted, benchmark, and shadow identities`],
@@ -1823,7 +1865,7 @@
       ["Feature vectors", store.meta.features && store.meta.features.count, "exact ID lookup only"],
       ["Accepted feature references", store.acceptedFeatures.ids.length, store.errors.acceptedFeatures ? `unverified: ${store.errors.acceptedFeatures}` : `${store.acceptedFeatures.seenIds.length} IDs present · verified status + complete + schema/vector hashes + 141 features · ${Logic.clean(store.acceptedFeatures.runId) || "no accepted run"}`],
       ["Settlement audit", store.meta.settlement && store.meta.settlement.count, "full generation count verified"],
-      ["Bankroll history", store.meta.bankroll && store.meta.bankroll.count, "full generation count verified"],
+      ["Bankroll history", store.bankroll.length, "full generation count verified"],
       ["Betting sessions", store.meta.sessions && store.meta.sessions.count, "full generation count verified"],
       ["Dashboard build", 1, `${BUILD_ID} · auto-checks deployed version every minute`],
       ["Sync manifest", store.manifest ? 1 : 0, store.manifest ? `${Logic.clean(store.manifest.status) || "unknown"} · ${Logic.clean(store.manifest.sync_id) || "ID missing"}` : "generation unverified"],

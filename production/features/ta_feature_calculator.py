@@ -24,7 +24,7 @@ from atp_rankings_scraper import (
     get_player_rank,
     load_rankings,
 )
-from atp_height_scraper import batch_get_profiles
+from atp_height_scraper import batch_get_profiles, profile_lookup_evidence_states
 
 # Import shared round offset function (same directory)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -48,6 +48,7 @@ from base_141_shared import (
     player_temporal_features,
     surface_transition_flag as shared_surface_transition_flag,
 )
+from height_hydration import HeightHydrationCandidate, plan_height_hydration
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from feature_contract import normalize_feature_vector
@@ -67,6 +68,7 @@ class UnsafeToInferError(RuntimeError):
 
 MIN_HEIGHT_CM = 150.0
 MAX_HEIGHT_CM = 230.0
+DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT = 32
 
 
 def _validated_height_cm(value) -> Optional[float]:
@@ -86,6 +88,17 @@ def _validated_height_cm(value) -> Optional[float]:
     if not math.isfinite(height) or not MIN_HEIGHT_CM <= height <= MAX_HEIGHT_CM:
         return None
     return height
+
+
+def _run_height_hydration_limit() -> int:
+    raw = os.environ.get(
+        "ATP_PROFILE_RUN_HYDRATION_LIMIT",
+        str(DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT),
+    )
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -166,8 +179,29 @@ class TAFeatureCalculator:
         if self._store_conn is None:
             sys.path.insert(0, str(Path(__file__).parent.parent))
             import canonical_store
-            self._store_conn = canonical_store.connect()
+            conn = canonical_store.connect()
+            try:
+                # This is a long-lived run-scoped connection.  Reads must not
+                # leave an implicit outer transaction open; otherwise the
+                # explicit write-through transaction below is only a savepoint
+                # and its update can roll back when the runner exits.
+                conn.autocommit = True
+            except Exception:
+                conn.close()
+                raise
+            self._store_conn = conn
         return self._store_conn
+
+    def close_store(self) -> None:
+        """Close the run-owned compatibility-store connection exactly once."""
+        conn = getattr(self, "_store_conn", None)
+        self._store_conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception as exc:
+            print(f"      ⚠️ canonical feature-store close failed: {exc}")
 
     def _persist_player_field(self, profile: dict, field: str, value) -> None:
         """Preserve the legacy write-through until explicit ops cutover.
@@ -191,6 +225,8 @@ class TAFeatureCalculator:
             return
         try:
             conn = self._store()
+            # ``_store`` owns an autocommit connection, so this is always a
+            # root transaction whose successful exit durably commits.
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute(
@@ -306,6 +342,210 @@ class TAFeatureCalculator:
             h1, hand1 = _fill(p1_display, h1, hand1, profile1)
             h2, hand2 = _fill(p2_display, h2, hand2, profile2)
         return h1, hand1, h2, hand2
+
+    def prehydrate_slate_profiles(
+        self,
+        odds_df: pd.DataFrame,
+        *,
+        session_cache: Optional[Dict] = None,
+    ) -> dict:
+        """Hydrate current-slate missing heights once, before feature builds.
+
+        Identity resolution stays in the canonical store.  The method dedupes
+        by that player ID, orders the bounded work by decision impact, then
+        delegates all fetching and source evidence recording to the existing
+        strict ATP batch path.  Required provenance mode remains read-only and
+        therefore intentionally bypasses this legacy compatibility hydrator.
+        """
+        summary = {
+            "status": "not_started",
+            "candidate_players": 0,
+            "planned_players": 0,
+            "browser_attempts": 0,
+            "resolved_heights": 0,
+            "remaining_budget": 0,
+            "evidence_states": {},
+        }
+        if odds_df is None or odds_df.empty:
+            summary["status"] = "empty_slate"
+            return summary
+
+        try:
+            from storage.eligibility import EligibilityMode, eligibility_mode
+        except ImportError:  # pragma: no cover - package-style execution
+            from production.storage.eligibility import (  # type: ignore
+                EligibilityMode, eligibility_mode,
+            )
+        if eligibility_mode() is EligibilityMode.REQUIRED:
+            summary["status"] = "required_mode_read_only"
+            return summary
+        if not self.use_store:
+            summary["status"] = "canonical_store_disabled"
+            return summary
+
+        import store_history
+
+        cache = session_cache if session_cache is not None else {}
+        conn = self._store()
+        profiles_by_input: dict[str, Optional[dict]] = {}
+        profiles_by_id: dict[int, dict] = {}
+        candidate_rows: list[tuple[dict, Optional[dict], str]] = []
+
+        def _profile(display_name: str) -> Optional[dict]:
+            key = str(display_name or "").strip().casefold()
+            if not key:
+                return None
+            if key not in profiles_by_input:
+                profiles_by_input[key] = store_history.get_profile(conn, display_name)
+            profile = profiles_by_input[key]
+            if profile is not None and profile.get("player_id") is not None:
+                profiles_by_id[int(profile["player_id"])] = profile
+            return profile
+
+        for _, row in odds_df.iterrows():
+            names = (
+                row.get("player1_normalized") or row.get("player1_raw", ""),
+                row.get("player2_normalized") or row.get("player2_raw", ""),
+            )
+            profiles = (_profile(names[0]), _profile(names[1]))
+            event = str(row.get("event", "") or "")
+            for index, profile in enumerate(profiles):
+                if profile is None or profile.get("player_id") is None:
+                    continue
+                if _validated_height_cm(profile.get("height_cm")) is not None:
+                    continue
+                opponent = profiles[1 - index]
+                candidate_rows.append((profile, opponent, event))
+
+        # Every slate name is bound to one canonical store ID for the whole
+        # run, including players whose height is already valid but whose hand
+        # is unknown. A display-key collision is ambiguous and fails closed
+        # before any name-keyed cache evidence can influence completeness.
+        slate_ids_by_key: dict[str, int] = {}
+        for player_id, profile in profiles_by_id.items():
+            key = str(profile.get("name") or "").strip().lower()
+            if not key:
+                continue
+            existing_id = slate_ids_by_key.get(key)
+            if existing_id is not None and existing_id != player_id:
+                raise UnsafeToInferError(
+                    "slate profile cache key maps to multiple canonical players: "
+                    f"{profile.get('name')}"
+                )
+            slate_ids_by_key[key] = player_id
+
+        # Install the canonical allowlist and strict-positive policy even when
+        # there are no missing heights. Per-match hand fallback shares this
+        # state; without it a hand-only row could still consume a legacy
+        # name-keyed cache value across two canonical IDs.
+        refresh_state = cache.setdefault("atp_profile_refresh", {})
+        existing_player_ids = refresh_state.get("canonical_player_ids") or {}
+        if not isinstance(existing_player_ids, dict):
+            existing_player_ids = {}
+        for key, player_id in slate_ids_by_key.items():
+            existing_id = existing_player_ids.get(key)
+            if existing_id is not None and int(existing_id) != player_id:
+                raise UnsafeToInferError(
+                    "height hydration cache key changed canonical player within run: "
+                    f"{key}"
+                )
+        refresh_state["require_evidenced_positives"] = True
+        if "remaining" not in refresh_state:
+            refresh_state["remaining"] = _run_height_hydration_limit()
+        allowed_keys = refresh_state.setdefault("allowed_keys", set())
+        if not isinstance(allowed_keys, set):
+            allowed_keys = set(allowed_keys or ())
+            refresh_state["allowed_keys"] = allowed_keys
+        allowed_keys.update(slate_ids_by_key)
+        canonical_player_ids = refresh_state.setdefault("canonical_player_ids", {})
+        if not isinstance(canonical_player_ids, dict):
+            canonical_player_ids = {}
+            refresh_state["canonical_player_ids"] = canonical_player_ids
+        canonical_player_ids.update(slate_ids_by_key)
+
+        if not candidate_rows:
+            summary["status"] = "no_height_candidates"
+            summary["remaining_budget"] = max(
+                0, int(refresh_state.get("remaining", 0) or 0)
+            )
+            cache["height_hydration"] = summary
+            return summary
+
+        canonical_names = sorted({
+            str(profile.get("name") or "").strip()
+            for profile, _opponent, _event in candidate_rows
+            if str(profile.get("name") or "").strip()
+        })
+        evidence = profile_lookup_evidence_states(
+            canonical_names,
+            require_evidenced_positives=True,
+            canonical_player_ids=slate_ids_by_key,
+        )
+        evidenced_candidates = []
+        for profile, opponent, event in candidate_rows:
+            player_name = str(profile.get("name") or "").strip()
+            opponent_name = (
+                str(opponent.get("name") or "").strip()
+                if opponent is not None else ""
+            )
+            opponent_has_height = (
+                opponent is not None
+                and (
+                    _validated_height_cm(opponent.get("height_cm")) is not None
+                    or str(
+                        (evidence.get(opponent_name) or {}).get("state", "")
+                    ) == "resolved"
+                )
+            )
+            evidenced_candidates.append(HeightHydrationCandidate(
+                canonical_player_id=int(profile["player_id"]),
+                player_name=player_name,
+                event=event,
+                opponent_has_height=opponent_has_height,
+                evidence_state=str(
+                    (evidence.get(player_name) or {}).get(
+                        "state", "unobserved"
+                    )
+                ),
+            ))
+        plan = plan_height_hydration(evidenced_candidates)
+        planned_names = [candidate.player_name for candidate in plan]
+        summary["candidate_players"] = len({
+            int(profile["player_id"])
+            for profile, _opponent, _event in candidate_rows
+        })
+        summary["planned_players"] = len(plan)
+        for candidate in plan:
+            states = summary["evidence_states"]
+            states[candidate.evidence_state] = states.get(candidate.evidence_state, 0) + 1
+
+        attempted_before = set(refresh_state.get("attempted_keys") or ())
+
+        resolved = batch_get_profiles(
+            planned_names,
+            verbose=False,
+            refresh_state=refresh_state,
+        )
+        attempted_after = set(refresh_state.get("attempted_keys") or ())
+        summary["browser_attempts"] = len(attempted_after - attempted_before)
+
+        for candidate in plan:
+            values = resolved.get(candidate.player_name) or {}
+            height = _validated_height_cm(values.get("height_cm"))
+            profile = profiles_by_id[candidate.canonical_player_id]
+            if height is not None:
+                summary["resolved_heights"] += 1
+                self._persist_player_field(profile, "height_cm", height)
+            hand = str(values.get("hand") or "").strip().upper()
+            if hand in {"R", "L"}:
+                self._persist_player_field(profile, "hand", hand)
+
+        summary["remaining_budget"] = max(
+            0, int(refresh_state.get("remaining", 0) or 0)
+        )
+        summary["status"] = "complete"
+        cache["height_hydration"] = summary
+        return summary
 
     @staticmethod
     def _slug_to_name(slug: str) -> str:
