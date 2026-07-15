@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-14.6";
+  const BUILD_ID = "2026-07-15.1";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -1580,7 +1580,7 @@
     const manifestStatus = Logic.clean(store.manifest.status).toLowerCase();
     state.className = `notice ${manifestStatus === "success" ? "success" : "warning"}`;
     state.textContent = manifestStatus === "success"
-      ? `Authoritative ledger metrics match the accepted dashboard generation. Showing ${scope.replaceAll("_", " ")} rows; lower log loss ranks first.`
+      ? `Current dashboard authority: ledger metrics match accepted sync ${manifestSyncId}. Showing ${scope.replaceAll("_", " ")} rows; lower log loss ranks first. The dated Markdown report may lag this generation.`
       : `Metrics match a ${manifestStatus || "non-success"} dashboard generation. Review the System tab before interpreting them.`;
 
     renderMetricExplorer(sourceRows, tier, selectedTierRows);
