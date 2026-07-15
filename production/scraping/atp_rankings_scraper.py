@@ -120,13 +120,55 @@ def load_rankings(path: Path = OUTPUT_PATH) -> Optional[pd.DataFrame]:
     return pd.read_csv(path)
 
 
+def _letters(token: str) -> str:
+    """Return the case-folded alphabetic identity carried by one name token."""
+    return "".join(char for char in str(token).casefold() if char.isalpha())
+
+
+def _given_identity_matches(query_token: str, candidate_name: str) -> bool:
+    """Conservatively bind a query given name to a ranking-row given name.
+
+    ATP ranking rows are commonly abbreviated (``M. Berrettini``), so an
+    initial may bind to a full given name.  When both sides expose a full given
+    name, however, they must agree exactly.  A surname-only match may never
+    override a different initial or full given name.
+    """
+    candidate_parts = str(candidate_name).strip().split()
+    query_given = _letters(query_token)
+    candidate_given = _letters(candidate_parts[0]) if candidate_parts else ""
+    if not query_given or not candidate_given:
+        return False
+    if query_given[0] != candidate_given[0]:
+        return False
+    if len(query_given) > 1 and len(candidate_given) > 1:
+        return query_given == candidate_given
+    return True
+
+
+def _given_compatible_candidates(
+    candidates: pd.DataFrame,
+    query_token: str,
+) -> pd.DataFrame:
+    """Keep only surname candidates with compatible given-name evidence."""
+    if candidates.empty or not query_token:
+        return candidates.iloc[0:0]
+    compatible = candidates["player_name"].map(
+        lambda value: _given_identity_matches(query_token, value)
+    )
+    return candidates[compatible]
+
+
 def _lookup(player_name: str, col: str, df: pd.DataFrame) -> Optional[int]:
     """
     Look up rank or points for a player. Strategy:
     1. Exact full-name match (e.g. "Matteo Berrettini" == "Matteo Berrettini")
     2. Abbreviated-name match (e.g. "M. Berrettini" from "Matteo Berrettini")
-    3. Last-name + first-initial disambiguation (handles siblings like Berrettinis)
-    4. Last-name only if unique
+    3. Last-name candidates with compatible given-name evidence
+    4. Reversed-name abbreviation with the same identity requirement
+
+    A unique surname is not identity evidence by itself.  This deliberately
+    fails closed when, for example, ``Vito Antonio Darderi`` is queried against
+    the sole ranking row ``L. Darderi``.
     """
     name = player_name.strip()
     name_lower = name.lower()
@@ -155,16 +197,14 @@ def _lookup(player_name: str, col: str, df: pd.DataFrame) -> Optional[int]:
     if not match.empty:
         return int(match.iloc[0][col])
 
-    # 3. Last-name candidates, then disambiguate by first initial
-    if last_name:
+    # 3. Last-name candidates.  A unique surname is insufficient: require the
+    # query and candidate given-name evidence to agree as a full name or an
+    # initial.  This prevents one family member inheriting another's rank.
+    if last_name and len(parts) >= 2:
         candidates = df[df_lower.str.contains(rf"\b{re.escape(last_name)}\b", na=False)]
-        if len(candidates) == 1:
-            return int(candidates.iloc[0][col])
-        if len(candidates) > 1 and first_initial:
-            # Filter by first initial
-            narrowed = candidates[candidates["player_name"].str[0].str.lower() == first_initial]
-            if len(narrowed) == 1:
-                return int(narrowed.iloc[0][col])
+        narrowed = _given_compatible_candidates(candidates, parts[0])
+        if len(narrowed) == 1:
+            return int(narrowed.iloc[0][col])
 
     # 4. Reversed-name fallback for Asian/non-Western names stored as "Initial. FamilyName"
     # e.g. "Bu Yunchaokete" on TA → ATP stores as "Y. Bu" (family=Bu, given=Yunchaokete)
@@ -176,14 +216,12 @@ def _lookup(player_name: str, col: str, df: pd.DataFrame) -> Optional[int]:
         match = df[df_lower == reversed_abbrev]
         if not match.empty:
             return int(match.iloc[0][col])
-        # Also try family-name-only search
+        # Also search the family name, but retain the same given-name binding
+        # contract.  A unique family name may not override a different initial.
         candidates = df[df_lower.str.contains(rf"\b{re.escape(family)}\b", na=False)]
-        if len(candidates) == 1:
-            return int(candidates.iloc[0][col])
-        if len(candidates) > 1 and given_initial:
-            narrowed = candidates[candidates["player_name"].str.split(r"\.\s*").str[-1].str.lower().str.strip() == family]
-            if len(narrowed) == 1:
-                return int(narrowed.iloc[0][col])
+        narrowed = _given_compatible_candidates(candidates, parts[1])
+        if len(narrowed) == 1:
+            return int(narrowed.iloc[0][col])
 
     return None
 

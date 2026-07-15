@@ -841,6 +841,192 @@ def test_bet_tracker_skips_duplicate_pending_bets():
         assert len(all_bets) == 1
 
 
+def test_invalid_recommendation_refund_is_zero_pnl_audited_and_idempotent(
+    tmp_path,
+):
+    from operational_state import _validate_bet_row
+    from utils.bet_tracker import (
+        ATTRIBUTION_QUALITY_INVALID_RECOMMENDATION,
+        INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+        SETTLEMENT_QUALITY_INVALID_RECOMMENDATION,
+        BetTracker,
+    )
+
+    tracker = BetTracker(str(tmp_path))
+    session_id = tracker.start_session(1000.0, 0.18, "bad-input refund test")
+
+    def _slip(match_uid, feature_id, run_id, match, stake):
+        return {
+            "event": "ITF Gubbio",
+            "match": match,
+            "match_uid": match_uid,
+            "feature_snapshot_id": feature_id,
+            "run_id": run_id,
+            "bet_on": match.split(" vs ")[0],
+            "bet_on_player1": True,
+            "odds_decimal": 3.75,
+            "stake": stake,
+            "stake_fraction": stake / 1000.0,
+            "model_prob": 0.77,
+            "market_prob": 0.27,
+            "edge": 0.50,
+            "kelly_fraction": 0.10,
+            "potential_profit": stake * 2.75,
+            "potential_loss": stake,
+            "bankroll": 1000.0,
+            "model_version": "v-test",
+            "match_date": "2026-07-15",
+            "match_start_time": "7/15/26 12:00 PM",
+        }
+
+    slips = pd.DataFrame([
+        _slip(
+            "match_collision", "feat_collision", "run_collision",
+            "Vito Antonio Darderi vs Giacomo Crisostomo", 10.0,
+        ),
+        _slip(
+            "match_other", "feat_other", "run_other",
+            "Player Three vs Player Four", 20.0,
+        ),
+    ])
+    assert tracker.log_bets(slips, session_id, 1000.0) == 2
+    assert tracker.get_current_bankroll() == pytest.approx(1000.0)
+    assert tracker.get_pending_exposure() == pytest.approx(30.0)
+    assert tracker.get_available_bankroll() == pytest.approx(970.0)
+
+    bets = pd.read_csv(tracker.bets_file)
+    bet_id = bets.loc[bets["match_uid"] == "match_collision", "bet_id"].iloc[0]
+    detail = "Vito Antonio Darderi was joined to the L. Darderi ranking row"
+    assert tracker.void_invalid_recommendation(
+        bet_id,
+        reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+        expected_match_uid="match_collision",
+        expected_feature_snapshot_id="feat_collision",
+        expected_run_id="run_collision",
+        detail=detail,
+    )
+
+    after = pd.read_csv(tracker.bets_file)
+    refunded = after.loc[after["bet_id"] == bet_id].iloc[0]
+    assert refunded["status"] == "void"
+    assert refunded["outcome"] == "void"
+    assert refunded["actual_profit"] == pytest.approx(0.0)
+    assert refunded["bankroll_after"] == pytest.approx(1000.0)
+    assert refunded["settlement_quality"] == (
+        SETTLEMENT_QUALITY_INVALID_RECOMMENDATION
+    )
+    assert refunded["attribution_quality"] == (
+        ATTRIBUTION_QUALITY_INVALID_RECOMMENDATION
+    )
+    assert str(refunded["metric_eligible"]).lower() == "false"
+    assert pd.isna(refunded["result_evidence_kind"])
+    assert pd.isna(refunded["result_evidence_sha256"])
+    assert "underlying match result not asserted" in refunded["notes"]
+    assert f"reason_code={INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION}" in (
+        refunded["notes"]
+    )
+    _validate_bet_row(refunded, str(bet_id))
+
+    assert tracker.get_current_bankroll() == pytest.approx(1000.0)
+    assert tracker.get_pending_exposure() == pytest.approx(20.0)
+    assert tracker.get_available_bankroll() == pytest.approx(980.0)
+    audit_reason = (
+        f"Administrative invalid-recommendation refund {bet_id}; "
+        f"reason_code={INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION}"
+    )
+    bankroll = pd.read_csv(tracker.bankroll_file)
+    audit = bankroll[bankroll["change_reason"] == audit_reason]
+    assert len(audit) == 1
+    assert audit.iloc[0]["change_amount"] == pytest.approx(0.0)
+    assert audit.iloc[0]["account_equity"] == pytest.approx(1000.0)
+    assert audit.iloc[0]["pending_exposure"] == pytest.approx(20.0)
+    assert audit.iloc[0]["available_bankroll"] == pytest.approx(980.0)
+
+    # An exact operator retry neither rewrites the terminal row nor appends a
+    # second bankroll event.
+    assert not tracker.void_invalid_recommendation(
+        bet_id,
+        reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+        expected_match_uid="match_collision",
+        expected_feature_snapshot_id="feat_collision",
+        expected_run_id="run_collision",
+        detail=detail,
+    )
+    replay_bankroll = pd.read_csv(tracker.bankroll_file)
+    assert int((replay_bankroll["change_reason"] == audit_reason).sum()) == 1
+
+    # A retry also repairs the narrow crash window where the terminal bet row
+    # reached disk before its zero-P&L bankroll audit.
+    replay_bankroll[
+        replay_bankroll["change_reason"] != audit_reason
+    ].to_csv(tracker.bankroll_file, index=False)
+    assert not tracker.void_invalid_recommendation(
+        bet_id,
+        reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+        expected_match_uid="match_collision",
+        expected_feature_snapshot_id="feat_collision",
+        expected_run_id="run_collision",
+        detail=detail,
+    )
+    repaired_bankroll = pd.read_csv(tracker.bankroll_file)
+    assert int((repaired_bankroll["change_reason"] == audit_reason).sum()) == 1
+
+
+def test_invalid_recommendation_refund_fails_closed_on_lineage_mismatch(tmp_path):
+    from utils.bet_tracker import (
+        INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+        BetTracker,
+    )
+
+    tracker = BetTracker(str(tmp_path))
+    session_id = tracker.start_session(1000.0, 0.18, "refund precondition test")
+    slip = pd.DataFrame([{
+        "event": "ITF Gubbio",
+        "match": "Vito Antonio Darderi vs Giacomo Crisostomo",
+        "match_uid": "match_collision",
+        "feature_snapshot_id": "feat_collision",
+        "run_id": "run_collision",
+        "bet_on": "Vito Antonio Darderi",
+        "bet_on_player1": True,
+        "odds_decimal": 3.75,
+        "stake": 10.0,
+        "stake_fraction": 0.01,
+        "model_prob": 0.77,
+        "market_prob": 0.27,
+        "edge": 0.50,
+        "kelly_fraction": 0.10,
+        "potential_profit": 27.5,
+        "potential_loss": 10.0,
+        "bankroll": 1000.0,
+        "model_version": "v-test",
+        "match_date": "2026-07-15",
+        "match_start_time": "7/15/26 12:00 PM",
+    }])
+    assert tracker.log_bets(slip, session_id, 1000.0) == 1
+    bet_id = pd.read_csv(tracker.bets_file).iloc[0]["bet_id"]
+
+    with pytest.raises(RuntimeError, match="feature_snapshot_id"):
+        tracker.void_invalid_recommendation(
+            bet_id,
+            reason_code=INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+            expected_match_uid="match_collision",
+            expected_feature_snapshot_id="feat_wrong",
+            expected_run_id="run_collision",
+        )
+    with pytest.raises(ValueError, match="unsupported"):
+        tracker.void_invalid_recommendation(
+            bet_id,
+            reason_code="manual_override",
+            expected_match_uid="match_collision",
+            expected_feature_snapshot_id="feat_collision",
+            expected_run_id="run_collision",
+        )
+
+    unchanged = pd.read_csv(tracker.bets_file).iloc[0]
+    assert unchanged["status"] == "pending"
+    assert tracker.get_pending_exposure() == pytest.approx(10.0)
+
+
 def test_bet_tracker_discards_zero_exposure_session(tmp_path):
     from utils.bet_tracker import BetTracker
 

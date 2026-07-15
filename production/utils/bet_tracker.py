@@ -56,6 +56,20 @@ SESSION_COLUMNS = [
     'avg_odds', 'avg_edge', 'kelly_multiplier_used', 'notes'
 ]
 
+INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION = (
+    'rank_identity_collision'
+)
+INVALID_RECOMMENDATION_REASON_CODES = frozenset({
+    INVALID_RECOMMENDATION_REASON_RANK_IDENTITY_COLLISION,
+})
+SETTLEMENT_QUALITY_INVALID_RECOMMENDATION = (
+    'administrative_invalid_recommendation_refund'
+)
+ATTRIBUTION_QUALITY_INVALID_RECOMMENDATION = (
+    'bad_input_rank_identity_collision'
+)
+
+
 class BetTracker:
     """Track bets, settle results, and maintain bankroll history"""
     
@@ -461,6 +475,191 @@ class BetTracker:
         print(f"   New bankroll: ${new_bankroll:.2f}")
         
         return actual_profit
+
+    @locked_operational_csv
+    def void_invalid_recommendation(
+        self,
+        bet_id: str,
+        *,
+        reason_code: str,
+        expected_match_uid: str,
+        expected_feature_snapshot_id: str,
+        expected_run_id: str,
+        detail: str = "",
+    ) -> bool:
+        """Refund one bad-input paper recommendation without asserting a result.
+
+        This is an administrative exposure correction, not match settlement.
+        It is deliberately limited to reviewed rank-identity collisions and
+        requires the immutable bet lineage as a three-field precondition.  An
+        exact replay is idempotent; any competing terminal state fails closed.
+
+        Returns ``True`` when a pending row is newly voided and ``False`` for an
+        already-complete exact replay.
+        """
+        normalized_reason = str(reason_code or '').strip().lower()
+        if normalized_reason not in INVALID_RECOMMENDATION_REASON_CODES:
+            raise ValueError(
+                f"unsupported invalid-recommendation reason: "
+                f"{normalized_reason or '<blank>'}"
+            )
+
+        expected = {
+            'match_uid': str(expected_match_uid or '').strip(),
+            'feature_snapshot_id': str(expected_feature_snapshot_id or '').strip(),
+            'run_id': str(expected_run_id or '').strip(),
+        }
+        if any(not value for value in expected.values()):
+            raise ValueError(
+                'invalid-recommendation refund requires match, feature, and run lineage'
+            )
+
+        def _clean(value) -> str:
+            if value is None or pd.isna(value):
+                return ''
+            return str(value).strip()
+
+        normalized_detail = ' '.join(str(detail or '').split())
+        note = (
+            'Administrative invalid-recommendation refund; '
+            'underlying match result not asserted; '
+            f'reason_code={normalized_reason}'
+        )
+        if normalized_detail:
+            note += f'; detail={normalized_detail}'
+        audit_reason = (
+            f'Administrative invalid-recommendation refund {bet_id}; '
+            f'reason_code={normalized_reason}'
+        )
+
+        bets = ensure_csv_columns(self.bets_file, BETS_COLUMNS)
+        matches = bets.index[
+            bets['bet_id'].fillna('').astype(str).str.strip().eq(str(bet_id).strip())
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"invalid-recommendation refund requires exactly one bet row: "
+                f"{bet_id} ({len(matches)} found)"
+            )
+        idx = matches[0]
+        row = bets.loc[idx]
+        session_id = _clean(row.get('session_id'))
+        if not session_id:
+            raise RuntimeError(
+                f"invalid-recommendation refund requires a session: {bet_id}"
+            )
+        for field, expected_value in expected.items():
+            actual = _clean(row.get(field))
+            if actual != expected_value:
+                raise RuntimeError(
+                    f"invalid-recommendation refund lineage mismatch for "
+                    f"{bet_id}:{field}; expected {expected_value}, found "
+                    f"{actual or '<blank>'}"
+                )
+
+        bankroll = ensure_csv_columns(self.bankroll_file, BANKROLL_COLUMNS)
+        audit_mask = (
+            bankroll['change_reason'].fillna('').astype(str).str.strip()
+            == audit_reason
+        )
+        audit_count = int(audit_mask.sum())
+        if audit_count > 1:
+            raise RuntimeError(
+                f"duplicate invalid-recommendation refund audit for {bet_id}"
+            )
+
+        status = _clean(row.get('status')).lower()
+        if status != 'pending':
+            metric = _clean(row.get('metric_eligible')).lower()
+            profit = pd.to_numeric(
+                pd.Series([row.get('actual_profit')]), errors='coerce'
+            ).iloc[0]
+            exact_replay = bool(
+                status == 'void'
+                and _clean(row.get('outcome')).lower() == 'void'
+                and pd.notna(profit) and float(profit) == 0.0
+                and _clean(row.get('notes')) == note
+                and _clean(row.get('settlement_quality'))
+                == SETTLEMENT_QUALITY_INVALID_RECOMMENDATION
+                and _clean(row.get('attribution_quality'))
+                == ATTRIBUTION_QUALITY_INVALID_RECOMMENDATION
+                and metric in {'false', '0', '0.0', 'no', 'n'}
+                and not _clean(row.get('result_evidence_kind'))
+                and not _clean(row.get('result_evidence_sha256'))
+            )
+            if not exact_replay:
+                raise RuntimeError(
+                    f"bet {bet_id} already has a competing terminal state: "
+                    f"{status or '<blank>'}"
+                )
+            # Repair a crash between the bet-row write and its zero-P&L audit.
+            if audit_count == 0:
+                equity = self.get_current_bankroll()
+                self.log_bankroll_change(
+                    session_id,
+                    equity,
+                    0.0,
+                    audit_reason,
+                )
+            self._refresh_session_record(session_id)
+            return False
+
+        if audit_count:
+            raise RuntimeError(
+                f"pending bet {bet_id} already has a terminal refund audit"
+            )
+        pending_terminal_fields = (
+            'outcome', 'actual_profit', 'bankroll_after', 'settled_timestamp',
+            'settlement_quality', 'attribution_quality', 'metric_eligible',
+            'result_evidence_kind', 'result_evidence_sha256',
+        )
+        dirty_fields = [
+            field for field in pending_terminal_fields if _clean(row.get(field))
+        ]
+        if dirty_fields:
+            raise RuntimeError(
+                f"pending bet {bet_id} carries terminal state: "
+                f"{','.join(dirty_fields)}"
+            )
+
+        equity_before = self.get_current_bankroll()
+        object_columns = (
+            'status', 'outcome', 'actual_profit', 'bankroll_after',
+            'settled_timestamp', 'notes', 'settlement_quality',
+            'attribution_quality', 'metric_eligible', 'result_evidence_kind',
+            'result_evidence_sha256',
+        )
+        for column in object_columns:
+            bets[column] = bets[column].astype(object)
+        bets.at[idx, 'status'] = 'void'
+        bets.at[idx, 'outcome'] = 'void'
+        bets.at[idx, 'actual_profit'] = 0.0
+        bets.at[idx, 'bankroll_after'] = equity_before
+        bets.at[idx, 'settled_timestamp'] = datetime.now().strftime(
+            '%Y-%m-%d %H:%M:%S'
+        )
+        bets.at[idx, 'notes'] = note
+        bets.at[idx, 'settlement_quality'] = (
+            SETTLEMENT_QUALITY_INVALID_RECOMMENDATION
+        )
+        bets.at[idx, 'attribution_quality'] = (
+            ATTRIBUTION_QUALITY_INVALID_RECOMMENDATION
+        )
+        bets.at[idx, 'metric_eligible'] = 'false'
+        bets.at[idx, 'result_evidence_kind'] = ''
+        bets.at[idx, 'result_evidence_sha256'] = ''
+        bets.to_csv(self.bets_file, index=False)
+
+        self.log_bankroll_change(
+            session_id,
+            equity_before,
+            0.0,
+            audit_reason,
+        )
+        self._refresh_session_record(session_id)
+        print(f"↩️  Refunded invalid recommendation {bet_id}: {normalized_reason}")
+        print("   Underlying match result was not asserted")
+        return True
     
     @locked_operational_csv
     def settle_bets_batch(self, results: List[Dict]) -> float:
