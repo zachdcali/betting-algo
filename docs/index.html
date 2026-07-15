@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.5">
-  <script src="dashboard_logic.js?v=2026-07-14.5" defer></script>
-  <script src="dashboard.js?v=2026-07-14.5" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.6">
+  <script src="dashboard_logic.js?v=2026-07-14.6" defer></script>
+  <script src="dashboard.js?v=2026-07-14.6" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,7 +23,7 @@
       </div>
       <div class="header-meta" aria-label="Dashboard metadata">
         <span class="paper-pill">Paper only</span>
-        <span id="dashboard-build">Build 2026-07-14.5</span>
+        <span id="dashboard-build">Build 2026-07-14.6</span>
         <span id="page-fetch-time">Loading data…</span>
       </div>
     </header>
@@ -153,6 +153,13 @@
         <div class="notice warning">
           All scores come from the generated Model Evaluation Ledger. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Counterfactual Kelly uses the configured 0.18 multiplier but does not replay the live run-wide exposure allocator.
         </div>
+        <article class="panel-card performance-population-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">Parallel populations—not one sample</p><h3>What each performance number counts</h3></div>
+          </div>
+          <div id="performance-population-map" class="run-funnel performance-population-map skeleton" aria-live="polite"></div>
+          <p class="section-note">Prediction cohorts measure model quality. Counterfactual bets replay a rule on those predictions. Placed-bet outcomes measure the paper ledger; attribution-uncertain recoveries release capital and preserve P&amp;L but never become model evidence.</p>
+        </article>
         <div id="cohort-definition" class="cohort-definition"></div>
         <div id="ledger-publication-state" class="notice neutral">Loading authoritative ledger metrics and verifying their sync generation…</div>
         <p><a class="secondary-button" href="modeling/MODEL_LEDGER.md">Open generated Model Evaluation Ledger</a></p>

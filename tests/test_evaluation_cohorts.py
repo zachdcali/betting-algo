@@ -83,6 +83,129 @@ def test_ground_truth_orientation_and_dedup():
     assert "m4" not in gt.index  # void sentinel excluded
 
 
+def _semantic_prediction(
+    match_uid: str,
+    *,
+    p1: str,
+    p2: str,
+    actual_winner: int,
+    event: str,
+    model_p1_prob: float,
+) -> dict:
+    return dict(
+        match_uid=match_uid,
+        p1=p1,
+        p2=p2,
+        match_date="2026-07-14",
+        tournament=event,
+        actual_winner=actual_winner,
+        record_status="settled",
+        features_complete=True,
+        logging_quality="snapshot_v2",
+        rescore_quality="exact_feature_snapshot",
+        feature_snapshot_verified=True,
+        model_p1_prob=model_p1_prob,
+        xgb_p1_prob=model_p1_prob,
+        rf_p1_prob=model_p1_prob,
+        market_p1_prob=model_p1_prob,
+        p1_odds_decimal=2.0,
+        p2_odds_decimal=2.0,
+    )
+
+
+def test_semantic_duplicate_uids_keep_one_deterministic_oriented_result():
+    predictions = pd.DataFrame([
+        _semantic_prediction(
+            "uid_z", p1="Alice Smith", p2="Bob-Jones", actual_winner=1,
+            event="Challenger - Lincoln (9)", model_p1_prob=0.70,
+        ),
+        # Same winner and match, but the source flipped player orientation and
+        # changed the volatile Bovada event-count suffix.
+        _semantic_prediction(
+            "uid_a", p1="Bob Jones", p2="Alice Smith", actual_winner=2,
+            event="Challenger - Lincoln (4)", model_p1_prob=0.30,
+        ),
+    ])
+
+    forward = cohorts.build_ground_truth(predictions)
+    reversed_input = cohorts.build_ground_truth(predictions.iloc[::-1])
+    assert forward.to_dict() == {"uid_a": 0}
+    assert reversed_input.to_dict() == {"uid_a": 0}
+
+    scored = cohorts.build_scored_frame(predictions, None)
+    assert set(scored["match_uid"]) == {"uid_a"}
+    assert len(scored) == 4
+    assert scored["y1"].eq(0).all()
+    assert scored.loc[scored.model == "nn", "p1_prob"].iloc[0] == 0.30
+
+
+def test_semantic_representative_prefers_decision_grade_over_lexical_uid():
+    lower_quality = _semantic_prediction(
+        "uid_a", p1="Alice Smith", p2="Bob Jones", actual_winner=1,
+        event="Lincoln", model_p1_prob=0.70,
+    )
+    lower_quality.update({
+        "features_complete": False,
+        "feature_snapshot_verified": False,
+        "logging_quality": "legacy_backfilled",
+        "rescore_quality": "legacy_fallback_match",
+        "identity_status": "legacy_unclassified",
+        "xgb_p1_prob": np.nan,
+        "rf_p1_prob": np.nan,
+        "market_p1_prob": np.nan,
+    })
+    decision_grade = _semantic_prediction(
+        "uid_z", p1="Bob Jones", p2="Alice Smith", actual_winner=2,
+        event="Lincoln", model_p1_prob=0.30,
+    )
+    decision_grade["identity_status"] = "canonical"
+    predictions = pd.DataFrame([lower_quality, decision_grade])
+
+    assert cohorts.build_ground_truth(predictions).to_dict() == {"uid_z": 0}
+    scored = cohorts.build_scored_frame(predictions, None)
+    assert set(scored["match_uid"]) == {"uid_z"}
+    assert len(scored) == 4
+    assert scored["is_gold"].all()
+    assert scored["y1"].eq(0).all()
+
+
+def test_semantic_duplicate_uids_with_contradictory_winners_fail_closed():
+    predictions = pd.DataFrame([
+        _semantic_prediction(
+            "uid_a", p1="Alice Smith", p2="Bob Jones", actual_winner=1,
+            event="Lincoln", model_p1_prob=0.70,
+        ),
+        # With reversed orientation, actual_winner=1 now asserts that Bob won.
+        _semantic_prediction(
+            "uid_b", p1="Bob Jones", p2="Alice Smith", actual_winner=1,
+            event="Lincoln", model_p1_prob=0.70,
+        ),
+    ])
+
+    assert cohorts.build_ground_truth(predictions).empty
+    assert cohorts.build_scored_frame(predictions, None).empty
+
+
+def test_internal_uid_outcome_conflict_poisoning_semantic_group_fails_closed():
+    valid = _semantic_prediction(
+        "uid_a", p1="Alice Smith", p2="Bob Jones", actual_winner=1,
+        event="Lincoln", model_p1_prob=0.70,
+    )
+    conflicting_alice = _semantic_prediction(
+        "uid_b", p1="Alice Smith", p2="Bob Jones", actual_winner=1,
+        event="Lincoln", model_p1_prob=0.70,
+    )
+    conflicting_bob = {
+        **conflicting_alice,
+        "actual_winner": 2,
+        "model_p1_prob": 0.65,
+    }
+    predictions = pd.DataFrame([valid, conflicting_alice, conflicting_bob])
+
+    assert cohorts.build_ground_truth(predictions).empty
+    assert cohorts.build_scored_frame(predictions, None).empty
+
+
 def test_any_identity_tombstone_blocks_uid_ground_truth_and_tiers():
     rows = pd.DataFrame([
         {

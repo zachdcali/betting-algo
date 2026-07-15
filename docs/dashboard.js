@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-14.5";
+  const BUILD_ID = "2026-07-14.6";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -44,6 +44,7 @@
     "bet_on", "odds_decimal", "stake", "model_prob", "market_prob", "edge", "kelly_fraction",
     "status", "outcome", "actual_profit", "bankroll_before", "bankroll_after",
     "settled_timestamp", "model_version", "match_date", "match_start_time",
+    "settlement_quality", "attribution_quality", "metric_eligible",
   ].join(",");
 
   // Current-run tables are small after run_id filtering. Selecting all columns
@@ -1280,6 +1281,64 @@
     return rows.find((row) => Logic.clean(row.model).toLowerCase() === preferred) || null;
   }
 
+  function renderPerformancePopulationMap(selectedTierRows, sourceRows, tier) {
+    const host = byId("performance-population-map");
+    clear(host);
+    host.classList.remove("skeleton");
+
+    const settledPredictions = store.predictions.filter((row) => Logic.validWinner(row.actual_winner));
+    const selectedNs = sourceRows
+      .map((row) => Logic.numberOrNull(row.n))
+      .filter((value) => value !== null);
+    const selectedMin = selectedNs.length ? Math.min(...selectedNs) : null;
+    const selectedMax = selectedNs.length ? Math.max(...selectedNs) : null;
+    const selectedCohort = selectedMin === null
+      ? "—"
+      : selectedMin === selectedMax
+        ? formatNumber(selectedMin)
+        : `${formatNumber(selectedMin)}–${formatNumber(selectedMax)}`;
+    const nnMetric = selectedTierRows.find(
+      (row) => Logic.clean(row.model).toLowerCase() === "nn",
+    );
+    const decidedBets = store.bets.filter((bet) =>
+      ["win", "loss"].includes(Logic.normalizeBetOutcome(bet)),
+    );
+    const exactBets = decidedBets.filter((bet) => Logic.isTrue(bet.metric_eligible));
+    const accountingOnly = decidedBets.filter((bet) =>
+      ["false", "0", "no", "n"].includes(Logic.clean(bet.metric_eligible).toLowerCase()),
+    );
+    const unknownAttribution = decidedBets.length - exactBets.length - accountingOnly.length;
+    const cohortDescription = tier.includes("gold")
+      ? "exact verified feature lineage"
+      : tier.includes("complete")
+        ? "complete-feature context cohort"
+        : "selected authoritative ledger cohort";
+    const stages = [
+      ["Settled prediction rows", formatNumber(settledPredictions.length), "outcome known; not automatically unique or GOLD"],
+      ["Selected model cohort", selectedCohort, cohortDescription],
+      ["NN counterfactual bets", nnMetric ? formatNumber(nnMetric.n_bets_kelly) : "—", "simulated rule; not placed paper bets"],
+      ["Placed bets · exact", formatNumber(exactBets.length), "explicit metric_eligible attribution"],
+      ["Placed bets · accounting only", formatNumber(accountingOnly.length), "P&L retained; excluded from model metrics"],
+      ["Placed bets · legacy unknown", formatNumber(unknownAttribution), "eligibility was never asserted"],
+    ];
+    stages.forEach(([label, value, note]) => {
+      const step = element("div", "funnel-step");
+      step.append(
+        element("span", null, label),
+        element("strong", null, value),
+        element("small", null, note),
+      );
+      host.appendChild(step);
+    });
+  }
+
+  function withholdPerformancePopulationMap(message) {
+    const host = byId("performance-population-map");
+    clear(host);
+    host.classList.remove("skeleton");
+    host.appendChild(emptyState(message));
+  }
+
   function renderMetricExplorer(rows, tier, benchmarkRows = rows) {
     const host = byId("metric-chart");
     clear(host);
@@ -1464,6 +1523,7 @@
 
     const state = byId("ledger-publication-state");
     if (!generationCounts.ok) {
+      withholdPerformancePopulationMap("Population counts are withheld until the dashboard generation is verified.");
       state.className = "notice failed";
       state.textContent = `Dashboard generation counts are not verified (${generationCounts.issues.join("; ")}). Ledger rows are withheld; no browser-calculated fallback is shown.`;
       addCohortFact(definition, "Count verification", "failed");
@@ -1472,6 +1532,7 @@
     }
     const metricsError = Logic.clean(store.errors.metrics);
     if (metricsError || !store.metrics.length) {
+      withholdPerformancePopulationMap("Population counts are withheld because authoritative ledger metrics are unavailable.");
       state.className = "notice failed";
       state.textContent = `Authoritative ledger metrics unavailable${metricsError ? ` (${metricsError})` : ""}. No browser-calculated fallback is shown.`;
       addCohortFact(definition, "Source", "production.evaluation.ledger");
@@ -1481,6 +1542,7 @@
     }
 
     if (!generationMatches) {
+      withholdPerformancePopulationMap("Population counts are withheld until metrics and operational tables share one accepted generation.");
       state.className = "notice failed";
       state.textContent = manifestSyncId
         ? "Ledger metrics do not match the accepted dashboard sync generation. The comparison is withheld to avoid mixing data eras."
@@ -1492,6 +1554,7 @@
     }
 
     if (!sourceRows.length) {
+      withholdPerformancePopulationMap("No authoritative population is available for this cohort and model scope.");
       state.className = "notice warning";
       state.textContent = `The accepted ledger generation contains no ${scope.replaceAll("_", " ")} rows for ${tierLabels[tier] || tier}. Choose a compatible cohort; no browser-calculated fallback is shown.`;
       addCohortFact(definition, "Sync", manifestSyncId);
@@ -1499,6 +1562,8 @@
       clearPerformanceTable("No authoritative rows are available for this cohort.");
       return;
     }
+
+    renderPerformancePopulationMap(selectedTierRows, sourceRows, tier);
 
     const cohortSizes = sourceRows.map((row) => Logic.numberOrNull(row.n)).filter((value) => value !== null);
     const minN = cohortSizes.length ? Math.min(...cohortSizes) : null;

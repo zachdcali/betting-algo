@@ -118,6 +118,27 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.equal((performanceHead[1].match(/<th\b/g) || []).length, 13);
 });
 
+test("performance UI separates prediction, counterfactual, and placed-bet populations", () => {
+  assert.match(html, /id="performance-population-map"/);
+  assert.match(html, /Parallel populations—not one sample/);
+  for (const label of [
+    "Settled prediction rows",
+    "Selected model cohort",
+    "NN counterfactual bets",
+    "Placed bets · exact",
+    "Placed bets · accounting only",
+    "Placed bets · legacy unknown",
+  ]) {
+    assert.match(client, new RegExp(label));
+  }
+  for (const field of ["settlement_quality", "attribution_quality", "metric_eligible"]) {
+    assert.match(client, new RegExp(`"${field}"`));
+  }
+  assert.match(client, /Logic\.isTrue\(bet\.metric_eligible\)/);
+  assert.match(client, /withholdPerformancePopulationMap\(/);
+  assert.match(client, /renderPerformancePopulationMap\(selectedTierRows, sourceRows, tier\)/);
+});
+
 test("slate renders tournament-grouped two-player decision boards with an explicit EV hurdle", () => {
   assert.match(client, /Logic\.groupTournamentEntries\(entries\)/);
   assert.match(client, /Logic\.playerDecisionRows\(row\)\.forEach\(\(playerRow\) =>/);
