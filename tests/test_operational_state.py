@@ -211,6 +211,113 @@ def test_bet_merge_rejects_conflicting_explicit_metric_eligibility():
         merge_state_frames(exact, accounting_only, SPECS["dash_bets"])
 
 
+def test_bet_merge_accepts_csv_postgres_numeric_round_trip_noise():
+    remote = pd.DataFrame([{
+        "bet_id": "bet_20260715_153101_2",
+        "status": "pending",
+        "outcome": "",
+        "match": "Tyler Zink vs Alexis Galarneau",
+        "match_uid": "match_d69ad9449e3a285a201d",
+        "feature_snapshot_id": "feat_01676af0ba615e2ade36",
+        "run_id": "run_20260715T150502Z",
+        "bet_on": "Tyler Zink",
+        "bet_on_player1": "true",
+        "stake": "18.836159128126734",
+        "odds_decimal": "3.25",
+    }])
+    local = remote.copy()
+    local.loc[0, "stake"] = "18.83615912812673"
+    local.loc[0, "odds_decimal"] = "3.2500000000000004"
+
+    merged = merge_state_frames(remote, local, SPECS["dash_bets"])
+
+    assert len(merged) == 1
+    assert merged.iloc[0]["bet_id"] == "bet_20260715_153101_2"
+
+
+def test_bet_merge_rejects_numeric_change_above_transport_tolerance():
+    existing = pd.DataFrame([{
+        "bet_id": "b1", "status": "pending", "outcome": "",
+        "stake": "18.83615912812673", "odds_decimal": "3.25",
+    }])
+    changed = existing.copy()
+    changed.loc[0, "stake"] = "18.83615912822673"
+
+    with pytest.raises(RuntimeError, match="conflicting immutable bet stake"):
+        merge_state_frames(existing, changed, SPECS["dash_bets"])
+
+
+def test_bet_merge_caps_tolerance_for_extreme_numeric_values():
+    existing = pd.DataFrame([{
+        "bet_id": "b1", "status": "pending", "outcome": "",
+        "stake": "1000000000000000", "odds_decimal": "3.25",
+    }])
+    changed = existing.copy()
+    changed.loc[0, "stake"] = "1000000000000001"
+
+    with pytest.raises(RuntimeError, match="conflicting immutable bet stake"):
+        merge_state_frames(existing, changed, SPECS["dash_bets"])
+
+
+def test_terminal_bet_merge_accepts_numeric_round_trip_noise():
+    common = {
+        "bet_id": "b1",
+        "status": "settled",
+        "outcome": "loss",
+        "stake": "4.975670098212187",
+        "odds_decimal": "2.1",
+        "settled_timestamp": "2026-07-15T16:51:11Z",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid",
+        "metric_eligible": "true",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }
+    remote = pd.DataFrame([{
+        **common,
+        "actual_profit": "-4.975670098212187",
+        "bankroll_after": "565.4660846227465",
+    }])
+    local = pd.DataFrame([{
+        **common,
+        "actual_profit": "-4.9756700982121875",
+        "bankroll_after": "565.4660846227466",
+    }])
+
+    merged = merge_state_frames(remote, local, SPECS["dash_bets"])
+
+    assert len(merged) == 1
+    assert merged.iloc[0]["outcome"] == "loss"
+
+
+def test_terminal_bet_merge_still_rejects_material_bankroll_conflict():
+    common = {
+        "bet_id": "b1",
+        "status": "settled",
+        "outcome": "loss",
+        "stake": "4.975670098212187",
+        "odds_decimal": "2.1",
+        "actual_profit": "-4.975670098212187",
+        "settled_timestamp": "2026-07-15T16:51:11Z",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid",
+        "metric_eligible": "true",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }
+    remote = pd.DataFrame([{
+        **common, "bankroll_after": "565.4660846227465",
+    }])
+    changed = pd.DataFrame([{
+        **common, "bankroll_after": "565.4760846227465",
+    }])
+
+    with pytest.raises(
+        RuntimeError, match="conflicting terminal bet bankroll_after"
+    ):
+        merge_state_frames(remote, changed, SPECS["dash_bets"])
+
+
 def test_bet_merge_rejects_conflicting_result_evidence_and_terminal_pnl():
     common = {
         "bet_id": "b1",
