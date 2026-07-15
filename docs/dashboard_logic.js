@@ -662,7 +662,7 @@
     return { state: "unverified", deadline: null, basis: "missing match and placement time" };
   }
 
-  function nextScheduledRun(now = Date.now()) {
+  function nextScheduleTarget(now = Date.now()) {
     const nowDate = now instanceof Date ? new Date(now.getTime()) : new Date(now);
     const candidates = [];
     for (const offsetHours of [0, 1]) {
@@ -877,7 +877,7 @@
     currentAccountState,
     generationTrustIssue,
     pendingBetSlaStatus,
-    nextScheduledRun,
+    nextScheduleTarget,
     compareManifestCounts,
     playerDecisionRows,
     edgeBand,

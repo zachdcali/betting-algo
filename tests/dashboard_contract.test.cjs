@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, "..");
 const client = fs.readFileSync(path.join(ROOT, "docs", "dashboard.js"), "utf8");
 const logic = fs.readFileSync(path.join(ROOT, "docs", "dashboard_logic.js"), "utf8");
 const html = fs.readFileSync(path.join(ROOT, "docs", "index.html"), "utf8");
+const hourlyWorkflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "hourly-pipeline.yml"), "utf8");
 const deployedVersion = JSON.parse(fs.readFileSync(path.join(ROOT, "docs", "dashboard_version.json"), "utf8"));
 
 test("dashboard loads one manifest-pinned generation and retries a moving manifest", () => {
@@ -41,6 +42,18 @@ test("deployment-version checks are allowed by the dashboard CSP", () => {
     html,
     /connect-src 'self' https:\/\/nwcayyusigznreygjlxl\.supabase\.co/,
   );
+});
+
+test("scheduled target slots are explicitly best effort, never guaranteed cadence", () => {
+  assert.match(hourlyWorkflow, /best-effort target slots/);
+  assert.match(hourlyWorkflow, /neither target nor an hourly cadence is guaranteed/);
+  assert.match(hourlyWorkflow, /second target reduces expected latency; it is not a delivery guarantee/);
+  assert.doesNotMatch(hourlyWorkflow, /keeps effective cadence hourly/);
+  assert.match(client, /nextScheduleTarget/);
+  assert.match(client, /best effort; delivery (?:is )?not guaranteed/);
+  assert.doesNotMatch(client, /inside the expected :17 \/ :47 cadence/);
+  assert.match(html, /Next target slot/);
+  assert.match(html, /best effort; delivery not guaranteed/);
 });
 
 test("current slate is snapshot and skipped-audit based, never canonical-latest based", () => {
