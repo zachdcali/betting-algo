@@ -575,6 +575,19 @@
     "source_uri": "https://www.atptour.com/en/players/ilyas-milad-fahim/f0ii/overview",
     "status": "identity_mismatch"
   },
+  "ivan ivanov": {
+    "canonical_player_id": 129814,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T15:23:03+00:00",
+    "observed_values": {},
+    "source_content_sha256": "228991462c9efc1f7d76d099571125d340f276e7514d1904e2d0e3615daf5bca",
+    "source_uri": "https://www.atptour.com/en/players/ivan-ivanov/i0bf/overview",
+    "status": "identity_mismatch"
+  },
   "james kent trotter": {
     "canonical_player_id": 208801,
     "identity_binding": "",
@@ -1602,6 +1615,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/thanaphat%20boosarawongse",
     "status": "no_url"
+  },
+  "tiago pereira": {
+    "canonical_player_id": 211500,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-15T15:23:08+00:00",
+    "observed_values": {},
+    "source_content_sha256": "060194e7dfb21f1fbe9a871eff1dee4c310150387c9c1c4d85b62649adf1047d",
+    "source_uri": "https://www.atptour.com/en/players/tiago-pereira/p0k4/overview",
+    "status": "identity_mismatch"
   },
   "tom sickenberger": {
     "identity_binding": "",

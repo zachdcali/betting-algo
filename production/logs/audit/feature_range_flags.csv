@@ -13080,3 +13080,5 @@ logged_at,run_id,p1,p2,flag
 2026-07-15T12:09:46+00:00,run_20260715T113727Z,benedikt szerencsits,nicolas parizzia,P2_Country_SUI=1 (z=8.2)
 2026-07-15T12:10:04+00:00,run_20260715T113727Z,lorenzo joaquin rodriguez,federico juan aguilar,P2_Days_Since_Last=2417 (z=44.1)
 2026-07-15T12:10:08+00:00,run_20260715T113727Z,felipe pagnacco,juan estevez,P1_Days_Since_Last=744 (z=14.3)
+2026-07-15T15:27:30+00:00,run_20260715T150502Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
+2026-07-15T15:27:35+00:00,run_20260715T150502Z,juan manuel cerundolo,miomir kecmanovic,P2_Country_SRB=1 (z=8.3)
