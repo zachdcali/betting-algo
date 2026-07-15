@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import pytest
 
 PRODUCTION = Path(__file__).resolve().parents[1] / "production"
 sys.path.insert(0, str(PRODUCTION))
@@ -131,6 +132,226 @@ def test_terminal_run_and_bet_outrank_newer_running_or_pending_copy():
     bet_incoming = pd.DataFrame([{"bet_id": "b1", "status": "pending", "outcome": ""}])
     assert merge_state_frames(run_existing, run_incoming, SPECS["dash_runs"]).iloc[0]["status"] == "success"
     assert merge_state_frames(bet_existing, bet_incoming, SPECS["dash_bets"]).iloc[0]["outcome"] == "win"
+
+
+def test_bet_attribution_enrichment_outranks_newer_blank_settled_copy():
+    durable_exact = pd.DataFrame([{
+        "bet_id": "b1", "status": "settled", "outcome": "win",
+        "settled_timestamp": "2026-07-14T10:00:00Z",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid", "metric_eligible": "true",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }])
+    stale_local_blank = pd.DataFrame([{
+        "bet_id": "b1", "status": "settled", "outcome": "win",
+        "settled_timestamp": "2026-07-14T10:00:00Z",
+        "attribution_quality": "", "metric_eligible": "",
+        "result_evidence_kind": "", "result_evidence_sha256": "",
+    }])
+
+    merged = merge_state_frames(
+        durable_exact, stale_local_blank, SPECS["dash_bets"]
+    ).iloc[0]
+
+    assert merged["metric_eligible"] == "true"
+    assert merged["attribution_quality"] == "exact_match_uid"
+    assert merged["result_evidence_sha256"] == "a" * 64
+
+
+def test_bet_repairable_unknown_can_upgrade_to_exact():
+    common = {
+        "bet_id": "b1",
+        "status": "settled",
+        "outcome": "win",
+        "stake": "10",
+        "odds_decimal": "2",
+        "actual_profit": "10",
+        "bankroll_after": "1010",
+        "settled_timestamp": "2026-07-14T10:00:00Z",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }
+    unknown = pd.DataFrame([{
+        **common,
+        "attribution_quality": "exact_match_uid_unverified_feature_snapshot",
+        "metric_eligible": "",
+    }])
+    exact = pd.DataFrame([{
+        **common,
+        "attribution_quality": "exact_match_uid",
+        "metric_eligible": "true",
+    }])
+
+    merged = merge_state_frames(unknown, exact, SPECS["dash_bets"]).iloc[0]
+    assert merged["metric_eligible"] == "true"
+    assert merged["attribution_quality"] == "exact_match_uid"
+    assert merged["result_evidence_sha256"] == "a" * 64
+
+
+def test_bet_merge_rejects_conflicting_explicit_metric_eligibility():
+    common = {
+        "bet_id": "b1", "status": "settled", "outcome": "win",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }
+    exact = pd.DataFrame([{
+        **common, "metric_eligible": "true",
+    }])
+    accounting_only = pd.DataFrame([{
+        **common, "metric_eligible": "false",
+    }])
+
+    with pytest.raises(
+        RuntimeError, match="conflicting immutable bet metric_eligible"
+    ):
+        merge_state_frames(exact, accounting_only, SPECS["dash_bets"])
+
+
+def test_bet_merge_rejects_conflicting_result_evidence_and_terminal_pnl():
+    common = {
+        "bet_id": "b1",
+        "status": "settled",
+        "outcome": "win",
+        "stake": "10",
+        "odds_decimal": "2",
+        "actual_profit": "10",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid",
+        "metric_eligible": "true",
+        "result_evidence_kind": "auto_settle_atp_results",
+    }
+    durable = pd.DataFrame([{
+        **common,
+        "settled_timestamp": "2026-07-14T10:00:00Z",
+        "result_evidence_sha256": "a" * 64,
+    }])
+    changed_hash = pd.DataFrame([{
+        **common,
+        "settled_timestamp": "2026-07-15T10:00:00Z",
+        "result_evidence_sha256": "b" * 64,
+    }])
+    with pytest.raises(
+        RuntimeError, match="conflicting immutable bet result_evidence_sha256"
+    ):
+        merge_state_frames(durable, changed_hash, SPECS["dash_bets"])
+
+    changed_pnl = pd.DataFrame([{
+        **common,
+        "outcome": "loss",
+        "actual_profit": "-10",
+        "settled_timestamp": "2026-07-15T10:00:00Z",
+        "result_evidence_sha256": "a" * 64,
+    }])
+    with pytest.raises(RuntimeError, match="conflicting terminal bet outcome"):
+        merge_state_frames(durable, changed_pnl, SPECS["dash_bets"])
+
+    pending_claim = pd.DataFrame([{
+        **common,
+        "status": "pending",
+        "outcome": "",
+        "actual_profit": "",
+        "result_evidence_sha256": "a" * 64,
+    }])
+    with pytest.raises(
+        RuntimeError, match="nonterminal bet carries attribution bundle"
+    ):
+        merge_state_frames(pd.DataFrame(), pending_claim, SPECS["dash_bets"])
+
+
+def test_bet_merge_rejects_internally_invalid_terminal_accounting():
+    common = {
+        "bet_id": "b1",
+        "match": "Player One vs Player Two",
+        "match_uid": "m1",
+        "feature_snapshot_id": "f1",
+        "run_id": "r1",
+        "bet_on": "Player One",
+        "bet_on_player1": "true",
+        "stake": "10",
+        "odds_decimal": "2",
+        "bankroll_after": "990",
+        "settled_timestamp": "2026-07-14T10:00:00Z",
+        "settlement_quality": "authoritative_result_exact_match_uid",
+        "attribution_quality": "exact_match_uid",
+        "metric_eligible": "true",
+        "result_evidence_kind": "auto_settle_atp_results",
+        "result_evidence_sha256": "a" * 64,
+    }
+    wrong_pnl = pd.DataFrame([{
+        **common,
+        "status": "settled",
+        "outcome": "win",
+        "actual_profit": "-10",
+    }])
+    with pytest.raises(RuntimeError, match="invalid P&L arithmetic"):
+        merge_state_frames(pd.DataFrame(), wrong_pnl, SPECS["dash_bets"])
+
+    pending_result = pd.DataFrame([{
+        **common,
+        "status": "pending",
+        "outcome": "win",
+        "actual_profit": "10",
+    }])
+    with pytest.raises(RuntimeError, match="nonterminal bet carries attribution"):
+        merge_state_frames(
+            pd.DataFrame(), pending_result, SPECS["dash_bets"]
+        )
+
+    for status, outcome in (("void", "void"), ("cancel", "canceled")):
+        invalid_refund = pd.DataFrame([{
+            **common,
+            "status": status,
+            "outcome": outcome,
+            "actual_profit": "10",
+            "settlement_quality": "result_recorded_without_attribution_proof",
+            "attribution_quality": "unverified",
+            "metric_eligible": "false",
+            "result_evidence_kind": "",
+            "result_evidence_sha256": "",
+        }])
+        with pytest.raises(RuntimeError, match="is not refunded"):
+            merge_state_frames(
+                pd.DataFrame(), invalid_refund, SPECS["dash_bets"]
+            )
+
+    invalid_void_metric = pd.DataFrame([{
+        **common,
+        "status": "void",
+        "outcome": "void",
+        "actual_profit": "0",
+    }])
+    with pytest.raises(RuntimeError, match="cannot be metric eligible"):
+        merge_state_frames(
+            pd.DataFrame(), invalid_void_metric, SPECS["dash_bets"]
+        )
+
+
+def test_bet_merge_requires_canonical_status_and_clean_nonterminal_state():
+    for status in ("", "pendng", "open"):
+        invalid_status = pd.DataFrame([{
+            "bet_id": f"bad-{status or 'blank'}",
+            "status": status,
+            "outcome": "",
+        }])
+        with pytest.raises(RuntimeError, match="invalid canonical bet status"):
+            merge_state_frames(
+                pd.DataFrame(), invalid_status, SPECS["dash_bets"]
+            )
+
+    pending_with_terminal = pd.DataFrame([{
+        "bet_id": "pending-terminal",
+        "status": "pending",
+        "outcome": "win",
+        "actual_profit": "10",
+    }])
+    with pytest.raises(RuntimeError, match="pending bet carries terminal state"):
+        merge_state_frames(
+            pd.DataFrame(), pending_with_terminal, SPECS["dash_bets"]
+        )
 
 
 def test_same_quality_prefers_fresher_copy_not_incoming_order():

@@ -856,7 +856,8 @@ def test_bet_tracker_settles_string_false_as_player_two(tmp_path):
     bets.to_csv(tracker.bets_file, index=False)
 
     assert tracker.settle_pending_bets_for_match(
-        match_uid="match_bool", actual_winner=2,
+        match_uid="match_bool", p1="Player One", p2="Player Two",
+        actual_winner=2,
     ) == 1
     settled = pd.read_csv(tracker.bets_file).iloc[0]
     assert settled["status"] == "settled"
@@ -866,12 +867,17 @@ def test_bet_tracker_settles_string_false_as_player_two(tmp_path):
 
 def test_bet_settlement_never_fuzzy_matches_a_different_nonblank_uid(tmp_path):
     from utils.bet_tracker import BETS_COLUMNS, BetTracker
+    from settlement_attribution import (
+        FeatureAttributionEvidence,
+        build_auto_result_evidence,
+    )
 
     tracker = BetTracker(str(tmp_path))
     session_id = tracker.start_session(1000.0, 0.18, "identity settlement")
     rows = []
     for bet_id, match_uid in (
         ("exact", "match_canonical"),
+        ("exact_wrong_run", "match_canonical"),
         ("explicit_alias", "match_old_alias"),
         ("different_uid", "match_other_round"),
         ("legacy_blank", ""),
@@ -888,8 +894,34 @@ def test_bet_settlement_never_fuzzy_matches_a_different_nonblank_uid(tmp_path):
             "stake": 10.0,
             "status": "pending",
         })
+        if bet_id in {"exact", "exact_wrong_run"}:
+            row["feature_snapshot_id"] = "feat_exact"
+            row["run_id"] = (
+                "run_exact" if bet_id == "exact" else "run_other"
+            )
         rows.append(row)
     pd.DataFrame(rows, columns=BETS_COLUMNS).to_csv(tracker.bets_file, index=False)
+
+    feature_evidence = {
+        "feat_exact": FeatureAttributionEvidence(
+            feature_snapshot_id="feat_exact",
+            run_id="run_exact",
+            match_uid="match_canonical",
+            p1="Player One",
+            p2="Player Two",
+            feature_schema_sha256="a" * 64,
+            feature_vector_sha256="b" * 64,
+        )
+    }
+    bound_result_evidence = build_auto_result_evidence(
+        source_evidence={"source": "tennis_abstract", "candidate": "exact"},
+        match_uid="match_canonical",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+        score="6-4 6-4",
+    )
+    result_evidence_kind, result_evidence_sha256 = bound_result_evidence
 
     assert tracker.settle_pending_bets_for_match(
         match_uid="match_canonical",
@@ -897,24 +929,625 @@ def test_bet_settlement_never_fuzzy_matches_a_different_nonblank_uid(tmp_path):
         p1="Player One",
         p2="Player Two",
         actual_winner=1,
-    ) == 2
+        exact_feature_evidence=feature_evidence,
+        result_evidence_kind=result_evidence_kind,
+        result_evidence_sha256=result_evidence_sha256,
+        bound_result_evidence=bound_result_evidence,
+    ) == 3
     first_pass = pd.read_csv(tracker.bets_file).set_index("bet_id")
     assert first_pass.loc["exact", "status"] == "settled"
     assert first_pass.loc["explicit_alias", "status"] == "settled"
     assert first_pass.loc["different_uid", "status"] == "pending"
     assert first_pass.loc["legacy_blank", "status"] == "pending"
+    assert first_pass.loc["exact", "settlement_quality"] == (
+        "authoritative_result_exact_match_uid"
+    )
+    assert first_pass.loc["exact", "attribution_quality"] == "exact_match_uid"
+    assert str(first_pass.loc["exact", "metric_eligible"]).lower() == "true"
+    assert first_pass.loc["exact", "result_evidence_kind"] == (
+        "auto_settle_tennis_abstract"
+    )
+    assert first_pass.loc["exact", "result_evidence_sha256"] == (
+        result_evidence_sha256
+    )
+    assert first_pass.loc["explicit_alias", "attribution_quality"] == (
+        "unattributed_rotated_match_uid"
+    )
+    assert str(
+        first_pass.loc["explicit_alias", "metric_eligible"]
+    ).lower() == "false"
+    assert first_pass.loc["exact_wrong_run", "attribution_quality"] == (
+        "exact_match_uid_unverified_feature_snapshot"
+    )
+    assert pd.isna(first_pass.loc["exact_wrong_run", "metric_eligible"])
 
-    # Once exact/alias rows are gone, the compatibility fallback may settle the
-    # blank-ID legacy bet, but still cannot touch another nonblank UID.
+    # A result carrying a UID can never fall through to pair-only matching,
+    # even for a legacy blank-UID bet.
     assert tracker.settle_pending_bets_for_match(
         match_uid="match_canonical",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    ) == 0
+    second_pass = pd.read_csv(tracker.bets_file).set_index("bet_id")
+    assert second_pass.loc["legacy_blank", "status"] == "pending"
+    assert second_pass.loc["different_uid", "status"] == "pending"
+
+    # Pair-only compatibility is blank-result-UID to blank-bet-UID only. The
+    # modern nonblank bet remains pending despite the identical player pair.
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="",
         p1="Player One",
         p2="Player Two",
         actual_winner=1,
     ) == 1
     second_pass = pd.read_csv(tracker.bets_file).set_index("bet_id")
     assert second_pass.loc["legacy_blank", "status"] == "settled"
+    assert second_pass.loc["legacy_blank", "attribution_quality"] == "uid_unlinked"
+    assert str(
+        second_pass.loc["legacy_blank", "metric_eligible"]
+    ).lower() == "false"
     assert second_pass.loc["different_uid", "status"] == "pending"
+
+
+def test_auto_settlement_uses_winner_identity_across_orientation_changes(tmp_path):
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    tracker = BetTracker(str(tmp_path))
+    session_id = tracker.start_session(1000.0, 0.18, "orientation settlement")
+    row = {column: "" for column in BETS_COLUMNS}
+    row.update({
+        "bet_id": "flipped",
+        "session_id": session_id,
+        "match": "Player Two vs Player One",
+        "match_uid": "match_orientation",
+        "bet_on": "Player Two",
+        "bet_on_player1": True,
+        "odds_decimal": 2.0,
+        "stake": 10.0,
+        "status": "pending",
+    })
+    wrong_pair = dict(row)
+    wrong_pair.update({
+        "bet_id": "one_player_overlap",
+        "match": "Player One vs Different Opponent",
+        "bet_on": "Player One",
+    })
+    pd.DataFrame([row, wrong_pair], columns=BETS_COLUMNS).to_csv(
+        tracker.bets_file, index=False
+    )
+
+    # The settlement result is oriented Player One vs Player Two. Numeric P1
+    # would incorrectly mark this flipped bet as a win; winner identity says loss.
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_orientation",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    ) == 1
+    rows = pd.read_csv(tracker.bets_file).set_index("bet_id")
+    settled = rows.loc["flipped"]
+    assert settled["outcome"] == "loss"
+    assert settled["actual_profit"] == -10.0
+    assert settled["attribution_quality"] == (
+        "exact_match_uid_unverified_feature_snapshot"
+    )
+    assert pd.isna(settled["metric_eligible"])
+    assert rows.loc["one_player_overlap", "status"] == "pending"
+
+
+def test_auto_settlement_without_result_participants_stays_pending(tmp_path):
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    tracker = BetTracker(str(tmp_path))
+    row = {column: "" for column in BETS_COLUMNS}
+    row.update({
+        "bet_id": "missing_identity",
+        "match": "Player Two vs Player One",
+        "match_uid": "match_missing_identity",
+        "bet_on": "Player Two",
+        "bet_on_player1": True,
+        "odds_decimal": 2.0,
+        "stake": 10.0,
+        "status": "pending",
+    })
+    pd.DataFrame([row], columns=BETS_COLUMNS).to_csv(
+        tracker.bets_file, index=False
+    )
+
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_missing_identity",
+        p1=None,
+        p2=None,
+        actual_winner=1,
+    ) == 0
+    pending = pd.read_csv(tracker.bets_file, keep_default_na=False).iloc[0]
+    assert pending["status"] == "pending"
+    assert pending["outcome"] == ""
+    assert tracker.get_current_bankroll() == 1000.0
+
+
+def test_metric_true_fails_closed_without_bound_result_payload(tmp_path):
+    from settlement_attribution import (
+        ATTRIBUTION_QUALITY_EXACT_UID,
+        SETTLEMENT_QUALITY_EXACT_UID,
+        FeatureAttributionEvidence,
+        build_auto_result_evidence,
+    )
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    tracker = BetTracker(str(tmp_path))
+    rows = []
+    for bet_id in ("forward", "direct"):
+        row = {column: "" for column in BETS_COLUMNS}
+        row.update({
+            "bet_id": bet_id,
+            "match": "Player One vs Player Two",
+            "match_uid": "match_exact",
+            "feature_snapshot_id": "feat_exact",
+            "run_id": "run_exact",
+            "bet_on": "Player One",
+            "bet_on_player1": True,
+            "odds_decimal": 2.0,
+            "stake": 10.0,
+            "status": "pending",
+        })
+        rows.append(row)
+    pd.DataFrame(rows, columns=BETS_COLUMNS).to_csv(tracker.bets_file, index=False)
+    feature_evidence = {
+        "feat_exact": FeatureAttributionEvidence(
+            feature_snapshot_id="feat_exact",
+            run_id="run_exact",
+            match_uid="match_exact",
+            p1="Player One",
+            p2="Player Two",
+            feature_schema_sha256="a" * 64,
+            feature_vector_sha256="b" * 64,
+        )
+    }
+    bound = build_auto_result_evidence(
+        source_evidence={"source": "atp_results", "card": "exact"},
+        match_uid="match_exact",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+        score="6-4 6-4",
+    )
+    kind, digest = bound
+
+    # A kind/hash pair without its canonical payload cannot authorize metrics.
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_exact",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+        exact_feature_evidence=feature_evidence,
+        result_evidence_kind=kind,
+        result_evidence_sha256=digest,
+    ) == 2
+    settled = pd.read_csv(
+        tracker.bets_file, keep_default_na=False, dtype=str
+    ).set_index("bet_id")
+    assert set(settled["metric_eligible"]) == {""}
+    assert set(settled["result_evidence_kind"]) == {""}
+
+    # The lower-level writer independently rejects a caller-asserted true claim.
+    settled.loc["direct", [
+        "status", "outcome", "actual_profit", "bankroll_after",
+        "settled_timestamp", "settlement_quality", "attribution_quality",
+        "metric_eligible", "result_evidence_kind", "result_evidence_sha256",
+    ]] = ["pending", "", "", "", "", "", "", "", "", ""]
+    settled.reset_index().reindex(columns=BETS_COLUMNS).to_csv(
+        tracker.bets_file, index=False
+    )
+    tracker.settle_bet(
+        "direct",
+        won=True,
+        settlement_quality=SETTLEMENT_QUALITY_EXACT_UID,
+        attribution_quality=ATTRIBUTION_QUALITY_EXACT_UID,
+        metric_eligible=True,
+        result_evidence_kind=kind,
+        result_evidence_sha256=digest,
+        exact_feature_evidence=feature_evidence,
+    )
+    direct = pd.read_csv(
+        tracker.bets_file, keep_default_na=False
+    ).set_index("bet_id").loc["direct"]
+    assert direct["metric_eligible"] == ""
+    assert direct["settlement_quality"] == (
+        "authoritative_result_exact_match_uid"
+    )
+    assert direct["attribution_quality"] == (
+        "exact_match_uid_unverified_feature_snapshot"
+    )
+    assert direct["result_evidence_kind"] == ""
+
+
+def test_direct_uid_unknown_upgrades_when_exact_evidence_recovers(tmp_path):
+    from settlement_attribution import (
+        FeatureAttributionEvidence,
+        build_auto_result_evidence,
+    )
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    tracker = BetTracker(str(tmp_path))
+    row = {column: "" for column in BETS_COLUMNS}
+    row.update({
+        "bet_id": "repairable",
+        "session_id": "session_repairable",
+        "match": "Player One vs Player Two",
+        "match_uid": "match_repairable",
+        "feature_snapshot_id": "feat_repairable",
+        "run_id": "run_repairable",
+        "bet_on": "Player One",
+        "bet_on_player1": True,
+        "odds_decimal": 2.0,
+        "stake": 10.0,
+        "status": "pending",
+    })
+    pd.DataFrame([row], columns=BETS_COLUMNS).to_csv(
+        tracker.bets_file, index=False
+    )
+    result = build_auto_result_evidence(
+        source_evidence={"source": "atp_results", "event": "Rome"},
+        match_uid="match_repairable",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+        score="6-4 6-4",
+    )
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_repairable",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+        exact_feature_evidence={},
+        result_evidence_kind=result.kind,
+        result_evidence_sha256=result.sha256,
+        bound_result_evidence=result,
+    ) == 1
+    unknown = pd.read_csv(
+        tracker.bets_file, dtype=str, keep_default_na=False
+    ).iloc[0]
+    assert unknown["metric_eligible"] == ""
+    assert unknown["attribution_quality"] == (
+        "exact_match_uid_unverified_feature_snapshot"
+    )
+
+    predictions = pd.DataFrame([{
+        "match_uid": "match_repairable",
+        "prediction_uid": "pred_repairable",
+        "p1": "Player One",
+        "p2": "Player Two",
+        "actual_winner": 1,
+        "score": "6-4 6-4",
+        "settled_at": "2026-07-15T00:00:00Z",
+        "record_status": "settled",
+        "identity_status": "canonical",
+        "logging_quality": "snapshot_v2",
+        "rescore_quality": "exact_feature_snapshot",
+        "features_complete": True,
+    }])
+    feature_evidence = {
+        "feat_repairable": FeatureAttributionEvidence(
+            "feat_repairable", "run_repairable", "match_repairable",
+            "Player One", "Player Two", "a" * 64, "b" * 64,
+        )
+    }
+    assert tracker.repair_settled_bet_attribution(
+        predictions, feature_evidence
+    ) == 1
+    repaired = pd.read_csv(
+        tracker.bets_file, dtype=str, keep_default_na=False
+    ).iloc[0]
+    assert repaired["metric_eligible"] == "true"
+    assert repaired["attribution_quality"] == "exact_match_uid"
+    assert repaired["result_evidence_kind"] == result.kind
+    assert repaired["result_evidence_sha256"] == result.sha256
+
+
+def test_legacy_attribution_repair_upgrades_only_fully_proven_blank_row():
+    from settlement_attribution import (
+        FeatureAttributionEvidence,
+        repair_settled_bet_attribution_frame,
+    )
+    from utils.bet_tracker import BETS_COLUMNS
+
+    def bet_row(bet_id, uid, outcome, metric="", actual_profit=None):
+        row = {column: "" for column in BETS_COLUMNS}
+        row.update({
+            "bet_id": bet_id,
+            "status": "settled",
+            "match": "Player One vs Player Two",
+            "match_uid": uid,
+            "feature_snapshot_id": "feat_exact",
+            "run_id": "run_exact",
+            "bet_on": "Player One",
+            "bet_on_player1": True,
+            "outcome": outcome,
+            "stake": 10.0,
+            "odds_decimal": 2.0,
+            "actual_profit": (
+                actual_profit
+                if actual_profit is not None
+                else 10.0 if outcome == "win" else -10.0
+            ),
+            "metric_eligible": metric,
+        })
+        if metric:
+            row["settlement_quality"] = "existing"
+            row["attribution_quality"] = "existing"
+        return row
+
+    bets = pd.DataFrame([
+        bet_row("proven", "match_exact", "win"),
+        bet_row("explicit_false", "match_exact", "win", "false"),
+        bet_row("wrong_outcome", "match_exact", "loss"),
+        bet_row("wrong_pnl", "match_exact", "win", actual_profit=-10.0),
+        bet_row("uid_unjoined", "match_missing", "win"),
+    ], columns=BETS_COLUMNS)
+    predictions = pd.DataFrame([{
+        "match_uid": "match_exact",
+        "prediction_uid": "pred_exact",
+        "p1": "Player One",
+        "p2": "Player Two",
+        "actual_winner": 1,
+        "score": "6-4 6-4",
+        "settled_at": "2026-07-14T12:00:00+00:00",
+        "record_status": "settled",
+        "identity_status": "canonical",
+        "logging_quality": "snapshot_v2",
+        "rescore_quality": "exact_feature_snapshot",
+        "features_complete": True,
+        # The settled prediction row is result identity evidence. Its later
+        # enriched observation need not repeat the bet-time feature hashes;
+        # the exact bet snapshot authority below owns that contract.
+        "feature_snapshot_verified": False,
+        "feature_schema_sha256": "",
+        "feature_vector_sha256": "",
+    }])
+    evidence = {
+        "feat_exact": FeatureAttributionEvidence(
+            feature_snapshot_id="feat_exact",
+            run_id="run_exact",
+            match_uid="match_exact",
+            p1="Player One",
+            p2="Player Two",
+            feature_schema_sha256="a" * 64,
+            feature_vector_sha256="b" * 64,
+        )
+    }
+
+    repaired, count = repair_settled_bet_attribution_frame(
+        bets, predictions, evidence
+    )
+    repaired = repaired.set_index("bet_id")
+
+    assert count == 1
+    assert repaired.loc["proven", "metric_eligible"] == "true"
+    assert repaired.loc["proven", "attribution_quality"] == "exact_match_uid"
+    assert repaired.loc["proven", "result_evidence_kind"] == (
+        "prediction_log_exact_match_uid_feature_snapshot_bound"
+    )
+    assert len(repaired.loc["proven", "result_evidence_sha256"]) == 64
+    assert repaired.loc["explicit_false", "metric_eligible"] == "false"
+    assert repaired.loc["explicit_false", "settlement_quality"] == "existing"
+    assert repaired.loc["wrong_outcome", "metric_eligible"] == ""
+    assert repaired.loc["wrong_pnl", "metric_eligible"] == ""
+    assert repaired.loc["uid_unjoined", "metric_eligible"] == ""
+
+    tombstoned = predictions.copy()
+    tombstoned.loc[0, "record_status"] = "identity_conflict"
+    _, tombstone_count = repair_settled_bet_attribution_frame(
+        bets.iloc[[0]].copy(), tombstoned, evidence
+    )
+    assert tombstone_count == 0
+
+
+def test_legacy_repair_accepts_compatible_duplicate_uid_consensus():
+    from settlement_attribution import (
+        FeatureAttributionEvidence,
+        prediction_match_supports_exact_attribution,
+        repair_settled_bet_attribution_frame,
+    )
+    from utils.bet_tracker import BETS_COLUMNS
+
+    bet = {column: "" for column in BETS_COLUMNS}
+    bet.update({
+        "bet_id": "duplicate_consensus",
+        "status": "settled",
+        "match": "Player One vs Player Two",
+        "match_uid": "match_duplicate",
+        "feature_snapshot_id": "feat_duplicate",
+        "run_id": "run_duplicate",
+        "bet_on": "Player One",
+        "bet_on_player1": True,
+        "outcome": "win",
+        "stake": 10.0,
+        "odds_decimal": 2.0,
+        "actual_profit": 10.0,
+    })
+    common = {
+        "match_uid": "match_duplicate",
+        "score": "6-4 6-4",
+        "settled_at": "2026-07-15T00:00:00Z",
+        "record_status": "settled",
+        "identity_status": "canonical",
+        "logging_quality": "snapshot_v2",
+        "rescore_quality": "exact_feature_snapshot",
+        "features_complete": True,
+    }
+    predictions = pd.DataFrame([
+        {
+            **common, "prediction_uid": "pred_a", "p1": "Player One",
+            "p2": "Player Two", "actual_winner": 1,
+        },
+        {
+            **common, "prediction_uid": "pred_b", "p1": "Player Two",
+            "p2": "Player One", "actual_winner": 2,
+        },
+    ])
+    evidence = {
+        "feat_duplicate": FeatureAttributionEvidence(
+            "feat_duplicate", "run_duplicate", "match_duplicate",
+            "Player One", "Player Two", "a" * 64, "b" * 64,
+        )
+    }
+
+    assert prediction_match_supports_exact_attribution(
+        predictions,
+        "match_duplicate",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    )
+    repaired, count = repair_settled_bet_attribution_frame(
+        pd.DataFrame([bet], columns=BETS_COLUMNS), predictions, evidence
+    )
+    assert count == 1
+    assert repaired.loc[0, "metric_eligible"] == "true"
+
+    predictions.loc[1, "actual_winner"] = 1
+    assert not prediction_match_supports_exact_attribution(
+        predictions,
+        "match_duplicate",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    )
+    _, conflicting_count = repair_settled_bet_attribution_frame(
+        pd.DataFrame([bet], columns=BETS_COLUMNS), predictions, evidence
+    )
+    assert conflicting_count == 0
+
+    predictions.loc[1, "actual_winner"] = 2
+    predictions.loc[1, "p2"] = "Different Opponent"
+    assert not prediction_match_supports_exact_attribution(
+        predictions,
+        "match_duplicate",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    )
+    _, conflicting_pair_count = repair_settled_bet_attribution_frame(
+        pd.DataFrame([bet], columns=BETS_COLUMNS), predictions, evidence
+    )
+    assert conflicting_pair_count == 0
+
+
+def test_auto_result_evidence_hash_is_source_bound_and_deterministic():
+    from dataclasses import replace
+
+    from settlement_attribution import (
+        build_auto_result_evidence,
+        build_prediction_result_evidence,
+        result_evidence_matches_settlement,
+    )
+
+    kwargs = {
+        "source_evidence": {
+            "source": "atp_results",
+            "event": "Rome",
+            "card_round": "QF",
+        },
+        "match_uid": "match_exact",
+        "p1": "Player One",
+        "p2": "Player Two",
+        "actual_winner": 1,
+        "score": "6-4 6-4",
+    }
+    first = build_auto_result_evidence(**kwargs)
+    second = build_auto_result_evidence(**kwargs)
+    changed = build_auto_result_evidence(**{**kwargs, "actual_winner": 2})
+
+    assert first == second
+    assert first[0] == "auto_settle_atp_results"
+    assert len(first[1]) == 64
+    assert changed[1] != first[1]
+    assert result_evidence_matches_settlement(
+        first,
+        match_uid="match_exact",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    )
+    assert not result_evidence_matches_settlement(
+        replace(first, canonical_payload_json=first.canonical_payload_json + " "),
+        match_uid="match_exact",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1,
+    )
+    assert not result_evidence_matches_settlement(
+        replace(first, actual_winner=2),
+        match_uid="match_exact",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=2,
+    )
+
+    prediction_kind, prediction_hash = build_prediction_result_evidence({
+        "match_uid": "match_exact",
+        "prediction_uid": "pred_exact",
+        "p1": "Player One",
+        "p2": "Player Two",
+        "actual_winner": 1,
+        "score": "6-4 6-4",
+        "settled_at": "2026-07-14T12:00:00+00:00",
+    })
+    assert prediction_kind == "prediction_log_exact_match_uid"
+    assert len(prediction_hash) == 64
+
+
+def test_fractional_actual_winner_never_becomes_ground_truth(tmp_path):
+    from settlement_attribution import (
+        build_prediction_result_evidence,
+        parse_actual_winner,
+    )
+    from utils.bet_tracker import BETS_COLUMNS, BetTracker
+
+    assert parse_actual_winner(1) == 1
+    assert parse_actual_winner("2.0") == 2
+    assert parse_actual_winner(1.9) is None
+    assert parse_actual_winner(True) is None
+    assert parse_actual_winner(float("nan")) is None
+    evidence = build_prediction_result_evidence({
+        "match_uid": "match_fractional",
+        "prediction_uid": "pred_fractional",
+        "p1": "Player One",
+        "p2": "Player Two",
+        "actual_winner": 1.9,
+        "settled_at": "2026-07-15T00:00:00Z",
+    })
+    assert evidence.kind == ""
+    assert evidence.sha256 == ""
+
+    tracker = BetTracker(str(tmp_path))
+    pending = {column: "" for column in BETS_COLUMNS}
+    pending.update({
+        "bet_id": "fractional_winner",
+        "match": "Player One vs Player Two",
+        "match_uid": "match_fractional",
+        "bet_on": "Player One",
+        "bet_on_player1": True,
+        "odds_decimal": 2.0,
+        "stake": 10.0,
+        "status": "pending",
+    })
+    pd.DataFrame([pending], columns=BETS_COLUMNS).to_csv(
+        tracker.bets_file, index=False
+    )
+    assert tracker.settle_pending_bets_for_match(
+        match_uid="match_fractional",
+        p1="Player One",
+        p2="Player Two",
+        actual_winner=1.9,
+    ) == 0
+    row = pd.read_csv(
+        tracker.bets_file, dtype=str, keep_default_na=False
+    ).iloc[0]
+    assert row["status"] == "pending"
+    assert row["outcome"] == ""
 
 
 def test_generic_bovada_tournament_titles_resolve_to_useful_metadata():

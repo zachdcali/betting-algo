@@ -193,6 +193,38 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - Settlement uses a conservative TA identity score across opponent, date
   window, tournament, surface, and round. Ambiguous/low-confidence matches
   should remain pending rather than guessed.
+- Automatic bet settlement must write explicit settlement/attribution quality
+  on every newly closed paper bet. Metric eligibility is tri-state: `true`
+  requires the bet's direct `match_uid`, its own complete structurally verified
+  persisted `feature_snapshot_id` bound to the exact run, UID, ordered players,
+  and bet side, plus a canonical result payload whose hash, UID, players, and
+  winner revalidate at the bet write boundary; blank is a repairable direct-UID
+  unknown when that proof is temporarily unavailable; and `false` is immutable
+  accounting-only attribution for canonical aliases and player-pair
+  compatibility. Failed exact proof must atomically persist exact-UID
+  settlement, unverified exact-UID attribution, and blank metric eligibility.
+  Pair-only compatibility is allowed only from a blank result UID to a blank bet
+  UID, never for a modern nonblank-UID bet. Automatic settlement requires two
+  distinct named result participants and a complete normalized
+  pair/selected-side binding. Never infer win/loss from numeric P1/P2
+  orientation alone.
+- Exact attribution may use compatible duplicate rows for one prediction UID
+  only when all rows agree on the normalized participant pair and canonical
+  winner identity, no identity tombstone exists, and at least one row has exact
+  snapshot-v2 support. Conflicting pairs or winners fail closed. A legacy
+  attribution repair may upgrade only a wholly blank settled row or the coherent
+  direct-UID unknown state, with compatible settled prediction consensus, exact
+  bet-time feature authority, and outcome/P&L consistency. Preserve every
+  explicit false row and every unjoined, partial, or ambiguous unknown. Forward
+  result evidence should retain a stable kind and canonical SHA-256 when the
+  source payload is available.
+- Durable bet hydration validates every source row before reconciliation:
+  status must normalize to exactly `pending`, `settled`, `void`, or `cancelled`
+  (blank and misspelled values fail); pending rows cannot carry terminal state
+  or attribution; settled win/loss rows require valid terminal metadata and
+  exact stake/odds/P&L arithmetic; and void/cancelled rows require an explicit
+  zero-profit refund and cannot be metric eligible. Internal row invalidity is
+  a hard merge error even when another copy is valid.
 - Standalone settlement is intentionally paced for Tennis Abstract:
   `auto_settle.py` defaults to an 18-hour post-start grace period, 75 eligible
   candidates per run, an 8-second request delay, and early stop/cooldown on TA

@@ -41,6 +41,12 @@ from logging_utils import (
     utc_now,
 )
 from prediction_logger import upgrade_prediction_log
+from settlement_attribution import (
+    build_auto_result_evidence,
+    load_feature_attribution_evidence,
+    load_verified_prediction_log,
+    prediction_match_supports_exact_attribution,
+)
 
 LOG_PATH = Path(__file__).parent / "prediction_log.csv"
 DEFAULT_RATE_LIMIT_DELAY = 8.0
@@ -1238,6 +1244,37 @@ def run(
         return summary
 
     tracker = BetTracker(str(Path(__file__).parent / "logs"))
+    verified_predictions = pd.DataFrame()
+    exact_feature_evidence = {}
+    attribution_repaired = 0
+    attribution_evidence_error = ""
+    try:
+        # This uses the same feature-lineage verifier as the evaluation ledger.
+        # A corrupt or contradictory lineage source disables model attribution
+        # but must not prevent a known result from closing paper exposure.
+        verified_predictions = load_verified_prediction_log(
+            Path(__file__).parent
+        )
+        exact_feature_evidence = load_feature_attribution_evidence(
+            Path(__file__).parent
+        )
+        if not dry_run:
+            attribution_repaired = tracker.repair_settled_bet_attribution(
+                verified_predictions, exact_feature_evidence
+            )
+            if attribution_repaired:
+                print(
+                    "Repaired exact attribution on "
+                    f"{attribution_repaired} previously unclassified settled bet(s)"
+                )
+    except Exception as exc:
+        attribution_evidence_error = str(exc)
+        verified_predictions = pd.DataFrame()
+        exact_feature_evidence = {}
+        print(
+            "  ⚠️ Exact bet attribution disabled for this run; accounting "
+            f"settlement remains available: {exc}"
+        )
     tracked_pending_bets = tracker.get_pending_bets()
 
     pending = df[df['actual_winner'].isna()].copy()
@@ -1296,6 +1333,10 @@ def run(
             reason: count for reason, count in identity_gate_counts.items()
             if count
         }
+        if attribution_repaired:
+            gate_reasons['bet_attribution_repaired'] = attribution_repaired
+        if attribution_evidence_error:
+            gate_reasons['bet_attribution_evidence_error'] = 1
         if identity_gate_counts['duplicate_identity_conflict'] and not dry_run:
             df.to_csv(LOG_PATH, index=False)
         if gate_reasons:
@@ -1345,6 +1386,10 @@ def run(
         reason_counts['too_recent_to_settle'] = len(age_skip_reasons)
     if recent_attempt_count:
         reason_counts['recently_attempted'] = recent_attempt_count
+    if attribution_repaired:
+        reason_counts['bet_attribution_repaired'] = attribution_repaired
+    if attribution_evidence_error:
+        reason_counts['bet_attribution_evidence_error'] = 1
     stopped_for_rate_limit = False
 
     for idx, row in pending.iterrows():
@@ -1522,6 +1567,25 @@ def run(
         )
         newly_settled += 1
 
+        bound_result_evidence = build_auto_result_evidence(
+            source_evidence=result.get('settlement_evidence', {}),
+            match_uid=row.get('match_uid'),
+            p1=p1,
+            p2=p2,
+            actual_winner=w,
+            score=result.get('score', ''),
+        )
+        result_evidence_kind, result_evidence_sha256 = bound_result_evidence
+        direct_attribution_supported = (
+            prediction_match_supports_exact_attribution(
+                verified_predictions,
+                row.get('match_uid'),
+                p1=p1,
+                p2=p2,
+                actual_winner=w,
+            )
+        )
+
         settled_bets = tracker.settle_pending_bets_for_match(
             match_uid=row.get('match_uid'),
             alias_match_uids=(
@@ -1539,7 +1603,19 @@ def run(
             p1=p1,
             p2=p2,
             actual_winner=w,
-            notes=f"Auto-settled from Tennis Abstract | score={result['score']}",
+            notes=(
+                "Auto-settled | "
+                f"evidence={result_evidence_kind or 'unavailable'} | "
+                f"score={result['score']}"
+            ),
+            exact_feature_evidence=(
+                exact_feature_evidence
+                if direct_attribution_supported
+                else {}
+            ),
+            result_evidence_kind=result_evidence_kind,
+            result_evidence_sha256=result_evidence_sha256,
+            bound_result_evidence=bound_result_evidence,
         )
         if settled_bets:
             print(f"  💰 Auto-settled {settled_bets} pending bet(s)")

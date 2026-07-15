@@ -106,6 +106,47 @@ Settlement truth and model attribution are deliberately separate contracts. A
 known match winner can close a specific, hash-bound paper exposure without
 claiming that a broken or rotated internal UID is valid model lineage.
 
+### Automatic forward settlement attribution
+
+The hourly/standalone auto-settlement path applies the same separation without
+using the manual plan. Metric eligibility is tri-state: `true` means exact
+attribution proved, `false` means a proven accounting-only alias/pair path, and
+blank means a direct-UID result whose feature/result proof is temporarily
+incomplete and may be repaired later. Failed exact proof is persisted atomically
+as exact-UID settlement, unverified exact-UID attribution, and blank metric
+eligibility; an exact attribution label is never left behind. A direct UID can be
+`metric_eligible=true` only when the bet's own `feature_snapshot_id` resolves
+through the shared feature-lineage validator to a complete persisted vector for
+the same run, UID, ordered player pair, and bet side, and the canonical result
+payload revalidates its hash, UID, ordered players, and winner again at the bet
+write boundary. Compatible duplicate prediction rows may support that proof
+only when every row has the same normalized participant pair, every observed
+winner resolves to the same player identity, no identity tombstone exists, and
+at least one row has exact snapshot-v2 support. Conflicting pairs or winners
+fail closed. A canonical UID alias is always `metric_eligible=false`.
+Player-pair-only compatibility is available only when both the result UID and
+bet UID are blank; it can never settle a modern nonblank-UID bet and is also
+always `metric_eligible=false`. Automatic settlement requires two distinct
+named result participants and a complete normalized pair/selected-side binding;
+it never infers outcome from numeric P1/P2 orientation alone.
+
+When result-source evidence is available, the bet stores its source kind and a
+canonical SHA-256 of the same match/result payload retained in settlement audit.
+The automatic repair changes only wholly blank legacy attribution rows or the
+coherent direct-UID unknown state described above. Repair requires compatible
+settled prediction consensus, exact bet-time feature binding, and outcome/P&L
+consistency. Explicit false rows and unjoined, partially classified, or
+ambiguous unknowns are immutable to that repair.
+
+Durable operational hydration validates each bet row before choosing a winning
+copy. Status must normalize to exactly `pending`, `settled`, `void`, or
+`cancelled`; blank and misspelled statuses are hard errors. Pending rows cannot
+carry terminal outcomes or attribution, and settled win/loss rows must have
+outcome-consistent stake/odds/P&L and valid terminal metadata. Void/cancelled
+rows must carry an explicit refund with
+`actual_profit = 0`, valid terminal metadata, and metric ineligibility. Internal
+invalidity is a hard merge error, not a lower-quality copy to ignore.
+
 A row is plan-eligible only when all applicable gates are true:
 
 - `bet_id` is nonblank and unique across the entire bet log;
