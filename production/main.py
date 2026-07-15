@@ -259,6 +259,12 @@ class LiveBettingOrchestrator:
         }
         upsert_run_history(self.run_metrics)
 
+    def close(self) -> None:
+        """Release resources owned for one pipeline run."""
+        close_store = getattr(self.feature_engine, "close_store", None)
+        if callable(close_store):
+            close_store()
+
     def _flush_run_history(self, status: str | None = None, error_message: str = ""):
         """Write the current run summary for dashboards and ops debugging."""
         if not self.run_metrics:
@@ -542,6 +548,56 @@ class LiveBettingOrchestrator:
                 print(f"   ⏭️  Skipping {n_before - len(odds_df)} ITF match(es) (SKIP_ITF_MATCHES=1)")
 
         self.run_metrics['odds_rows_candidate'] = len(odds_df)
+
+        # Hydrate the slate as one deterministic canonical-ID batch before
+        # match iteration can spend the bounded ATP profile budget in whatever
+        # order the sportsbook happened to return rows.  The compatibility
+        # Ordinary source failures are non-fatal and preserve the existing
+        # completeness gate; canonical identity ambiguity is fatal. Missing or
+        # invalid heights still default-mark the feature snapshot.
+        try:
+            hydration_positions = []
+            for position, (_, hydration_row) in enumerate(odds_df.iterrows()):
+                _start, reason = self.get_inference_guard_reason(
+                    hydration_row.get('match_time', '')
+                )
+                if not reason:
+                    hydration_positions.append(position)
+            hydration_odds = odds_df.iloc[hydration_positions].copy()
+            excluded = len(odds_df) - len(hydration_odds)
+            if excluded:
+                print(
+                    f"   ⏭️ Height hydration excluded {excluded} match(es) "
+                    "at/inside the pre-start cutoff or without a valid clock"
+                )
+            if not hydration_odds.empty:
+                hydration = self.feature_engine.prehydrate_slate_profiles(
+                    hydration_odds,
+                    session_cache=session_cache,
+                )
+                if hydration.get("planned_players"):
+                    print(
+                        "   📏 Height hydration: "
+                        f"{hydration.get('resolved_heights', 0)}/"
+                        f"{hydration.get('planned_players', 0)} resolved; "
+                        f"{hydration.get('browser_attempts', 0)} official-page attempts; "
+                        f"{hydration.get('remaining_budget', 0)} budget remaining"
+                    )
+        except UnsafeToInferError as hydration_identity_exc:
+            print(
+                "   🛑 Height pre-hydration identity conflict; failing closed: "
+                f"{hydration_identity_exc}"
+            )
+            raise
+        except Exception as hydration_exc:
+            print(f"   ⚠️ Height pre-hydration skipped (non-fatal): {hydration_exc}")
+            # A planner/store failure must not reopen unverified name-keyed
+            # positives in per-match fallback.  Exact already-bound evidence
+            # may still be read, but no unplanned browser lookup is allowed.
+            refresh_state = session_cache.setdefault("atp_profile_refresh", {})
+            refresh_state["require_evidenced_positives"] = True
+            refresh_state["remaining"] = 0
+            refresh_state["allowed_keys"] = set()
 
         feature_rows = []
         for idx, row in odds_df.iterrows():
@@ -1754,6 +1810,8 @@ class LiveBettingOrchestrator:
                 )
                 print(f"💥 Terminal durable-state publication also failed: {persist_exc}")
             return False
+        finally:
+            self.close()
 
 def main():
     """Main entry point"""
