@@ -552,8 +552,9 @@ class LiveBettingOrchestrator:
         # Hydrate the slate as one deterministic canonical-ID batch before
         # match iteration can spend the bounded ATP profile budget in whatever
         # order the sportsbook happened to return rows.  The compatibility
-        # hydrator is non-fatal and preserves the existing completeness gate:
-        # missing/invalid heights still default-mark the feature snapshot.
+        # Ordinary source failures are non-fatal and preserve the existing
+        # completeness gate; canonical identity ambiguity is fatal. Missing or
+        # invalid heights still default-mark the feature snapshot.
         try:
             hydration_positions = []
             for position, (_, hydration_row) in enumerate(odds_df.iterrows()):
