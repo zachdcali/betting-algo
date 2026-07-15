@@ -7,9 +7,10 @@ name: Hourly betting pipeline
 on:
   workflow_dispatch:
   schedule:
+    # These are best-effort target slots. GitHub Actions may delay or omit a
+    # scheduled delivery, so neither target nor an hourly cadence is guaranteed.
     - cron: "17 * * * *"
-    # GitHub throttles busy schedule slots (~50% delivery observed); a second
-    # offset keeps effective cadence hourly
+    # The second target reduces expected latency; it is not a delivery guarantee.
     - cron: "47 * * * *"
 
 concurrency:

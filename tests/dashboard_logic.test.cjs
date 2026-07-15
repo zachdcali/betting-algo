@@ -549,10 +549,10 @@ test("terminal run freshness uses completion time while active runs use start ti
   assert.equal(Logic.runTimestamp(running), Date.parse(running.started_at));
 });
 
-test("next cadence calculation advances across :17 and :47", () => {
-  assert.equal(Logic.nextScheduledRun("2026-07-13T18:16:30Z").toISOString(), "2026-07-13T18:17:00.000Z");
-  assert.equal(Logic.nextScheduledRun("2026-07-13T18:17:00Z").toISOString(), "2026-07-13T18:47:00.000Z");
-  assert.equal(Logic.nextScheduledRun("2026-07-13T18:50:00Z").toISOString(), "2026-07-13T19:17:00.000Z");
+test("next best-effort target calculation advances across :17 and :47", () => {
+  assert.equal(Logic.nextScheduleTarget("2026-07-13T18:16:30Z").toISOString(), "2026-07-13T18:17:00.000Z");
+  assert.equal(Logic.nextScheduleTarget("2026-07-13T18:17:00Z").toISOString(), "2026-07-13T18:47:00.000Z");
+  assert.equal(Logic.nextScheduleTarget("2026-07-13T18:50:00Z").toISOString(), "2026-07-13T19:17:00.000Z");
 });
 
 test("manifest count comparison accepts explicit zero and rejects omissions or truncation", () => {
