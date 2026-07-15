@@ -413,7 +413,13 @@ def _plausible_identity_candidates(
         family = parts[0].lower()
         reversed_abbrev = f"{parts[1][0].lower()}. {family}"
         mask |= names.eq(reversed_abbrev)
-        mask |= names.str.contains(rf"\b{re.escape(family)}\b", na=False)
+        # In the reversed-name path the query's first token is a possible
+        # family name (for example ``Bu Yunchaokete`` -> ``Y. Bu``).  It must
+        # therefore be the candidate's final/family token.  A generic token
+        # search falsely turns ordinary given-name peers such as Jan Hrazdil
+        # into identity candidates for the genuinely unranked Jan Kobierski.
+        mask |= names.str.endswith(f" {family}", na=False)
+        mask |= names.eq(family)
     return df.loc[mask]
 
 
@@ -425,17 +431,24 @@ def get_player_lookup_status(
 ) -> str:
     """Classify a rank miss without coercing ambiguity into ``unranked``.
 
-    Returns ``resolved``, ``not_ranked``, ``identity_unresolved``, or
-    ``rankings_unavailable``.  ``not_ranked`` means no ranking row was reached
-    by any supported fallback; ``identity_unresolved`` means one or more rows
-    were plausible but rejected by the strict identity contract.
+    Returns ``resolved``, ``not_ranked``, ``identity_unresolved``,
+    ``rank_invalid``, or ``rankings_unavailable``.  ``not_ranked`` means no
+    ranking row was reached by any supported fallback; ``identity_unresolved``
+    means one or more rows were plausible but rejected by the strict identity
+    contract. ``rank_invalid`` means identity resolved but the ranking evidence
+    itself is not a positive whole-number ATP rank.
     """
     if df is None:
         df = load_rankings()
     if df is None or df.empty or "player_name" not in df.columns:
         return "rankings_unavailable"
-    if _matching_row(player_name, df, player_url=player_url) is not None:
-        return "resolved"
+    row = _matching_row(player_name, df, player_url=player_url)
+    if row is not None:
+        return (
+            "resolved"
+            if _coerce_positive_rank(row.get("rank")) is not None
+            else "rank_invalid"
+        )
     if _normalized_profile_url(player_url):
         return "identity_unresolved"
     return (
@@ -459,6 +472,17 @@ def _lookup(
         return int(row[col])
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+
+
+def _coerce_positive_rank(value) -> Optional[int]:
+    """Return a structurally valid ATP rank without truncating bad evidence."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not pd.notna(numeric) or not numeric.is_integer() or numeric <= 0:
+        return None
+    return int(numeric)
 
 
 def get_player_points(
@@ -486,7 +510,10 @@ def get_player_rank(
         df = load_rankings()
     if df is None or df.empty:
         return None
-    return _lookup(player_name, "rank", df, player_url=player_url)
+    row = _matching_row(player_name, df, player_url=player_url)
+    if row is None:
+        return None
+    return _coerce_positive_rank(row.get("rank"))
 
 
 def get_player_url(

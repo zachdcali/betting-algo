@@ -1539,7 +1539,8 @@ class TAFeatureCalculator:
                         player_url=profile.get('atp_url', ''),
                     )
                     if lookup_status in {
-                        'identity_unresolved', 'rankings_unavailable',
+                        'identity_unresolved', 'rank_invalid',
+                        'rankings_unavailable',
                     }:
                         _mark_rank_default(lookup_status)
                 else:

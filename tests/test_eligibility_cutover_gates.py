@@ -1011,6 +1011,83 @@ def test_rank_alias_identity_misses_are_default_marked_end_to_end(
     assert features["Player1_Rank"] == 88.0
 
 
+def test_malformed_exact_rank_is_default_marked_end_to_end(monkeypatch):
+    class OfflineScraper:
+        @staticmethod
+        def get_player_matches(*_args, **_kwargs):
+            return pd.DataFrame()
+
+    profiles = {
+        "invalid": {
+            "player_id": None,
+            "name": "Exact Invalid Rank",
+            "slug": "invalid",
+            "height_cm": 183,
+            "hand": "R",
+            "country": "",
+            "birthdate": "2000-01-01",
+            "age": 26,
+            "current_rank": None,
+            "atp_url": "/en/players/exact-invalid-rank/e001/overview",
+        },
+        "valid": {
+            "player_id": None,
+            "name": "Valid Exact Player",
+            "slug": "valid",
+            "height_cm": 185,
+            "hand": "L",
+            "country": "",
+            "birthdate": "2000-01-01",
+            "age": 26,
+            "current_rank": 101,
+            "atp_url": "/en/players/valid-exact-player/v001/overview",
+        },
+    }
+    rankings = pd.DataFrame([
+        {
+            "rank": "bad",
+            "player_name": "Exact Invalid Rank",
+            "points": 520,
+            "player_url": "/en/players/exact-invalid-rank/e001/overview",
+        },
+        {
+            "rank": 101,
+            "player_name": "Valid Exact Player",
+            "points": 600,
+            "player_url": "/en/players/valid-exact-player/v001/overview",
+        },
+    ])
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.setattr(ta_feature_module, "needs_stitching", lambda *_args: False)
+    monkeypatch.setattr(
+        ta_feature_module, "batch_get_profiles", lambda *_args, **_kwargs: {},
+    )
+    calc = TAFeatureCalculator(OfflineScraper())
+    calc.use_store = True
+    calc._atp_rankings = rankings
+    calc._store_profile = lambda slug: dict(profiles[slug])
+    calc._store_history_frame = lambda *_args, **_kwargs: pd.DataFrame()
+
+    features = calc.build_141_features_from_slugs(
+        slug1="invalid",
+        slug2="valid",
+        match_date=datetime(2026, 7, 20, 12),
+        surface="Hard",
+        tournament_level="A",
+        draw_size=32,
+        round_code="R32",
+        force_refresh=False,
+        persist=False,
+        session_cache={},
+        match_date_is_explicit=True,
+    )
+
+    defaults = set(features["_defaulted_features"].split(","))
+    assert "P1_Rank=rank_lookup_unresolved(rank_invalid)" in defaults
+    assert "P1_Rank_Points=rank_lookup_unresolved(rank_invalid)" in defaults
+    assert features["Player1_Rank"] == 999.0
+
+
 def test_supported_module_entrypoint_has_help_without_scraping():
     completed = subprocess.run(
         [sys.executable, "-m", "production.scraping.atp_height_scraper", "--help"],

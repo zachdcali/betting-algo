@@ -221,6 +221,12 @@ def test_real_alias_misses_are_identity_unresolved_not_unranked():
             "points": 61,
             "player_url": "/en/players/stefan-popovic/p0g5/overview",
         },
+        {
+            "rank": 700,
+            "player_name": "Jan Hrazdil",
+            "points": 45,
+            "player_url": "/en/players/jan-hrazdil/h001/overview",
+        },
     ])
 
     for unresolved in (
@@ -236,4 +242,20 @@ def test_real_alias_misses_are_identity_unresolved_not_unranked():
     assert get_player_lookup_status("Unknown Futures Player", rankings) == (
         "not_ranked"
     )
+    assert get_player_lookup_status("Jan Kobierski", rankings) == "not_ranked"
     assert get_player_lookup_status("Coleman Wong", rankings) == "resolved"
+
+
+def test_resolved_identity_with_malformed_rank_fails_closed():
+    for malformed_rank in (None, "", "not-a-rank", 0, -4, 18.5):
+        rankings = pd.DataFrame([{
+            "rank": malformed_rank,
+            "player_name": "Exact Ranked Player",
+            "points": 500,
+            "player_url": "/en/players/exact-ranked-player/e001/overview",
+        }])
+
+        assert get_player_rank("Exact Ranked Player", rankings) is None
+        assert get_player_lookup_status("Exact Ranked Player", rankings) == (
+            "rank_invalid"
+        )
