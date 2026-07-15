@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -191,6 +193,34 @@ def ensure_csv_columns(path: Path, columns: Iterable[str]) -> pd.DataFrame:
 
     ordered = [col for col in columns] + [col for col in df.columns if col not in columns]
     return df[ordered]
+
+
+def atomic_write_csv(frame: pd.DataFrame, path: Path | str) -> None:
+    """Durably replace one CSV so readers see complete old or new bytes."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=target.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            frame.to_csv(handle, index=False, lineterminator="\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def append_unique_row(path: Path, row: dict, columns: Iterable[str], unique_key: str | None = None) -> bool:

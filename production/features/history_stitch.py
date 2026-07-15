@@ -616,22 +616,15 @@ def infer_next_round(matches1: pd.DataFrame, matches2: pd.DataFrame, event_name:
 def lookup_player_url(name: str, rankings_df: Optional[pd.DataFrame]) -> Optional[str]:
     """Find a player's atptour.com profile URL in the rankings CSV.
 
-    Rankings names are abbreviated ('J. Sinner'); match on last name, then
-    disambiguate by first initial. None when not uniquely resolvable.
+    Use the rankings lookup's full identity contract rather than a separate
+    surname/initial heuristic.  The official URL slug disambiguates abbreviated
+    rows; a same-initial collision or missing slug fails closed.
     """
-    if rankings_df is None or rankings_df.empty or "player_url" not in rankings_df.columns:
-        return None
-    last = _last_name(name)
-    if not last:
-        return None
-    cand = rankings_df[rankings_df["player_name"].astype(str).str.lower().str.endswith(" " + last)]
-    if len(cand) > 1:
-        initial = str(name).strip()[0].lower()
-        cand = cand[cand["player_name"].astype(str).str.lower().str.startswith(initial)]
-    if len(cand) != 1:
-        return None
-    url = str(cand.iloc[0]["player_url"])
-    return url or None
+    try:
+        from scraping.atp_rankings_scraper import get_player_url
+    except ImportError:  # pragma: no cover - direct script import path
+        from atp_rankings_scraper import get_player_url
+    return get_player_url(name, rankings_df)
 
 
 ITF_LEVELS = {"15", "25", "S", "F"}

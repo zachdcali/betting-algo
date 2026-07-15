@@ -169,7 +169,8 @@ def get_profile(conn, name: str) -> Optional[dict]:
         if pid is None:
             return None
         cur.execute(
-            "SELECT player_id, name, hand, height_cm, country, birthdate FROM players WHERE player_id=%s",
+            "SELECT player_id, name, hand, height_cm, country, birthdate, atp_url "
+            "FROM players WHERE player_id=%s",
             (pid,),
         )
         r = cur.fetchone()
@@ -187,6 +188,7 @@ def get_profile(conn, name: str) -> Optional[dict]:
         "country": r[4] or "",
         "birthdate": birthdate,
         "age": round(age, 1) if age is not None else None,
+        "atp_url": r[6] or "",
     }
 
 
