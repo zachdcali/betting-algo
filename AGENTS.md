@@ -111,8 +111,14 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   identity coverage, and zero conflicts. Candidate rounds stay in the isolated
   eligibility round table and cannot change `api.current_match_metadata`.
   Required mode consumes one short-lived generation-and-seal-pinned ID-bearing
-  profile bundle; legacy height/hand JSON behavior remains unchanged before
-  explicit cutover.
+  profile bundle. Legacy height/hand JSON remains compatibility data: negative
+  lookups carry source/time/hash evidence and expire under a bounded run-level
+  retry budget. `ATP_PROFILE_REVALIDATE_LEGACY_POSITIVES=1` additionally
+  withholds old positive cache values until the value, exact official ATP
+  name/URL binding, rendered-body hash, and observation time are revalidated.
+  That opt-in evidence is still name-keyed compatibility evidence, not canonical
+  player-ID provenance; it cannot promote the cache into the accepted bundle or
+  upgrade an old immutable feature snapshot.
 - `python main.py --dry-run` should not start a betting session or write
   `logs/all_bets.csv`; use it for pipeline smoke checks when duplicate live
   bet logging would be risky.

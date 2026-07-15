@@ -10,6 +10,7 @@ import numpy as np
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import math
 import os
 import re
 import sys
@@ -57,6 +58,29 @@ with open(SCHEMA_PATH) as f:
 
 class UnsafeToInferError(RuntimeError):
     """Raised when source evidence cannot support an unambiguous inference."""
+
+
+MIN_HEIGHT_CM = 150.0
+MAX_HEIGHT_CM = 230.0
+
+
+def _validated_height_cm(value) -> Optional[float]:
+    """Return a finite, physically plausible height or ``None``.
+
+    The normalized eligibility contract already enforces this domain, but the
+    still-active legacy compatibility path can contain old non-null garbage
+    values.  Treat those values exactly like missing evidence so the existing
+    default marker keeps the feature snapshot ineligible for betting/GOLD.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        height = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(height) or not MIN_HEIGHT_CM <= height <= MAX_HEIGHT_CM:
+        return None
+    return height
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -155,6 +179,8 @@ class TAFeatureCalculator:
             )
         if eligibility_mode() is EligibilityMode.REQUIRED:
             return
+        if field == 'height_cm':
+            value = _validated_height_cm(value)
         pid = profile.get('player_id')
         if pid is None or value in (None, '', 'U') or not self.use_store:
             return
@@ -179,6 +205,8 @@ class TAFeatureCalculator:
         p2_display: str,
         profile1: dict,
         profile2: dict,
+        *,
+        session_cache: Optional[Dict] = None,
     ) -> Tuple[object, str, object, str]:
         """Resolve height/hand under the active provenance authority.
 
@@ -195,8 +223,11 @@ class TAFeatureCalculator:
                 EligibilityMode, eligibility_mode,
             )
 
-        h1 = profile1.get('height_cm')
-        h2 = profile2.get('height_cm')
+        # The compatibility table predates normalized field validation and has
+        # contained values such as 3, 71, 132, and 145.  A non-null value is not
+        # evidence unless it satisfies the same domain as the normalized path.
+        h1 = _validated_height_cm(profile1.get('height_cm'))
+        h2 = _validated_height_cm(profile2.get('height_cm'))
         hand1 = profile1.get('hand') or 'U'
         hand2 = profile2.get('hand') or 'U'
         if eligibility_mode() is EligibilityMode.REQUIRED:
@@ -222,7 +253,10 @@ class TAFeatureCalculator:
                             "required eligibility identity mismatch for "
                             f"{display}: store={legacy_id!r}, bundle={accepted_id!r}"
                         )
-                return accepted.get('height_cm'), accepted.get('hand') or 'U'
+                return (
+                    _validated_height_cm(accepted.get('height_cm')),
+                    accepted.get('hand') or 'U',
+                )
 
             h1, hand1 = _accepted(p1_display, profile1)
             h2, hand2 = _accepted(p2_display, profile2)
@@ -235,12 +269,27 @@ class TAFeatureCalculator:
             if (h2 is None or hand2 == 'U') and p2_display:
                 missing.append(p2_display)
             missing = [m for m in missing if isinstance(m, str) and m.strip()]
-            atp_profiles = batch_get_profiles(missing, verbose=False) if missing else {}
+            refresh_state = (
+                session_cache.setdefault("atp_profile_refresh", {})
+                if session_cache is not None
+                else None
+            )
+            if not missing:
+                atp_profiles = {}
+            elif refresh_state is None:
+                atp_profiles = batch_get_profiles(missing, verbose=False)
+            else:
+                atp_profiles = batch_get_profiles(
+                    missing,
+                    verbose=False,
+                    refresh_state=refresh_state,
+                )
 
             def _fill(display: str, height, hand: str, profile: dict):
                 fallback = atp_profiles.get(display) or {}
-                if height is None and fallback.get('height_cm') is not None:
-                    height = fallback['height_cm']
+                fallback_height = _validated_height_cm(fallback.get('height_cm'))
+                if height is None and fallback_height is not None:
+                    height = fallback_height
                     print(f"  ATP height fallback: {display} → {height}cm")
                     self._persist_player_field(profile, 'height_cm', height)
                 if hand == 'U' and fallback.get('hand'):
@@ -1359,6 +1408,7 @@ class TAFeatureCalculator:
         # replaces both fields from the generation/seal-pinned accepted bundle.
         h1, hand1, h2, hand2 = self._resolve_height_hand(
             p1_display, p2_display, profile1, profile2,
+            session_cache=session_cache,
         )
 
         s1 = {
