@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.4">
-  <script src="dashboard_logic.js?v=2026-07-14.4" defer></script>
-  <script src="dashboard.js?v=2026-07-14.4" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-14.5">
+  <script src="dashboard_logic.js?v=2026-07-14.5" defer></script>
+  <script src="dashboard.js?v=2026-07-14.5" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,7 +23,7 @@
       </div>
       <div class="header-meta" aria-label="Dashboard metadata">
         <span class="paper-pill">Paper only</span>
-        <span id="dashboard-build">Build 2026-07-14.4</span>
+        <span id="dashboard-build">Build 2026-07-14.5</span>
         <span id="page-fetch-time">Loading data…</span>
       </div>
     </header>
@@ -79,6 +79,7 @@
           </article>
           <article class="panel-card">
             <h3>Why matches are blocked</h3>
+            <p class="muted compact-note">One primary group per blocked row; open a match for its exact audit reasons.</p>
             <div id="blocked-reasons" class="reason-list"></div>
           </article>
           <article class="panel-card">
@@ -97,6 +98,14 @@
           <div><p class="eyebrow">Accepted prediction run</p><h2>Current slate by tournament</h2></div>
           <p id="slate-cohort-note">Only rows from the last successful prediction-bearing run are considered.</p>
         </div>
+        <article class="panel-card slate-funnel-card" aria-labelledby="slate-funnel-title">
+          <div class="card-heading">
+            <h3 id="slate-funnel-title">Accepted-slate eligibility funnel</h3>
+            <span class="status-chip neutral">One cohort</span>
+          </div>
+          <div id="slate-funnel" class="run-funnel slate-funnel skeleton" aria-live="polite"></div>
+          <p id="slate-funnel-note" class="muted compact-note">Loading the accepted run…</p>
+        </article>
         <div id="eligible-section" class="state-section">
           <div class="state-heading"><div><span class="state-dot eligible"></span><h3>Decision inputs valid</h3></div><span id="eligible-count" class="count-pill">0</span></div>
           <p class="section-note">Pre-start rows with complete metadata, two-sided prices, model output, and an exact feature snapshot ID.</p>

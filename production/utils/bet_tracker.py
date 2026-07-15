@@ -21,7 +21,8 @@ BETS_COLUMNS = [
     'model_prob', 'market_prob', 'edge', 'kelly_fraction', 'potential_profit',
     'potential_loss', 'bankroll_before', 'model_version', 'status', 'outcome',
     'actual_profit', 'bankroll_after', 'settled_timestamp', 'match_date',
-    'match_start_time', 'notes'
+    'match_start_time', 'notes', 'settlement_quality', 'attribution_quality',
+    'metric_eligible', 'result_evidence_kind', 'result_evidence_sha256'
 ]
 
 BANKROLL_COLUMNS = [

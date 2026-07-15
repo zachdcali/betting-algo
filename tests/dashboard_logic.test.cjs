@@ -112,6 +112,68 @@ test("feature IDs are distinguished from referentially verified feature rows", (
   assert.equal(Logic.featureReferenceStatus({ ...row, feature_snapshot_id: "" }, new Set(), true), "missing_id");
 });
 
+test("slate fallback identity requires both players", () => {
+  assert.equal(
+    Logic.slateEvidenceKey({ p1: "Alpha", p2: "Beta", match_date: "2026-07-13" }, "both"),
+    "pair:alpha|beta|2026-07-13",
+  );
+  assert.equal(
+    Logic.slateEvidenceKey({ p1: "Alpha", p2: "", match_date: "2026-07-13" }, "one"),
+    "row:one",
+  );
+  assert.equal(
+    Logic.slateEvidenceKey({ p1: "", p2: "", match_date: "2026-07-13" }, "missing"),
+    "row:missing",
+  );
+});
+
+test("accepted slate funnel is built from explicit monotone intersections", () => {
+  const entry = (id, state, overrides = {}, extras = {}) => ({
+    row: completeSlateRow({
+      match_uid: `match_${id}`,
+      prediction_uid: `pred_${id}`,
+      feature_snapshot_id: `feat_${id}`,
+      ...overrides,
+    }),
+    source: "snapshot",
+    classification: { state, reasons: [] },
+    auditRows: [],
+    ...extras,
+  });
+  const entries = [
+    entry("eligible", "eligible"),
+    entry("expired", "expired"),
+    entry("conflict", "blocked", { record_status: "identity_conflict" }),
+    entry("not_complete", "blocked"),
+    {
+      row: { p1: "Skipped", p2: "Match", match_date: "2026-07-13" },
+      source: "skipped",
+      classification: { state: "blocked", reasons: ["feature error"] },
+      auditRows: [{ skip_reason_code: "feature_error" }],
+    },
+  ];
+  const funnel = Logic.acceptedSlateFunnel(
+    entries,
+    new Set(["feat_eligible", "feat_expired", "feat_conflict"]),
+  );
+
+  assert.deepEqual(funnel.counts, {
+    accepted: 5,
+    finite: 4,
+    complete: 3,
+    identityClean: 2,
+    dataValidNow: 1,
+  });
+  assert.equal(funnel.expired, 1);
+  assert.equal(funnel.monotone, true);
+  const stages = ["accepted", "finite", "complete", "identityClean", "dataValidNow"];
+  stages.slice(1).forEach((stage, index) => {
+    const parent = new Set(funnel.stageKeys[stages[index]]);
+    assert.ok(funnel.stageKeys[stage].every((key) => parent.has(key)));
+    assert.ok(funnel.counts[stage] <= funnel.counts[stages[index]]);
+  });
+});
+
 test("skipped-live audit is blocked or expired without guessing a naive timezone", () => {
   const blocked = Logic.classifySkippedRow({
     stage: "feature_extraction",
@@ -128,6 +190,67 @@ test("skipped-live audit is blocked or expired without guessing a naive timezone
     skip_reason_code: "scheduled_start_passed",
   }, NOW);
   assert.equal(expired.state, "expired");
+});
+
+test("matching skip evidence remains visible beside a snapshot", () => {
+  const classification = Logic.classifySlateEvidence(
+    completeSlateRow({
+      features_complete: false,
+      defaulted_features: "round_code=None,structural_validation",
+      model_p1_prob: null,
+    }),
+    [{
+      stage: "feature_extraction",
+      skip_reason_code: "feature_schema_invalid",
+      skip_reason_detail: "one_hot_cardinality:round:0",
+      match_start_at_utc: "2026-07-13T20:00:00Z",
+    }],
+    NOW,
+  );
+
+  assert.equal(classification.state, "blocked");
+  assert.ok(classification.reasons.includes(
+    "Skipped at feature extraction: feature schema invalid",
+  ));
+  assert.ok(classification.reasons.includes("one_hot_cardinality:round:0"));
+});
+
+test("blocked rows receive one mutually exclusive primary group", () => {
+  const featureFailure = {
+    row: completeSlateRow({ features_complete: false, model_p1_prob: null }),
+    source: "snapshot",
+    featureReference: "invalid",
+    auditRows: [{ skip_reason_code: "feature_schema_invalid" }],
+    classification: { reasons: ["Features incomplete"] },
+  };
+  const identity = {
+    row: completeSlateRow({ record_status: "identity_conflict", features_complete: false }),
+    source: "snapshot",
+    featureReference: "verified",
+    auditRows: [{ skip_reason_code: "match_identity_conflict" }],
+    classification: { reasons: ["Match identity conflict"] },
+  };
+  const incomplete = {
+    row: completeSlateRow({ features_complete: false, defaulted_features: "Player1_Height" }),
+    source: "snapshot",
+    featureReference: "invalid",
+    auditRows: [],
+    classification: { reasons: ["Incomplete features: Player1_Height"] },
+  };
+
+  assert.equal(Logic.primaryBlockerGroup(featureFailure), "Feature / prediction build failed");
+  assert.equal(Logic.primaryBlockerGroup(identity), "Identity conflict");
+  assert.equal(Logic.primaryBlockerGroup(incomplete), "Feature values incomplete");
+  assert.equal(
+    Logic.primaryBlockerGroup({
+      row: completeSlateRow({ market_p1_prob: null }),
+      source: "snapshot",
+      featureReference: "verified",
+      auditRows: [],
+      classification: { reasons: ["Market probability unavailable"] },
+    }),
+    "Market price unavailable",
+  );
 });
 
 test("pipeline health distinguishes failure, degraded no-odds, and stale state", () => {

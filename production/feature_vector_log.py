@@ -98,7 +98,13 @@ def save_feature_vector(p1: str, p2: str, match_date, run_id: str,
         return
 
     # Compatibility path for legacy callers without immutable lineage ids.
-    mask = (df["p1"] == row["p1"]) & (df["p2"] == row["p2"]) & (df["match_date"] == row["match_date"])
+    blank_snapshot_id = df["feature_snapshot_id"].fillna("").astype(str).str.strip().eq("")
+    mask = (
+        blank_snapshot_id
+        & (df["p1"] == row["p1"])
+        & (df["p2"] == row["p2"])
+        & (df["match_date"] == row["match_date"])
+    )
     if mask.any():
         already_complete = str(df.loc[mask, "features_complete"].iloc[0]) in ("True", "true", "1")
         if already_complete:

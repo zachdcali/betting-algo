@@ -20,6 +20,10 @@ from operations.pending_reconciliation import (  # noqa: E402
     APPLY_AUDIT_COLUMNS,
     AtomicApplyError,
     ReconciliationConflict,
+    RESULT_EVIDENCE_ARTIFACT_KEYS,
+    RESULT_EVIDENCE_MANIFEST_KEYS,
+    RESULT_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+    RESULT_EVIDENCE_RECORD_KEYS,
     SettlementPaths,
     _SimulatedProcessCrash,
     apply_settlement_plan,
@@ -169,6 +173,212 @@ def _hash(path):
     return sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
+EXTERNAL_MATCH_ID = "2026/9999/ms001"
+EXTERNAL_MATCH_URL = (
+    "https://www.atptour.com/en/scores/stats-centre/archive/"
+    + EXTERNAL_MATCH_ID
+)
+
+
+def _atp_result_html(
+    *,
+    external_match_id=EXTERNAL_MATCH_ID,
+    played_date="2026-07-10",
+    winner="Player One",
+    loser="Player Two",
+):
+    display_date = played_date.replace("-", ".")
+    return f"""<!doctype html>
+<html lang="en">
+  <body>
+    <main class="archive-results">
+      <div class="tournament-day">
+        <h4>{display_date}</h4>
+      </div>
+      <div class="match">
+        <a class="match-link" href="/en/scores/stats-centre/archive/{external_match_id}">Match Stats</a>
+        <div class="stats-item">
+          <div class="winner">
+            <span class="player-name">{winner}</span>
+          </div>
+          <span class="score">6</span><span class="score">6</span>
+        </div>
+        <div class="stats-item">
+          <div class="loser">
+            <span class="player-name">{loser}</span>
+          </div>
+          <span class="score">4</span><span class="score">4</span>
+        </div>
+      </div>
+      <div class="match">
+        <span class="player-name">Later Winner</span>
+        <span class="player-name">Later Loser</span>
+      </div>
+    </main>
+  </body>
+</html>
+"""
+
+
+def _write_manifest_payload(path, payload):
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_result_manifest(
+    tmp_path,
+    paths,
+    *,
+    winner_orientation=1,
+    record_updates=None,
+    artifact_updates=None,
+    root_updates=None,
+    raw_html=None,
+):
+    bets = pd.read_csv(paths.bets, dtype=str, keep_default_na=False)
+    predictions = pd.read_csv(
+        paths.predictions,
+        dtype=str,
+        keep_default_na=False,
+    )
+    bet = bets.iloc[0]
+    prediction = predictions.iloc[0]
+    identity = reconciliation_module._strict_bet_identity(bet)
+    assert identity is not None
+    identity_key, pair, operational_date, bet_on = identity
+
+    operational_winner = reconciliation_module.normalize_name(
+        prediction["p1" if winner_orientation == 1 else "p2"]
+    )
+    bet_result = "win" if bet_on == operational_winner else "loss"
+    stake = reconciliation_module._positive_decimal(bet["stake"])
+    odds = reconciliation_module._price_decimal(bet["odds_decimal"])
+    assert stake is not None and odds is not None
+    actual_profit = stake * (odds - 1) if bet_result == "win" else -stake
+    bet_source_columns = [
+        column
+        for column in bets.columns
+        if column not in reconciliation_module.BET_SETTLEMENT_QUALITY_COLUMNS
+    ]
+
+    record = {
+        "bet_id": bet["bet_id"],
+        "bet_source_row": 2,
+        "bet_row_sha256": reconciliation_module._row_sha256(
+            bet,
+            bet_source_columns,
+        ),
+        "pending_identity_key": identity_key,
+        "resolution_kind": (
+            "exact_uid_official_result"
+            if bet["match_uid"] == prediction["match_uid"]
+            else "rotated_uid_result_only"
+        ),
+        "original_match_uid": bet["match_uid"],
+        "target_match_uid": prediction["match_uid"],
+        "prediction_source_row": 2,
+        "prediction_row_sha256": reconciliation_module._row_sha256(
+            prediction,
+            list(predictions.columns),
+        ),
+        "pair": list(pair),
+        "operational_match_date": operational_date,
+        "official_played_date": operational_date,
+        "event": bet["event"],
+        "round": "R32",
+        "bet_on": bet["bet_on"],
+        "stake": bet["stake"],
+        "odds_decimal": bet["odds_decimal"],
+        "official_winner": prediction[
+            "p1" if winner_orientation == 1 else "p2"
+        ],
+        "actual_winner_for_target_orientation": winner_orientation,
+        "official_score_winner_first": "6-4 6-4",
+        "bet_result": bet_result,
+        "actual_profit": reconciliation_module._decimal_text(actual_profit),
+        "external_match_id": EXTERNAL_MATCH_ID,
+        "official_match_url": EXTERNAL_MATCH_URL,
+        "artifact_id": "atp-test-event-2026-07-10",
+        "model_metric_write_authorized": False,
+    }
+    record.update(record_updates or {})
+
+    raw_pair = record.get("pair", list(pair))
+    raw_orientation = record.get("actual_winner_for_target_orientation")
+    if raw_orientation in (1, 2) and len(raw_pair) == 2:
+        raw_operational_winner = reconciliation_module.normalize_name(
+            raw_pair[raw_orientation - 1]
+        )
+        raw_loser = next(
+            (
+                player
+                for player in raw_pair
+                if reconciliation_module.normalize_name(player)
+                != raw_operational_winner
+            ),
+            "Player Two",
+        )
+    else:
+        raw_loser = "Player Two"
+
+    review_dir = tmp_path / "private-review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = review_dir / "atp-test-event-results.html"
+    artifact_path.write_text(
+        raw_html
+        if raw_html is not None
+        else _atp_result_html(
+            external_match_id=record.get(
+                "external_match_id",
+                EXTERNAL_MATCH_ID,
+            ),
+            played_date=record.get("official_played_date", operational_date),
+            winner=record.get("official_winner", ""),
+            loser=raw_loser,
+        ),
+        encoding="utf-8",
+    )
+    artifact = {
+        "artifact_id": "atp-test-event-2026-07-10",
+        "path": artifact_path.name,
+        "source_url": (
+            "https://www.atptour.com/en/scores/archive/"
+            "test-event/9999/2026/results"
+        ),
+        "observed_at_utc": "2026-07-10T19:00:00Z",
+        "byte_size": artifact_path.stat().st_size,
+        "sha256": _hash(artifact_path),
+    }
+    artifact.update(artifact_updates or {})
+
+    payload = {
+        "schema_version": RESULT_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+        "purpose": (
+            "paper-bet settlement only; no model-metric attribution write"
+        ),
+        "read_only_source_generation": {
+            "all_bets_sha256": _hash(paths.bets),
+            "prediction_log_sha256": _hash(paths.predictions),
+        },
+        "summary": {
+            "rows": 1,
+            "model_metric_write_authorized": False,
+        },
+        "artifacts": [artifact],
+        "records": [record],
+    }
+    payload.update(root_updates or {})
+    manifest = review_dir / "result-evidence.json"
+    _write_manifest_payload(manifest, payload)
+
+    assert set(payload) == RESULT_EVIDENCE_MANIFEST_KEYS
+    assert set(artifact) == RESULT_EVIDENCE_ARTIFACT_KEYS
+    assert set(record) == RESULT_EVIDENCE_RECORD_KEYS
+    return manifest, payload, artifact_path
+
+
 def test_plan_is_deterministic_and_accepts_reversed_numeric_orientation(tmp_path):
     paths = _write_fixture(
         tmp_path,
@@ -181,7 +391,7 @@ def test_plan_is_deterministic_and_accepts_reversed_numeric_orientation(tmp_path
     second = build_settlement_plan(paths)
 
     assert first == second
-    assert first["plan_schema_version"] == "1.0.0"
+    assert first["plan_schema_version"] == "1.1.0"
     assert first["summary"]["eligible_rows"] == 1
     assert first["candidates"][0]["authoritative_winner_name"] == "player one"
     assert first["candidates"][0]["winner_source_values"] == [1, 2]
@@ -208,6 +418,15 @@ def test_apply_updates_all_files_once_and_verified_replay_is_noop(tmp_path):
     assert bets.loc[0, "outcome"] == "win"
     assert bets.loc[0, "actual_profit"] == "10"
     assert bets.loc[0, "bankroll_after"] == "1010"
+    assert bets.loc[0, "settlement_quality"] == (
+        "authoritative_result_exact_match_uid"
+    )
+    assert bets.loc[0, "attribution_quality"] == "exact_match_uid"
+    assert bets.loc[0, "metric_eligible"] == "true"
+    assert bets.loc[0, "result_evidence_kind"] == (
+        "prediction_log_exact_match_uid"
+    )
+    assert len(bets.loc[0, "result_evidence_sha256"]) == 64
     assert plan["operation_id"] in bets.loc[0, "notes"]
 
     bankroll = pd.read_csv(paths.bankroll, dtype=str, keep_default_na=False)
@@ -231,6 +450,10 @@ def test_apply_updates_all_files_once_and_verified_replay_is_noop(tmp_path):
     assert audit.loc[0, "event_id"].startswith("pending_apply_")
     assert audit.loc[0, "plan_digest"] == plan["plan_digest"]
     assert audit.loc[0, "applied_at_utc"] == result["applied_at_utc"]
+    assert audit.loc[0, "metric_eligible"] == "true"
+    assert audit.loc[0, "session_lineage_quality"] == (
+        "exact_session_and_start_event"
+    )
 
     hashes_after_apply = {
         path: _hash(path)
@@ -268,12 +491,6 @@ def test_apply_updates_all_files_once_and_verified_replay_is_noop(tmp_path):
                 )
             ),
             "nonunique_bet_id",
-        ),
-        (
-            lambda bets, predictions, bankroll, sessions: bets.append(
-                _bet(bet_id="old", status="settled", actual_profit="5")
-            ),
-            "duplicate_bet_identity_any_status",
         ),
         (
             lambda bets, predictions, bankroll, sessions: bets[0].update(
@@ -336,14 +553,6 @@ def test_apply_updates_all_files_once_and_verified_replay_is_noop(tmp_path):
             "invalid_decimal_odds",
         ),
         (
-            lambda bets, predictions, bankroll, sessions: sessions.clear(),
-            "missing_or_nonunique_session_lineage",
-        ),
-        (
-            lambda bets, predictions, bankroll, sessions: sessions.append(_session()),
-            "missing_or_nonunique_session_lineage",
-        ),
-        (
             lambda bets, predictions, bankroll, sessions: sessions[0].update(
                 {"start_time": "2026-07-10T02:00:00Z"}
             ),
@@ -386,6 +595,417 @@ def test_no_name_or_pair_fallback_when_uid_is_wrong(tmp_path):
     assert plan["rejected"][0]["reasons"] == [
         "match_uid_absent_from_prediction_log"
     ]
+
+
+def test_opt_in_exact_pair_date_settles_rotated_uid_without_metric_attribution(
+    tmp_path,
+):
+    paths = _write_fixture(tmp_path, bets=[_bet(match_uid="rotated-old-uid")])
+    plan = build_settlement_plan(
+        paths,
+        result_evidence_mode="exact-pair-date",
+    )
+
+    assert plan["result_evidence_mode"] == "exact-pair-date"
+    assert plan["summary"]["eligible_rows"] == 1
+    candidate = plan["candidates"][0]
+    assert candidate["match_uid"] == "rotated-old-uid"
+    assert candidate["result_evidence_match_uid"] == "m1"
+    assert candidate["settlement_quality"] == (
+        "authoritative_result_exact_pair_date"
+    )
+    assert candidate["attribution_quality"] == "unattributed_rotated_match_uid"
+    assert candidate["metric_eligible"] is False
+    assert candidate["result_evidence"]["source_rows"][0]["source_row"] == 2
+    assert len(candidate["result_evidence_sha256"]) == 64
+
+
+def test_pair_date_mode_refuses_multiple_semantic_result_uids(tmp_path):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="rotated-old-uid")],
+        predictions=[
+            _prediction(match_uid="result-a"),
+            _prediction(match_uid="result-b"),
+        ],
+    )
+    plan = build_settlement_plan(
+        paths,
+        result_evidence_mode="exact-pair-date",
+    )
+    assert plan["summary"]["eligible_rows"] == 0
+    assert plan["rejected"][0]["reasons"] == [
+        "ambiguous_exact_pair_date_result_evidence"
+    ]
+
+
+def test_distinct_duplicate_exposures_are_not_collapsed(tmp_path):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(), _bet(bet_id="b2")],
+        bankroll=[
+            _bankroll(
+                pending_exposure="20",
+                total_staked="20",
+                num_pending_bets="2",
+            )
+        ],
+        sessions=[_session(total_bets_placed="2", total_staked="20")],
+    )
+    plan = build_settlement_plan(paths)
+    assert plan["summary"]["eligible_rows"] == 2
+    assert {row["bet_id"] for row in plan["candidates"]} == {"b1", "b2"}
+    for candidate in plan["candidates"]:
+        assert candidate["recorded_exposure_group_size"] == 2
+        assert candidate["recorded_exposure_bet_ids"] == ["b1", "b2"]
+
+
+@pytest.mark.parametrize("session_rows", [[], [_session(), _session()]])
+def test_unavailable_session_lineage_uses_global_accounting_only(
+    tmp_path,
+    session_rows,
+):
+    paths = _write_fixture(tmp_path, sessions=session_rows)
+    plan, plan_path = _plan_file(tmp_path, paths)
+    candidate = plan["candidates"][0]
+    expected_quality = (
+        "unavailable_missing_session"
+        if not session_rows
+        else "unavailable_nonunique_session"
+    )
+    assert candidate["session_lineage_quality"] == expected_quality
+    assert candidate["accounting_session_id"] == ""
+    original_sessions = paths.sessions.read_bytes()
+
+    apply_settlement_plan(
+        plan_path,
+        expected_digest=plan["plan_digest"],
+        paths=paths,
+    )
+    assert paths.sessions.read_bytes() == original_sessions
+    bankroll = pd.read_csv(paths.bankroll, dtype=str, keep_default_na=False)
+    assert bankroll.iloc[-1]["session_id"] == ""
+    assert bankroll.iloc[-1]["account_equity"] == "1010"
+    audit = pd.read_csv(paths.apply_audit, dtype=str, keep_default_na=False)
+    assert audit.loc[0, "session_lineage_quality"] == expected_quality
+    assert audit.loc[0, "session_post_row_sha256"] == ""
+
+
+def test_external_manifest_settles_exact_pair_date_without_touching_predictions(
+    tmp_path,
+):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                record_status="pending",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, payload, artifact_path = _write_result_manifest(tmp_path, paths)
+    paths = replace(paths, result_evidence_manifest=manifest)
+    prediction_hash = _hash(paths.predictions)
+    plan = build_settlement_plan(
+        paths,
+        result_evidence_mode="exact-pair-date",
+    )
+    candidate = plan["candidates"][0]
+    assert candidate["settlement_quality"] == (
+        "authoritative_external_result_exact_pair_date"
+    )
+    assert candidate["attribution_quality"] == "uid_unlinked"
+    assert candidate["metric_eligible"] is False
+    assert candidate["result_evidence_match_uid"] == ""
+    external_record = candidate["result_evidence"]["external_evidence_record"]
+    manifest_record = payload["records"][0]
+    assert external_record["artifact"]["sha256"] == _hash(artifact_path)
+    assert external_record["source_uri"] == EXTERNAL_MATCH_URL
+    assert external_record["source_external_match_id"] == EXTERNAL_MATCH_ID
+    assert external_record["official_played_date"] == "2026-07-10"
+    assert external_record["official_winner"] == "player one"
+    assert external_record["winner_alias_assertion"] == {
+        "operational_name": "player one",
+        "official_name": "player one",
+        "target_orientation": 1,
+        "external_match_id": EXTERNAL_MATCH_ID,
+    }
+    assert external_record["bet_row_sha256"] == manifest_record["bet_row_sha256"]
+    assert external_record["prediction_row_sha256"] == (
+        manifest_record["prediction_row_sha256"]
+    )
+    assert payload["read_only_source_generation"] == {
+        "all_bets_sha256": _hash(paths.bets),
+        "prediction_log_sha256": _hash(paths.predictions),
+    }
+
+    plan_path = tmp_path / "review" / "external-plan.json"
+    write_settlement_plan(plan, plan_path)
+    apply_settlement_plan(
+        plan_path,
+        expected_digest=plan["plan_digest"],
+        paths=paths,
+    )
+    assert _hash(paths.predictions) == prediction_hash
+    bets = pd.read_csv(paths.bets, dtype=str, keep_default_na=False)
+    assert bets.loc[0, "metric_eligible"] == "false"
+    assert bets.loc[0, "attribution_quality"] == "uid_unlinked"
+    audit = pd.read_csv(paths.apply_audit, dtype=str, keep_default_na=False)
+    assert audit.loc[0, "event_type"] == "settled_from_external_exact_pair_date"
+    assert audit.loc[0, "result_evidence_manifest_input_sha256"] == _hash(
+        manifest
+    )
+
+
+def test_external_manifest_duplicate_bet_records_fail_closed(tmp_path):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, payload, _ = _write_result_manifest(tmp_path, paths)
+    payload["records"].append(dict(payload["records"][0]))
+    payload["summary"]["rows"] = 2
+    _write_manifest_payload(manifest, payload)
+    paths = replace(paths, result_evidence_manifest=manifest)
+    with pytest.raises(ValueError, match="blank or duplicate bet_id"):
+        build_settlement_plan(
+            paths,
+            result_evidence_mode="exact-pair-date",
+        )
+
+
+def test_external_manifest_conflicting_local_winner_is_refused(tmp_path):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[_prediction(match_uid="result-uid")],
+    )
+    manifest, _, _ = _write_result_manifest(
+        tmp_path,
+        paths,
+        winner_orientation=2,
+    )
+    paths = replace(paths, result_evidence_manifest=manifest)
+    plan = build_settlement_plan(
+        paths,
+        result_evidence_mode="exact-pair-date",
+    )
+    assert plan["summary"]["eligible_rows"] == 0
+    assert plan["rejected"][0]["reasons"] == [
+        "conflicting_local_pair_date_result_evidence"
+    ]
+
+
+def test_changed_external_manifest_refuses_apply_before_writes(tmp_path):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                record_status="pending",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, _, _ = _write_result_manifest(tmp_path, paths)
+    paths = replace(paths, result_evidence_manifest=manifest)
+    plan = build_settlement_plan(
+        paths,
+        result_evidence_mode="exact-pair-date",
+    )
+    plan_path = tmp_path / "review" / "external-plan.json"
+    write_settlement_plan(plan, plan_path)
+    original = {
+        path: _hash(path)
+        for path in (paths.bets, paths.bankroll, paths.sessions, paths.apply_audit)
+    }
+    manifest.write_bytes(manifest.read_bytes() + b"\n")
+
+    with pytest.raises(ReconciliationConflict, match="manifest input hash changed"):
+        apply_settlement_plan(
+            plan_path,
+            expected_digest=plan["plan_digest"],
+            paths=paths,
+        )
+    assert original == {
+        path: _hash(path)
+        for path in (paths.bets, paths.bankroll, paths.sessions, paths.apply_audit)
+    }
+
+
+@pytest.mark.parametrize(
+    ("target", "updates", "error"),
+    [
+        (
+            "record",
+            {"model_metric_write_authorized": True},
+            "result/accounting binding mismatch",
+        ),
+        (
+            "record",
+            {"actual_winner_for_target_orientation": 3},
+            "winner orientation is invalid",
+        ),
+        (
+            "record",
+            {"official_winner": "Different Player"},
+            "official result is absent from raw artifact",
+        ),
+        ("record", {"bet_row_sha256": "0" * 64}, "bet binding mismatch"),
+        (
+            "record",
+            {"prediction_row_sha256": "0" * 64},
+            "prediction-row binding mismatch",
+        ),
+        (
+            "record",
+            {
+                "official_match_url": (
+                    "https://results.example/archive/" + EXTERNAL_MATCH_ID
+                )
+            },
+            "official external match binding is invalid",
+        ),
+        (
+            "record",
+            {"resolution_kind": "exact_uid_official_result"},
+            "resolution kind conflicts with UID binding",
+        ),
+        (
+            "artifact",
+            {"observed_at_utc": "2026-07-10 19:00:00"},
+            "timezone-aware",
+        ),
+        (
+            "artifact",
+            {
+                "source_url": (
+                    "https://www.atptour.com/en/scores/archive/"
+                    "test-event/8888/2026/results"
+                )
+            },
+            "official result is absent from raw artifact",
+        ),
+        ("artifact", {"sha256": "A" * 64}, "sha256 is invalid"),
+    ],
+)
+def test_external_manifest_rejects_unsafe_bindings(
+    tmp_path,
+    target,
+    updates,
+    error,
+):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                record_status="pending",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, _, _ = _write_result_manifest(
+        tmp_path,
+        paths,
+        **{f"{target}_updates": updates},
+    )
+    paths = replace(paths, result_evidence_manifest=manifest)
+    with pytest.raises(ValueError, match=error):
+        build_settlement_plan(
+            paths,
+            result_evidence_mode="exact-pair-date",
+        )
+
+
+@pytest.mark.parametrize(
+    "raw_html",
+    [
+        _atp_result_html(external_match_id="2026/test-event/ms999"),
+        _atp_result_html(played_date="2026-07-11"),
+        _atp_result_html(winner="Unrelated Winner"),
+        _atp_result_html(loser="Unrelated Loser"),
+    ],
+)
+def test_external_manifest_requires_exact_raw_atp_match_binding(
+    tmp_path,
+    raw_html,
+):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                record_status="pending",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, _, _ = _write_result_manifest(
+        tmp_path,
+        paths,
+        raw_html=raw_html,
+    )
+    paths = replace(paths, result_evidence_manifest=manifest)
+    with pytest.raises(ValueError, match="official result is absent"):
+        build_settlement_plan(
+            paths,
+            result_evidence_mode="exact-pair-date",
+        )
+
+
+@pytest.mark.parametrize(
+    ("official_played_date", "observed_at_utc"),
+    [
+        ("2026-07-14", "2026-07-15T19:00:00Z"),
+        ("2026-07-11", "2026-07-10T19:00:00Z"),
+    ],
+)
+def test_external_manifest_bounds_match_date_and_observation_time(
+    tmp_path,
+    official_played_date,
+    observed_at_utc,
+):
+    paths = _write_fixture(
+        tmp_path,
+        bets=[_bet(match_uid="orphan-uid")],
+        predictions=[
+            _prediction(
+                match_uid="result-uid",
+                actual_winner="",
+                record_status="pending",
+                settled_at="",
+            )
+        ],
+    )
+    manifest, _, _ = _write_result_manifest(
+        tmp_path,
+        paths,
+        record_updates={"official_played_date": official_played_date},
+        artifact_updates={"observed_at_utc": observed_at_utc},
+    )
+    paths = replace(paths, result_evidence_manifest=manifest)
+    with pytest.raises(ValueError, match="official result is absent"):
+        build_settlement_plan(
+            paths,
+            result_evidence_mode="exact-pair-date",
+        )
 
 
 def test_legacy_bankroll_header_is_padded_only_by_reviewed_apply(tmp_path):

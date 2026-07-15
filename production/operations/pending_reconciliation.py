@@ -2,9 +2,10 @@
 
 The default command deliberately stops at evidence assembly.  It does not call
 the bet tracker, does not scrape a result source, and never updates an input
-CSV.  The prediction log is the only authoritative winner source: a result is
-exact only when one ``match_uid`` resolves to one valid normalized winner
-identity and no void/cancellation marker conflicts with it.
+CSV.  Exact-UID prediction-log evidence is the default authority.  A reviewed
+plan may explicitly opt into exact pair/date recovery from one unambiguous
+prediction-log result or a private hash-bound external result manifest.  Those
+UID-unlinked settlements remain ineligible for model attribution.
 
 Run from ``production/``::
 
@@ -21,7 +22,7 @@ Settlement is a separate two-step operation.  A deterministic plan must first
 be written to an explicit path, reviewed, and then applied with both that plan
 and its exact digest.  Apply takes an exclusive lock and atomically replaces
 the bet, bankroll, session, and dedicated apply-audit files as one rollback
-unit.  It never uses fuzzy or name-only fallback matching.
+unit.  It never uses fuzzy, approximate-date, or winner-only fallback matching.
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ import shutil
 import stat
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -55,8 +57,79 @@ from operations.operational_lock import (
 
 
 RECONCILIATION_SCHEMA_VERSION = "1.1.0"
-SETTLEMENT_PLAN_SCHEMA_VERSION = "1.0.0"
-APPLY_AUDIT_SCHEMA_VERSION = "1.0.0"
+SETTLEMENT_PLAN_SCHEMA_VERSION = "1.1.0"
+APPLY_AUDIT_SCHEMA_VERSION = "1.1.0"
+
+RESULT_EVIDENCE_MODE_EXACT_UID = "exact-uid"
+RESULT_EVIDENCE_MODE_EXACT_PAIR_DATE = "exact-pair-date"
+RESULT_EVIDENCE_MODES = {
+    RESULT_EVIDENCE_MODE_EXACT_UID,
+    RESULT_EVIDENCE_MODE_EXACT_PAIR_DATE,
+}
+
+SETTLEMENT_QUALITY_EXACT_UID = "authoritative_result_exact_match_uid"
+SETTLEMENT_QUALITY_EXACT_PAIR_DATE = "authoritative_result_exact_pair_date"
+ATTRIBUTION_QUALITY_EXACT_UID = "exact_match_uid"
+ATTRIBUTION_QUALITY_ROTATED_UID = "unattributed_rotated_match_uid"
+ATTRIBUTION_QUALITY_UID_UNLINKED = "uid_unlinked"
+SETTLEMENT_QUALITY_EXTERNAL_PAIR_DATE = (
+    "authoritative_external_result_exact_pair_date"
+)
+RESULT_EVIDENCE_MANIFEST_SCHEMA_VERSION = (
+    "pending_result_recovery_evidence@1.0.0"
+)
+RESULT_EVIDENCE_MANIFEST_KEYS = {
+    "schema_version",
+    "purpose",
+    "read_only_source_generation",
+    "summary",
+    "artifacts",
+    "records",
+}
+RESULT_EVIDENCE_ARTIFACT_KEYS = {
+    "artifact_id",
+    "path",
+    "source_url",
+    "observed_at_utc",
+    "byte_size",
+    "sha256",
+}
+RESULT_EVIDENCE_RECORD_KEYS = {
+    "bet_id",
+    "bet_source_row",
+    "bet_row_sha256",
+    "pending_identity_key",
+    "resolution_kind",
+    "original_match_uid",
+    "target_match_uid",
+    "prediction_source_row",
+    "prediction_row_sha256",
+    "pair",
+    "operational_match_date",
+    "official_played_date",
+    "event",
+    "round",
+    "bet_on",
+    "stake",
+    "odds_decimal",
+    "official_winner",
+    "actual_winner_for_target_orientation",
+    "official_score_winner_first",
+    "bet_result",
+    "actual_profit",
+    "external_match_id",
+    "official_match_url",
+    "artifact_id",
+    "model_metric_write_authorized",
+}
+# External recovery is exact-name only except for deliberately reviewed,
+# source-visible transliterations.  Do not generalize this into fuzzy matching.
+REVIEWED_EXTERNAL_WINNER_NAME_EQUIVALENCES = {
+    frozenset(("alexander shevchenko", "aleksandr shevchenko")),
+}
+SESSION_LINEAGE_EXACT = "exact_session_and_start_event"
+SESSION_LINEAGE_MISSING = "unavailable_missing_session"
+SESSION_LINEAGE_NONUNIQUE = "unavailable_nonunique_session"
 
 EXACT_WINNER = "exact_authoritative_winner_available"
 DUPLICATE_IDENTITY = "duplicate_pending_match_side_date_identity"
@@ -106,6 +179,13 @@ PLAN_REQUIRED_BET_COLUMNS = REQUIRED_BET_COLUMNS | {
     "notes",
     "edge",
 }
+BET_SETTLEMENT_QUALITY_COLUMNS = (
+    "settlement_quality",
+    "attribution_quality",
+    "metric_eligible",
+    "result_evidence_kind",
+    "result_evidence_sha256",
+)
 PLAN_REQUIRED_PREDICTION_COLUMNS = REQUIRED_PREDICTION_COLUMNS | {
     "match_date",
     "settled_at",
@@ -155,6 +235,15 @@ APPLY_AUDIT_COLUMNS = (
     "plan_schema_version",
     "event_sequence",
     "event_type",
+    "result_evidence_mode",
+    "settlement_quality",
+    "attribution_quality",
+    "metric_eligible",
+    "result_evidence_kind",
+    "result_evidence_match_uid",
+    "result_evidence_sha256",
+    "session_lineage_quality",
+    "recorded_exposure_group_size",
     "applied_at_utc",
     "bet_id",
     "match_uid",
@@ -174,6 +263,7 @@ APPLY_AUDIT_COLUMNS = (
     "predictions_input_sha256",
     "bankroll_input_sha256",
     "sessions_input_sha256",
+    "result_evidence_manifest_input_sha256",
     "apply_audit_input_sha256",
 )
 
@@ -225,6 +315,7 @@ class SettlementPaths:
     apply_audit: Path
     lock: Path
     transaction_dir: Path
+    result_evidence_manifest: Path | None = None
 
     def resolved(self) -> "SettlementPaths":
         return SettlementPaths(
@@ -235,6 +326,11 @@ class SettlementPaths:
             apply_audit=self.apply_audit.resolve(),
             lock=self.lock.resolve(),
             transaction_dir=self.transaction_dir.resolve(),
+            result_evidence_manifest=(
+                self.result_evidence_manifest.resolve()
+                if self.result_evidence_manifest is not None
+                else None
+            ),
         )
 
     def as_dict(self) -> dict[str, Path]:
@@ -262,6 +358,8 @@ def _validate_settlement_paths(paths: SettlementPaths) -> None:
         "lock": paths.lock,
         "transaction_dir": paths.transaction_dir,
     }
+    if paths.result_evidence_manifest is not None:
+        named["result_evidence_manifest"] = paths.result_evidence_manifest
     reverse: dict[Path, list[str]] = {}
     for name, path in named.items():
         reverse.setdefault(path, []).append(name)
@@ -315,6 +413,14 @@ def _validate_settlement_paths(paths: SettlementPaths) -> None:
         raise ValueError(
             "operational paths must not be inside the transaction recovery "
             f"directory: {nested_targets}"
+        )
+    if (
+        paths.result_evidence_manifest is not None
+        and paths.transaction_dir in paths.result_evidence_manifest.parents
+    ):
+        raise ValueError(
+            "result evidence manifest must not be inside the transaction "
+            "recovery directory"
         )
 
 
@@ -425,6 +531,16 @@ def _strict_timestamp(value: Any) -> pd.Timestamp | None:
     return None if pd.isna(parsed) else parsed
 
 
+def _strict_aware_timestamp_text(value: Any, *, label: str) -> str:
+    text = _clean(value)
+    if not text:
+        raise ValueError(f"{label} is required")
+    parsed = pd.to_datetime(text, errors="coerce", utc=False)
+    if pd.isna(parsed) or parsed.tzinfo is None:
+        raise ValueError(f"{label} must be a timezone-aware timestamp")
+    return parsed.tz_convert("UTC").isoformat()
+
+
 def _strict_bool(value: Any) -> bool | None:
     text = _clean(value).lower()
     if text in {"true", "1", "yes", "y"}:
@@ -523,6 +639,20 @@ class SafeOutcomeResolution:
     winner_source_values: tuple[int, ...] = ()
     source_rows: tuple[int, ...] = ()
     source_row_hashes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ResultEvidenceSelection:
+    """One exact result binding selected under an explicit recovery mode."""
+
+    outcome: SafeOutcomeResolution | None
+    reasons: tuple[str, ...]
+    settlement_quality: str = ""
+    attribution_quality: str = ""
+    metric_eligible: bool = False
+    evidence_kind: str = ""
+    external_evidence: Mapping[str, Any] | None = None
+    external_evidence_sha256: str = ""
 
 
 def _dedupe_reasons(reasons: Iterable[str]) -> tuple[str, ...]:
@@ -638,6 +768,523 @@ def _resolve_safe_outcome(
         winner_source_values=tuple(sorted(winner_values)),
         source_rows=tuple(source_rows),
         source_row_hashes=tuple(source_hashes),
+    )
+
+
+def _load_result_evidence_manifest(
+    path: Path | None,
+    *,
+    bets: pd.DataFrame,
+    predictions: pd.DataFrame,
+    bets_path: Path,
+    predictions_path: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """Validate a private, bet-bound official-result recovery manifest."""
+    if path is None:
+        return {}, None
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise ValueError(f"result evidence manifest does not exist: {resolved}")
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"result evidence manifest is unreadable: {exc}") from exc
+    if not isinstance(payload, dict) or set(payload) != RESULT_EVIDENCE_MANIFEST_KEYS:
+        raise ValueError("result evidence manifest root schema mismatch")
+    if payload.get("schema_version") != RESULT_EVIDENCE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError("unsupported result evidence manifest schema version")
+    if payload.get("purpose") != (
+        "paper-bet settlement only; no model-metric attribution write"
+    ):
+        raise ValueError("result evidence manifest purpose is not settlement-only")
+    generation = payload.get("read_only_source_generation")
+    if not isinstance(generation, dict) or set(generation) != {
+        "all_bets_sha256",
+        "prediction_log_sha256",
+    }:
+        raise ValueError("result evidence source generation is malformed")
+    if generation["all_bets_sha256"] != _file_sha256(bets_path):
+        raise ValueError("result evidence bet-log generation hash mismatch")
+    if generation["prediction_log_sha256"] != _file_sha256(predictions_path):
+        raise ValueError("result evidence prediction generation hash mismatch")
+
+    artifacts_raw = payload.get("artifacts")
+    records_raw = payload.get("records")
+    if not isinstance(artifacts_raw, list) or not isinstance(records_raw, list):
+        raise ValueError("result evidence artifacts/records must be lists")
+    artifacts: dict[str, dict[str, Any]] = {}
+    for position, raw in enumerate(artifacts_raw, start=1):
+        label = f"result evidence artifact {position}"
+        if not isinstance(raw, dict) or set(raw) != RESULT_EVIDENCE_ARTIFACT_KEYS:
+            raise ValueError(f"{label} schema mismatch")
+        artifact_id = _clean(raw.get("artifact_id"))
+        if not artifact_id or artifact_id in artifacts:
+            raise ValueError(f"{label} has blank or duplicate artifact_id")
+        artifact_path = Path(_clean(raw.get("path")))
+        if not artifact_path.is_absolute():
+            artifact_path = resolved.parent / artifact_path
+        artifact_path = artifact_path.resolve()
+        if not artifact_path.is_file() or artifact_path.is_symlink():
+            raise ValueError(f"{label} raw artifact is missing or unsafe")
+        artifact_sha = _clean(raw.get("sha256"))
+        if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha):
+            raise ValueError(f"{label} sha256 is invalid")
+        if _file_sha256(artifact_path) != artifact_sha:
+            raise ValueError(f"{label} raw artifact hash mismatch")
+        if int(raw.get("byte_size")) != artifact_path.stat().st_size:
+            raise ValueError(f"{label} byte size mismatch")
+        source_url = _clean(raw.get("source_url"))
+        parsed_source_url = urlparse(source_url)
+        if (
+            parsed_source_url.scheme != "https"
+            or parsed_source_url.netloc.lower()
+            not in {"atptour.com", "www.atptour.com"}
+        ):
+            raise ValueError(f"{label} source URL must be an official ATP URL")
+        artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "path": str(artifact_path),
+            "source_url": source_url,
+            "observed_at_utc": _strict_aware_timestamp_text(
+                raw.get("observed_at_utc"), label=f"{label} observed_at_utc"
+            ),
+            "byte_size": artifact_path.stat().st_size,
+            "sha256": artifact_sha,
+        }
+
+    bet_source_columns = [
+        column for column in bets.columns
+        if column not in BET_SETTLEMENT_QUALITY_COLUMNS
+    ]
+    prediction_columns = list(predictions.columns)
+    index: dict[str, dict[str, Any]] = {}
+    canonical_records: list[dict[str, Any]] = []
+    for position, raw in enumerate(records_raw, start=1):
+        label = f"result evidence record {position}"
+        if not isinstance(raw, dict) or set(raw) != RESULT_EVIDENCE_RECORD_KEYS:
+            raise ValueError(f"{label} schema mismatch")
+        bet_id = _clean(raw.get("bet_id"))
+        if not bet_id or bet_id in index:
+            raise ValueError(f"{label} has blank or duplicate bet_id")
+        bet_source_row = int(raw.get("bet_source_row"))
+        if not 2 <= bet_source_row <= len(bets) + 1:
+            raise ValueError(f"{label} bet source row is out of range")
+        bet = bets.iloc[bet_source_row - 2]
+        bet_row_sha = _row_sha256(bet, bet_source_columns)
+        if (
+            _clean(bet.get("bet_id")) != bet_id
+            or _clean(raw.get("bet_row_sha256")) != bet_row_sha
+            or _clean(bet.get("status")).lower() != "pending"
+        ):
+            raise ValueError(f"{label} bet binding mismatch")
+        identity = _strict_bet_identity(bet)
+        if identity is None:
+            raise ValueError(f"{label} bound bet identity is invalid")
+        identity_key, bet_pair, operational_date, bet_on = identity
+        raw_pair = raw.get("pair")
+        if not isinstance(raw_pair, list) or len(raw_pair) != 2:
+            raise ValueError(f"{label} pair must contain exactly two players")
+        manifest_pair = tuple(sorted(normalize_name(value) for value in raw_pair))
+        if (
+            manifest_pair != bet_pair
+            or _clean(raw.get("operational_match_date")) != operational_date
+            or _clean(raw.get("pending_identity_key")) != identity_key
+            or normalize_name(raw.get("bet_on")) != bet_on
+            or _clean(raw.get("original_match_uid")) != _clean(bet.get("match_uid"))
+        ):
+            raise ValueError(f"{label} operational identity binding mismatch")
+        if _decimal_value(raw.get("stake")) != _positive_decimal(bet.get("stake")):
+            raise ValueError(f"{label} stake binding mismatch")
+        if _decimal_value(raw.get("odds_decimal")) != _price_decimal(
+            bet.get("odds_decimal")
+        ):
+            raise ValueError(f"{label} odds binding mismatch")
+
+        prediction_source_row = int(raw.get("prediction_source_row"))
+        if not 2 <= prediction_source_row <= len(predictions) + 1:
+            raise ValueError(f"{label} prediction source row is out of range")
+        prediction = predictions.iloc[prediction_source_row - 2]
+        if (
+            _clean(raw.get("prediction_row_sha256"))
+            != _row_sha256(prediction, prediction_columns)
+            or _clean(raw.get("target_match_uid"))
+            != _clean(prediction.get("match_uid"))
+        ):
+            raise ValueError(f"{label} prediction-row binding mismatch")
+        prediction_pair = tuple(
+            sorted(
+                (
+                    normalize_name(prediction.get("p1")),
+                    normalize_name(prediction.get("p2")),
+                )
+            )
+        )
+        if prediction_pair != bet_pair or _strict_date(
+            prediction.get("match_date")
+        ) != operational_date:
+            raise ValueError(f"{label} target prediction identity mismatch")
+
+        winner_orientation = _parse_numeric_winner(
+            raw.get("actual_winner_for_target_orientation")
+        )
+        if winner_orientation not in (1, 2):
+            raise ValueError(f"{label} winner orientation is invalid")
+        operational_winner = normalize_name(
+            prediction.get("p1" if winner_orientation == 1 else "p2")
+        )
+        official_winner = normalize_name(raw.get("official_winner"))
+        if not official_winner:
+            raise ValueError(f"{label} official winner is blank")
+        result = "win" if bet_on == operational_winner else "loss"
+        stake = _positive_decimal(bet.get("stake"))
+        odds = _price_decimal(bet.get("odds_decimal"))
+        assert stake is not None and odds is not None
+        profit = stake * (odds - Decimal("1")) if result == "win" else -stake
+        if (
+            _clean(raw.get("bet_result")).lower() != result
+            or _decimal_value(raw.get("actual_profit")) != profit
+            or raw.get("model_metric_write_authorized") is not False
+        ):
+            raise ValueError(f"{label} result/accounting binding mismatch")
+
+        artifact_id = _clean(raw.get("artifact_id"))
+        artifact = artifacts.get(artifact_id)
+        if artifact is None:
+            raise ValueError(f"{label} references an unknown artifact")
+        external_match_id = _clean(raw.get("external_match_id"))
+        official_url = _clean(raw.get("official_match_url"))
+        parsed_official_url = urlparse(official_url)
+        expected_official_path = (
+            "/en/scores/stats-centre/archive/" + external_match_id
+        )
+        if (
+            not re.fullmatch(r"[0-9]{4}/[0-9]+/[a-z]{2}[0-9]+", external_match_id)
+            or parsed_official_url.scheme != "https"
+            or parsed_official_url.netloc.lower() not in {
+                "atptour.com",
+                "www.atptour.com",
+            }
+            or parsed_official_url.path.rstrip("/") != expected_official_path
+            or parsed_official_url.params
+            or parsed_official_url.query
+            or parsed_official_url.fragment
+        ):
+            raise ValueError(f"{label} official external match binding is invalid")
+        artifact_text = Path(artifact["path"]).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        official_date = _strict_date(raw.get("official_played_date"))
+        if official_date != _clean(raw.get("official_played_date")):
+            raise ValueError(f"{label} official played date is invalid")
+        match_marker = f'/archive/{external_match_id}"'
+        marker_index = artifact_text.find(match_marker)
+        match_start = artifact_text.rfind(
+            '<div class="match">', 0, marker_index
+        )
+        next_match = artifact_text.find(
+            '<div class="match">', marker_index + len(match_marker)
+        )
+        match_segment = artifact_text[
+            match_start if match_start >= 0 else marker_index:
+            next_match if next_match >= 0 else len(artifact_text)
+        ]
+        official_winner_text = _clean(raw.get("official_winner"))
+        operational_loser = next(
+            (
+                player for player in raw_pair
+                if normalize_name(player) != operational_winner
+            ),
+            "",
+        )
+        official_winner_normalized = normalize_name(official_winner_text)
+        operational_loser_normalized = normalize_name(operational_loser)
+        winner_name_equivalence = frozenset(
+            (official_winner_normalized, operational_winner)
+        )
+        winner_identity_matches = (
+            official_winner_normalized == operational_winner
+            or winner_name_equivalence
+            in REVIEWED_EXTERNAL_WINNER_NAME_EQUIVALENCES
+        )
+        normalized_match_segment = normalize_name(match_segment)
+        stats_item_starts = [
+            match.start()
+            for match in re.finditer(
+                r'<div\s+class=["\']stats-item["\']\s*>',
+                match_segment,
+                flags=re.IGNORECASE,
+            )
+        ]
+        match_footer_start = match_segment.find('<div class="match-footer">')
+        stats_region_end = (
+            match_footer_start
+            if match_footer_start >= 0
+            else len(match_segment)
+        )
+        stats_items: list[str] = []
+        winner_items: list[str] = []
+        nonwinner_items: list[str] = []
+        for item_position, item_start in enumerate(stats_item_starts):
+            item_end = (
+                stats_item_starts[item_position + 1]
+                if item_position + 1 < len(stats_item_starts)
+                else stats_region_end
+            )
+            item = match_segment[item_start:item_end]
+            stats_items.append(item)
+            if re.search(
+                r'<div\s+class=["\']winner["\']\s*>',
+                item,
+                flags=re.IGNORECASE,
+            ):
+                winner_items.append(item)
+            else:
+                nonwinner_items.append(item)
+        preceding_day_headers = list(
+            re.finditer(
+                r'<div\s+class=["\']tournament-day["\']\s*>\s*'
+                r'<h4>\s*([^<]+)',
+                artifact_text[:match_start] if match_start >= 0 else "",
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        )
+        artifact_match_date = (
+            _strict_date(preceding_day_headers[-1].group(1))
+            if preceding_day_headers
+            else ""
+        )
+        official_date_timestamp = pd.Timestamp(official_date)
+        operational_date_timestamp = pd.Timestamp(operational_date)
+        observed_timestamp = pd.Timestamp(artifact["observed_at_utc"])
+        external_year, external_tournament_id, _ = external_match_id.split("/")
+        source_path_parts = {
+            part for part in urlparse(artifact["source_url"]).path.split("/")
+            if part
+        }
+        if (
+            marker_index < 0
+            or match_start < 0
+            or not winner_identity_matches
+            or official_winner_normalized not in normalized_match_segment
+            or (
+                operational_loser
+                and operational_loser_normalized not in normalized_match_segment
+            )
+            or len(stats_items) != 2
+            or len(winner_items) != 1
+            or len(nonwinner_items) != 1
+            or official_winner_normalized not in normalize_name(winner_items[0])
+            or official_winner_normalized in normalize_name(nonwinner_items[0])
+            or not operational_loser_normalized
+            or operational_loser_normalized not in normalize_name(nonwinner_items[0])
+            or operational_loser_normalized in normalize_name(winner_items[0])
+            or artifact_match_date != official_date
+            or official_date_timestamp.year != int(external_year)
+            or abs(
+                (official_date_timestamp - operational_date_timestamp).days
+            ) > 3
+            or observed_timestamp.date() < official_date_timestamp.date()
+            or external_tournament_id not in source_path_parts
+        ):
+            raise ValueError(f"{label} official result is absent from raw artifact")
+
+        resolution_kind = _clean(raw.get("resolution_kind"))
+        expected_resolution = (
+            "exact_uid_official_result"
+            if _clean(raw.get("original_match_uid"))
+            == _clean(raw.get("target_match_uid"))
+            else "rotated_uid_result_only"
+        )
+        if resolution_kind != expected_resolution:
+            raise ValueError(f"{label} resolution kind conflicts with UID binding")
+        canonical = {
+            "evidence_id": f"{artifact_id}:{external_match_id}:{bet_id}",
+            "bet_id": bet_id,
+            "bet_source_row": bet_source_row,
+            "bet_row_sha256": bet_row_sha,
+            "pending_identity_key": identity_key,
+            "original_match_uid": _clean(raw.get("original_match_uid")),
+            "target_match_uid": _clean(raw.get("target_match_uid")),
+            "prediction_source_row": prediction_source_row,
+            "prediction_row_sha256": _clean(raw.get("prediction_row_sha256")),
+            "pair": list(bet_pair),
+            "operational_match_date": operational_date,
+            "official_played_date": official_date,
+            "event": _clean(raw.get("event")),
+            "round": _clean(raw.get("round")),
+            "winner": operational_winner,
+            "official_winner": official_winner,
+            "winner_alias_assertion": {
+                "operational_name": operational_winner,
+                "official_name": official_winner,
+                "target_orientation": winner_orientation,
+                "external_match_id": external_match_id,
+            },
+            "score": _clean(raw.get("official_score_winner_first")),
+            "observed_at_utc": artifact["observed_at_utc"],
+            "source_system": "atp_tour",
+            "source_uri": official_url,
+            "source_external_match_id": external_match_id,
+            "artifact": artifact,
+        }
+        canonical["evidence_record_sha256"] = _payload_sha256(canonical)
+        canonical_records.append(canonical)
+        index[bet_id] = canonical
+
+    summary = payload.get("summary")
+    if not isinstance(summary, dict) or int(summary.get("rows", -1)) != len(index):
+        raise ValueError("result evidence manifest summary row count mismatch")
+    if summary.get("model_metric_write_authorized") is not False:
+        raise ValueError("result evidence manifest attempts metric authorization")
+    if set(artifacts) != {record["artifact"]["artifact_id"] for record in canonical_records}:
+        raise ValueError("result evidence manifest has unreferenced artifacts")
+    descriptor = _file_descriptor(resolved)
+    descriptor.update(
+        {
+            "manifest_schema_version": RESULT_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+            "records": len(canonical_records),
+            "canonical_records_sha256": _payload_sha256(canonical_records),
+            "raw_artifacts_sha256": _payload_sha256(
+                {key: value["sha256"] for key, value in sorted(artifacts.items())}
+            ),
+        }
+    )
+    return index, descriptor
+
+
+def _select_result_evidence(
+    *,
+    bet_id: str,
+    match_uid: str,
+    bet_pair: tuple[str, str],
+    bet_date: str,
+    result_evidence_mode: str,
+    prediction_outcomes: Mapping[str, SafeOutcomeResolution],
+    semantic_outcomes: Mapping[
+        tuple[tuple[str, str], str], Sequence[SafeOutcomeResolution]
+    ],
+    external_outcomes: Mapping[str, Mapping[str, Any]],
+) -> ResultEvidenceSelection:
+    """Select exact result evidence without asserting a rotated UID alias.
+
+    Exact-UID evidence remains the default.  The opt-in pair/date recovery mode
+    is intentionally narrower than an identity remap: it may settle the paper
+    exposure from one exact semantic result, but it cannot attribute that result
+    back to the original prediction UID or make the row metric eligible.
+    """
+    external = external_outcomes.get(bet_id)
+
+    def external_selection(record: Mapping[str, Any]) -> ResultEvidenceSelection:
+        record_copy = dict(record)
+        outcome = SafeOutcomeResolution(
+            match_uid="",
+            reasons=(),
+            winner_name=str(record_copy["winner"]),
+            player_pair=bet_pair,
+            match_date=bet_date,
+            settlement_effective_at=str(record_copy["observed_at_utc"]),
+        )
+        return ResultEvidenceSelection(
+            outcome=outcome,
+            reasons=(),
+            settlement_quality=SETTLEMENT_QUALITY_EXTERNAL_PAIR_DATE,
+            attribution_quality=ATTRIBUTION_QUALITY_UID_UNLINKED,
+            metric_eligible=False,
+            evidence_kind="external_official_match_record_bet_bound",
+            external_evidence=record_copy,
+            external_evidence_sha256=str(
+                record_copy["evidence_record_sha256"]
+            ),
+        )
+
+    def external_conflicts(
+        outcomes: Sequence[SafeOutcomeResolution],
+    ) -> bool:
+        if external is None:
+            return False
+        allowed_incomplete_reasons = {
+            "no_valid_winner_value",
+            "conflicting_or_missing_winner_identity",
+            "missing_authoritative_settled_at",
+        }
+        for local in outcomes:
+            if set(local.reasons) - allowed_incomplete_reasons:
+                return True
+            if local.winner_source_values and not local.winner_name:
+                return True
+            if local.winner_name and local.winner_name != external["winner"]:
+                return True
+        return False
+
+    exact = prediction_outcomes.get(match_uid)
+    if exact is not None and not exact.reasons:
+        return ResultEvidenceSelection(
+            outcome=exact,
+            reasons=exact.reasons,
+            settlement_quality=SETTLEMENT_QUALITY_EXACT_UID,
+            attribution_quality=ATTRIBUTION_QUALITY_EXACT_UID,
+            metric_eligible=True,
+            evidence_kind="prediction_log_exact_match_uid",
+        )
+    if exact is not None:
+        if external is not None and not external_conflicts([exact]):
+            return external_selection(external)
+        return ResultEvidenceSelection(
+            outcome=exact,
+            reasons=exact.reasons,
+            settlement_quality=SETTLEMENT_QUALITY_EXACT_UID,
+            attribution_quality=ATTRIBUTION_QUALITY_EXACT_UID,
+            metric_eligible=True,
+            evidence_kind="prediction_log_exact_match_uid",
+        )
+
+    if not match_uid:
+        return ResultEvidenceSelection(
+            outcome=None,
+            reasons=("blank_match_uid",),
+        )
+    if result_evidence_mode != RESULT_EVIDENCE_MODE_EXACT_PAIR_DATE:
+        return ResultEvidenceSelection(
+            outcome=None,
+            reasons=("match_uid_absent_from_prediction_log",),
+        )
+    if not bet_pair or not bet_date:
+        return ResultEvidenceSelection(
+            outcome=None,
+            reasons=("invalid_bet_pair_date_for_result_evidence",),
+        )
+
+    candidates = list(semantic_outcomes.get((bet_pair, bet_date), ()))
+    if len(candidates) > 1:
+        return ResultEvidenceSelection(
+            outcome=None,
+            reasons=("ambiguous_exact_pair_date_result_evidence",),
+        )
+    if external is not None:
+        if external_conflicts(candidates):
+            return ResultEvidenceSelection(
+                outcome=None,
+                reasons=("conflicting_local_pair_date_result_evidence",),
+            )
+        return external_selection(external)
+
+    if candidates:
+        selected = candidates[0]
+        reasons = list(selected.reasons)
+        if selected.match_uid == match_uid:
+            reasons.append("pair_date_evidence_did_not_rotate_match_uid")
+        return ResultEvidenceSelection(
+            outcome=selected,
+            reasons=_dedupe_reasons(reasons),
+            settlement_quality=SETTLEMENT_QUALITY_EXACT_PAIR_DATE,
+            attribution_quality=ATTRIBUTION_QUALITY_ROTATED_UID,
+            metric_eligible=False,
+            evidence_kind="prediction_log_exact_player_pair_date",
+        )
+
+    return ResultEvidenceSelection(
+        outcome=None,
+        reasons=("no_exact_pair_date_result_evidence",),
     )
 
 
@@ -1090,6 +1737,12 @@ def _load_settlement_frames(
     bankroll = _read_csv_text(paths.bankroll, label="bankroll history")
     sessions = _read_csv_text(paths.sessions, label="betting sessions")
     _require_columns(bets, PLAN_REQUIRED_BET_COLUMNS, label="bet log")
+    # Settlement provenance columns were added after the original paper log.
+    # Planning pads legacy generations in memory; only a reviewed atomic apply
+    # upgrades the durable bet CSV.
+    for column in BET_SETTLEMENT_QUALITY_COLUMNS:
+        if column not in bets.columns:
+            bets[column] = ""
     _require_columns(
         predictions,
         PLAN_REQUIRED_PREDICTION_COLUMNS,
@@ -1243,14 +1896,39 @@ def build_settlement_plan(
     paths: SettlementPaths,
     *,
     starting_capital: Decimal | str | float = Decimal("1000"),
+    result_evidence_mode: str = RESULT_EVIDENCE_MODE_EXACT_UID,
 ) -> dict[str, Any]:
-    """Build a deterministic, reviewable plan for strictly safe exact rows."""
+    """Build a deterministic, reviewable plan for strictly safe exact rows.
+
+    Rotated-UID result recovery is opt-in.  It settles paper accounting only
+    from one exact pair/date result and explicitly withholds model attribution.
+    """
     paths = paths.resolved()
     _validate_settlement_paths(paths)
+    if result_evidence_mode not in RESULT_EVIDENCE_MODES:
+        raise ValueError(
+            "unsupported result evidence mode: " + str(result_evidence_mode)
+        )
+    if (
+        paths.result_evidence_manifest is not None
+        and result_evidence_mode != RESULT_EVIDENCE_MODE_EXACT_PAIR_DATE
+    ):
+        raise ValueError(
+            "result evidence manifest requires exact-pair-date evidence mode"
+        )
     capital = _decimal_value(starting_capital)
     if capital is None:
         capital = Decimal("NaN")
     bets, predictions, bankroll, sessions, apply_audit = _load_settlement_frames(paths)
+    external_outcomes, external_manifest_descriptor = (
+        _load_result_evidence_manifest(
+            paths.result_evidence_manifest,
+            bets=bets,
+            predictions=predictions,
+            bets_path=paths.bets,
+            predictions_path=paths.predictions,
+        )
+    )
 
     bet_columns = list(bets.columns)
     prediction_columns = list(predictions.columns)
@@ -1272,9 +1950,20 @@ def build_settlement_plan(
         int(row["_source_row"]): _strict_bet_identity(row)
         for _, row in bets_work.iterrows()
     }
-    identity_counts = Counter(
-        identity[0] for identity in strict_identities.values() if identity is not None
-    )
+    identity_members: dict[str, list[dict[str, Any]]] = {}
+    for _, identity_row in bets_work.iterrows():
+        identity = strict_identities[int(identity_row["_source_row"])]
+        if identity is None:
+            continue
+        identity_members.setdefault(identity[0], []).append(
+            {
+                "source_row": int(identity_row["_source_row"]),
+                "bet_id": _clean(identity_row.get("bet_id")),
+                "status": _clean(identity_row.get("status")).lower(),
+            }
+        )
+    for members in identity_members.values():
+        members.sort(key=lambda member: (member["source_row"], member["bet_id"]))
 
     prediction_outcomes: dict[str, SafeOutcomeResolution] = {}
     for match_uid, group in predictions_work[
@@ -1285,9 +1974,18 @@ def build_settlement_plan(
             group,
             prediction_columns=prediction_columns,
         )
+    semantic_outcomes: dict[
+        tuple[tuple[str, str], str], list[SafeOutcomeResolution]
+    ] = {}
+    for outcome in prediction_outcomes.values():
+        if outcome.player_pair and outcome.match_date:
+            semantic_outcomes.setdefault(
+                (outcome.player_pair, outcome.match_date), []
+            ).append(outcome)
+    for outcomes in semantic_outcomes.values():
+        outcomes.sort(key=lambda outcome: outcome.match_uid)
 
     session_ids = sessions_work["session_id"].map(_clean)
-    session_counts = Counter(session_ids)
     bankroll_session_counts = Counter(bankroll_work["session_id"].map(_clean))
     account = _account_state(bets_work, starting_capital=capital)
     bankroll_timestamps = [
@@ -1319,6 +2017,7 @@ def build_settlement_plan(
                 "bankroll_after",
                 "settled_timestamp",
                 "notes",
+                *BET_SETTLEMENT_QUALITY_COLUMNS,
             )
         ):
             reasons.append("pending_settlement_fields_not_blank")
@@ -1337,8 +2036,16 @@ def build_settlement_plan(
             bet_on = normalize_name(_clean(row.get("bet_on")))
         else:
             identity_key, bet_pair, bet_date, bet_on = strict_identity
-            if identity_counts[identity_key] != 1:
-                reasons.append("duplicate_bet_identity_any_status")
+        exposure_members = identity_members.get(identity_key, [])
+        exposure_group_size = len(exposure_members)
+        exposure_group_position = next(
+            (
+                position
+                for position, member in enumerate(exposure_members, start=1)
+                if member["source_row"] == source_row
+            ),
+            0,
+        )
 
         ordered_bet_players = _ordered_match_players(row.get("match"))
         side_flag = _strict_bool(row.get("bet_on_player1"))
@@ -1348,13 +2055,19 @@ def build_settlement_plan(
             if side_flag != (bet_on == ordered_bet_players[0]):
                 reasons.append("bet_side_orientation_mismatch")
 
-        outcome = prediction_outcomes.get(match_uid)
-        if not match_uid:
-            reasons.append("blank_match_uid")
-        elif outcome is None:
-            reasons.append("match_uid_absent_from_prediction_log")
-        else:
-            reasons.extend(outcome.reasons)
+        evidence = _select_result_evidence(
+            bet_id=bet_id,
+            match_uid=match_uid,
+            bet_pair=bet_pair,
+            bet_date=bet_date,
+            result_evidence_mode=result_evidence_mode,
+            prediction_outcomes=prediction_outcomes,
+            semantic_outcomes=semantic_outcomes,
+            external_outcomes=external_outcomes,
+        )
+        outcome = evidence.outcome
+        reasons.extend(evidence.reasons)
+        if outcome is not None:
             if outcome.player_pair and bet_pair and outcome.player_pair != bet_pair:
                 reasons.append("prediction_pair_mismatch")
             if outcome.match_date and bet_date and outcome.match_date != bet_date:
@@ -1374,56 +2087,75 @@ def build_settlement_plan(
 
         session_row: pd.Series | None = None
         session_start_event: pd.Series | None = None
+        session_lineage_quality = ""
+        session_source_rows: list[int] = []
+        session_row_hashes: list[str] = []
+        accounting_session_id = ""
         if not session_id:
             reasons.append("blank_session_id")
-        elif session_counts[session_id] != 1:
-            reasons.append("missing_or_nonunique_session_lineage")
         else:
-            session_row = sessions_work[session_ids.eq(session_id)].iloc[0]
             bet_timestamp = _strict_timestamp(row.get("timestamp"))
-            session_start = _strict_timestamp(session_row.get("start_time"))
-            if bet_timestamp is None or session_start is None:
-                reasons.append("invalid_bet_or_session_timestamp")
-            elif bet_timestamp < session_start:
-                reasons.append("bet_precedes_session_start")
-            if bankroll_session_counts[session_id] < 1:
-                reasons.append("session_missing_bankroll_lineage")
+            if bet_timestamp is None:
+                reasons.append("invalid_bet_timestamp")
+            matching_sessions = sessions_work[session_ids.eq(session_id)]
+            session_source_rows = [
+                int(value) for value in matching_sessions["_source_row"].tolist()
+            ]
+            session_row_hashes = [
+                _row_sha256(session_candidate, session_columns)
+                for _, session_candidate in matching_sessions.iterrows()
+            ]
+            if len(matching_sessions) == 0:
+                session_lineage_quality = SESSION_LINEAGE_MISSING
+            elif len(matching_sessions) > 1:
+                session_lineage_quality = SESSION_LINEAGE_NONUNIQUE
             else:
-                session_bankroll = bankroll_work[
-                    bankroll_work["session_id"].map(_clean).eq(session_id)
-                ]
-                start_mask = (
-                    session_bankroll["change_reason"]
-                    .map(normalize_text)
-                    .eq("session started")
-                    & session_bankroll["change_amount"]
-                    .map(_decimal_value)
-                    .eq(Decimal("0"))
-                )
-                start_events = session_bankroll[start_mask]
-                if len(start_events) != 1:
-                    reasons.append("missing_or_nonunique_session_start_event")
+                session_lineage_quality = SESSION_LINEAGE_EXACT
+                accounting_session_id = session_id
+                session_row = matching_sessions.iloc[0]
+                session_start = _strict_timestamp(session_row.get("start_time"))
+                if session_start is None:
+                    reasons.append("invalid_session_timestamp")
+                elif bet_timestamp is not None and bet_timestamp < session_start:
+                    reasons.append("bet_precedes_session_start")
+                if bankroll_session_counts[session_id] < 1:
+                    reasons.append("session_missing_bankroll_lineage")
                 else:
-                    session_start_event = start_events.iloc[0]
-                    event_timestamp = _strict_timestamp(
-                        session_start_event.get("timestamp")
+                    session_bankroll = bankroll_work[
+                        bankroll_work["session_id"].map(_clean).eq(session_id)
+                    ]
+                    start_mask = (
+                        session_bankroll["change_reason"]
+                        .map(normalize_text)
+                        .eq("session started")
+                        & session_bankroll["change_amount"]
+                        .map(_decimal_value)
+                        .eq(Decimal("0"))
                     )
-                    initial_balance = _positive_decimal(
-                        session_row.get("initial_bankroll")
-                    )
-                    event_balance = _positive_decimal(
-                        session_start_event.get("bankroll")
-                    )
-                    if (
-                        event_timestamp is None
-                        or session_start is None
-                        or bet_timestamp is None
-                        or event_timestamp != session_start
-                        or event_timestamp > bet_timestamp
-                        or initial_balance is None
-                        or event_balance != initial_balance
-                    ):
-                        reasons.append("session_start_event_lineage_mismatch")
+                    start_events = session_bankroll[start_mask]
+                    if len(start_events) != 1:
+                        reasons.append("missing_or_nonunique_session_start_event")
+                    else:
+                        session_start_event = start_events.iloc[0]
+                        event_timestamp = _strict_timestamp(
+                            session_start_event.get("timestamp")
+                        )
+                        initial_balance = _positive_decimal(
+                            session_row.get("initial_bankroll")
+                        )
+                        event_balance = _positive_decimal(
+                            session_start_event.get("bankroll")
+                        )
+                        if (
+                            event_timestamp is None
+                            or session_start is None
+                            or bet_timestamp is None
+                            or event_timestamp != session_start
+                            or event_timestamp > bet_timestamp
+                            or initial_balance is None
+                            or event_balance != initial_balance
+                        ):
+                            reasons.append("session_start_event_lineage_mismatch")
 
         reasons_tuple = _dedupe_reasons(reasons)
         if reasons_tuple:
@@ -1440,16 +2172,65 @@ def build_settlement_plan(
 
         assert outcome is not None
         assert stake is not None and odds is not None
-        assert session_row is not None
-        assert session_start_event is not None
         result = "win" if bet_on == outcome.winner_name else "loss"
         profit = stake * (odds - Decimal("1")) if result == "win" else -stake
+        if evidence.external_evidence is not None:
+            assert paths.result_evidence_manifest is not None
+            result_evidence = {
+                "source_role": "result_evidence_manifest",
+                "source_path": str(paths.result_evidence_manifest),
+                "source_file_sha256": _file_sha256(
+                    paths.result_evidence_manifest
+                ),
+                "result_evidence_mode": result_evidence_mode,
+                "result_evidence_kind": evidence.evidence_kind,
+                "bet_match_uid": match_uid,
+                "evidence_match_uid": "",
+                "match_pair": list(outcome.player_pair),
+                "match_date": outcome.match_date,
+                "authoritative_winner_name": outcome.winner_name,
+                "settlement_effective_at": outcome.settlement_effective_at,
+                "external_evidence_record": dict(evidence.external_evidence),
+                "external_evidence_record_sha256": (
+                    evidence.external_evidence_sha256
+                ),
+            }
+        else:
+            result_evidence = {
+                "source_role": "predictions",
+                "source_path": str(paths.predictions),
+                "source_file_sha256": _file_sha256(paths.predictions),
+                "result_evidence_mode": result_evidence_mode,
+                "result_evidence_kind": evidence.evidence_kind,
+                "bet_match_uid": match_uid,
+                "evidence_match_uid": outcome.match_uid,
+                "match_pair": list(outcome.player_pair),
+                "match_date": outcome.match_date,
+                "authoritative_winner_name": outcome.winner_name,
+                "settlement_effective_at": outcome.settlement_effective_at,
+                "source_rows": [
+                    {
+                        "source_row": source_row_number,
+                        "source_row_sha256": source_row_hash,
+                    }
+                    for source_row_number, source_row_hash in zip(
+                        outcome.source_rows,
+                        outcome.source_row_hashes,
+                    )
+                ],
+            }
+        result_evidence_sha256 = _payload_sha256(result_evidence)
         provisional.append(
             {
                 "source_row": source_row,
                 "bet_id": bet_id,
                 "bet_row_sha256": _row_sha256(row, bet_columns),
                 "pending_identity_key": identity_key,
+                "recorded_exposure_group_size": exposure_group_size,
+                "recorded_exposure_group_position": exposure_group_position,
+                "recorded_exposure_bet_ids": [
+                    member["bet_id"] for member in exposure_members
+                ],
                 "match_uid": match_uid,
                 "match_pair": list(bet_pair),
                 "match_date": bet_date,
@@ -1459,17 +2240,41 @@ def build_settlement_plan(
                 "stake": _decimal_text(stake),
                 "odds_decimal": _decimal_text(odds),
                 "authoritative_winner_name": outcome.winner_name,
+                "result_evidence_mode": result_evidence_mode,
+                "settlement_quality": evidence.settlement_quality,
+                "attribution_quality": evidence.attribution_quality,
+                "metric_eligible": evidence.metric_eligible,
+                "result_evidence_kind": evidence.evidence_kind,
+                "result_evidence_match_uid": outcome.match_uid,
+                "result_evidence": result_evidence,
+                "result_evidence_sha256": result_evidence_sha256,
                 "winner_source_values": list(outcome.winner_source_values),
                 "prediction_source_rows": list(outcome.source_rows),
                 "prediction_row_hashes": list(outcome.source_row_hashes),
                 "session_id": session_id,
-                "session_source_row": int(session_row["_source_row"]),
-                "session_row_sha256": _row_sha256(session_row, session_columns),
-                "session_start_event_source_row": int(
-                    session_start_event["_source_row"]
+                "accounting_session_id": accounting_session_id,
+                "session_lineage_quality": session_lineage_quality,
+                "session_source_rows": session_source_rows,
+                "session_row_hashes": session_row_hashes,
+                "session_source_row": (
+                    int(session_row["_source_row"])
+                    if session_row is not None
+                    else None
                 ),
-                "session_start_event_row_sha256": _row_sha256(
-                    session_start_event, bankroll_columns
+                "session_row_sha256": (
+                    _row_sha256(session_row, session_columns)
+                    if session_row is not None
+                    else ""
+                ),
+                "session_start_event_source_row": (
+                    int(session_start_event["_source_row"])
+                    if session_start_event is not None
+                    else None
+                ),
+                "session_start_event_row_sha256": (
+                    _row_sha256(session_start_event, bankroll_columns)
+                    if session_start_event is not None
+                    else ""
                 ),
                 "outcome": result,
                 "actual_profit": _decimal_text(profit),
@@ -1519,6 +2324,8 @@ def build_settlement_plan(
             apply_audit if paths.apply_audit.is_file() else None,
         ),
     }
+    if external_manifest_descriptor is not None:
+        inputs["result_evidence_manifest"] = external_manifest_descriptor
     input_fingerprint = _payload_sha256(
         {
             name: {
@@ -1534,6 +2341,7 @@ def build_settlement_plan(
             "input_fingerprint": input_fingerprint,
             "candidates": candidates,
             "starting_capital": account["starting_capital"],
+            "result_evidence_mode": result_evidence_mode,
         }
     )[:24]
     eligible_profit = sum(
@@ -1542,6 +2350,7 @@ def build_settlement_plan(
     preview_plan = {
         "plan_digest": "0" * 64,
         "operation_id": operation_id,
+        "result_evidence_mode": result_evidence_mode,
         "account": account,
         "inputs": inputs,
         "candidates": candidates,
@@ -1569,6 +2378,7 @@ def build_settlement_plan(
         "read_only_plan": True,
         "automatic_startup_wiring": False,
         "operation_id": operation_id,
+        "result_evidence_mode": result_evidence_mode,
         "input_fingerprint": input_fingerprint,
         "coordination": {
             "exclusive_lock_path": str(paths.lock),
@@ -1675,6 +2485,21 @@ def _validate_bound_paths(plan: Mapping[str, Any], paths: SettlementPaths) -> No
         raise ReconciliationConflict(
             "plan transaction directory does not match the explicit recovery path"
         )
+    planned_manifest = plan.get("inputs", {}).get("result_evidence_manifest")
+    supplied_manifest = paths.result_evidence_manifest
+    if planned_manifest is None and supplied_manifest is not None:
+        raise ReconciliationConflict(
+            "an unplanned result evidence manifest was supplied"
+        )
+    if planned_manifest is not None:
+        if supplied_manifest is None:
+            raise ReconciliationConflict(
+                "plan requires an explicit result evidence manifest"
+            )
+        if _clean(planned_manifest.get("path")) != str(supplied_manifest):
+            raise ReconciliationConflict(
+                "plan result evidence manifest path does not match the supplied path"
+            )
 
 
 def _validate_input_hashes(plan: Mapping[str, Any], paths: SettlementPaths) -> None:
@@ -1686,14 +2511,41 @@ def _validate_input_hashes(plan: Mapping[str, Any], paths: SettlementPaths) -> N
         current_hash = _file_sha256(path) if exists else None
         if descriptor.get("sha256") != current_hash:
             raise ReconciliationConflict(f"{name} input hash changed after planning")
+    if paths.result_evidence_manifest is not None:
+        descriptor = plan["inputs"]["result_evidence_manifest"]
+        if not paths.result_evidence_manifest.is_file():
+            raise ReconciliationConflict(
+                "result evidence manifest disappeared after planning"
+            )
+        if descriptor.get("sha256") != _file_sha256(
+            paths.result_evidence_manifest
+        ):
+            raise ReconciliationConflict(
+                "result evidence manifest input hash changed after planning"
+            )
 
 
 def _event_id(plan_digest: str, sequence: int) -> str:
     return f"pending_apply_{plan_digest[:20]}_{sequence:04d}"
 
 
-def _settlement_note(operation_id: str) -> str:
-    return f"Exact-UID pending reconciliation; operation_id={operation_id}"
+def _settlement_note(operation_id: str, candidate: Mapping[str, Any]) -> str:
+    return (
+        "Reviewed pending reconciliation; "
+        f"settlement_quality={candidate['settlement_quality']}; "
+        f"operation_id={operation_id}"
+    )
+
+
+def _settlement_event_type(candidate: Mapping[str, Any]) -> str:
+    kind = str(candidate["result_evidence_kind"])
+    if kind == "prediction_log_exact_match_uid":
+        return "settled_from_prediction_log_exact_uid"
+    if kind == "prediction_log_exact_player_pair_date":
+        return "settled_from_prediction_log_exact_pair_date"
+    if kind == "external_official_match_record_bet_bound":
+        return "settled_from_external_exact_pair_date"
+    raise ReconciliationConflict(f"unsupported result evidence kind: {kind}")
 
 
 def _bankroll_reason(operation_id: str, candidate: Mapping[str, Any]) -> str:
@@ -1766,7 +2618,24 @@ def _verify_replay_or_raise(
             "plan_digest": digest,
             "plan_schema_version": SETTLEMENT_PLAN_SCHEMA_VERSION,
             "event_sequence": str(sequence),
-            "event_type": "settled_from_prediction_log_exact_uid",
+            "event_type": _settlement_event_type(candidate),
+            "result_evidence_mode": str(candidate["result_evidence_mode"]),
+            "settlement_quality": str(candidate["settlement_quality"]),
+            "attribution_quality": str(candidate["attribution_quality"]),
+            "metric_eligible": str(bool(candidate["metric_eligible"])).lower(),
+            "result_evidence_kind": str(candidate["result_evidence_kind"]),
+            "result_evidence_match_uid": str(
+                candidate["result_evidence_match_uid"]
+            ),
+            "result_evidence_sha256": str(
+                candidate["result_evidence_sha256"]
+            ),
+            "session_lineage_quality": str(
+                candidate["session_lineage_quality"]
+            ),
+            "recorded_exposure_group_size": str(
+                candidate["recorded_exposure_group_size"]
+            ),
             "bet_id": str(candidate["bet_id"]),
             "match_uid": str(candidate["match_uid"]),
             "session_id": str(candidate["session_id"]),
@@ -1787,8 +2656,10 @@ def _verify_replay_or_raise(
             "bankroll_event_row_sha256": str(
                 post_bankroll[sequence]["row_sha256"]
             ),
-            "session_post_row_sha256": str(
-                post_sessions[str(candidate["session_id"])]["row_sha256"]
+            "session_post_row_sha256": (
+                str(post_sessions[str(candidate["session_id"])]["row_sha256"])
+                if candidate["session_lineage_quality"] == SESSION_LINEAGE_EXACT
+                else ""
             ),
             "reviewed_post_state_sha256": _payload_sha256(plan["post_state"]),
             "bets_input_sha256": str(plan["inputs"]["bets"]["sha256"]),
@@ -1800,6 +2671,11 @@ def _verify_replay_or_raise(
             ),
             "sessions_input_sha256": str(
                 plan["inputs"]["sessions"]["sha256"]
+            ),
+            "result_evidence_manifest_input_sha256": str(
+                plan["inputs"].get("result_evidence_manifest", {}).get(
+                    "sha256", ""
+                )
             ),
             "apply_audit_input_sha256": str(
                 plan["inputs"]["apply_audit"]["sha256"] or ""
@@ -1828,7 +2704,21 @@ def _verify_replay_or_raise(
         profit = _decimal_value(bet.get("actual_profit"))
         if profit != Decimal(str(candidate["actual_profit"])):
             raise ReconciliationConflict("replayed bet profit conflicts with plan")
-        if _clean(bet.get("notes")) != _settlement_note(str(plan["operation_id"])):
+        expected_quality_fields = {
+            "settlement_quality": str(candidate["settlement_quality"]),
+            "attribution_quality": str(candidate["attribution_quality"]),
+            "metric_eligible": str(bool(candidate["metric_eligible"])).lower(),
+            "result_evidence_kind": str(candidate["result_evidence_kind"]),
+            "result_evidence_sha256": str(candidate["result_evidence_sha256"]),
+        }
+        for column, expected in expected_quality_fields.items():
+            if _clean(bet.get(column)).lower() != expected.lower():
+                raise ReconciliationConflict(
+                    f"replayed bet {column} conflicts with plan"
+                )
+        if _clean(bet.get("notes")) != _settlement_note(
+            str(plan["operation_id"]), candidate
+        ):
             raise ReconciliationConflict("replayed bet note does not bind plan digest")
         if _clean(bet.get("settled_timestamp")) != str(
             candidate["settlement_effective_at"]
@@ -2035,13 +2925,28 @@ def _build_applied_frames(
         bets_out.at[source_index, "bankroll_after"] = _decimal_text(equity)
         bets_out.at[source_index, "settled_timestamp"] = settlement_effective_at
         bets_out.at[source_index, "notes"] = _settlement_note(
-            str(plan["operation_id"])
+            str(plan["operation_id"]), candidate
+        )
+        bets_out.at[source_index, "settlement_quality"] = str(
+            candidate["settlement_quality"]
+        )
+        bets_out.at[source_index, "attribution_quality"] = str(
+            candidate["attribution_quality"]
+        )
+        bets_out.at[source_index, "metric_eligible"] = str(
+            bool(candidate["metric_eligible"])
+        ).lower()
+        bets_out.at[source_index, "result_evidence_kind"] = str(
+            candidate["result_evidence_kind"]
+        )
+        bets_out.at[source_index, "result_evidence_sha256"] = str(
+            candidate["result_evidence_sha256"]
         )
 
         bankroll_events.append(
             {
                 "timestamp": str(candidate["accounting_recorded_at"]),
-                "session_id": str(candidate["session_id"]),
+                "session_id": str(candidate["accounting_session_id"]),
                 "bankroll": _decimal_text(equity),
                 "change_amount": _decimal_text(profit),
                 "change_reason": _bankroll_reason(
@@ -2064,7 +2969,24 @@ def _build_applied_frames(
                 "plan_digest": digest,
                 "plan_schema_version": SETTLEMENT_PLAN_SCHEMA_VERSION,
                 "event_sequence": str(sequence),
-                "event_type": "settled_from_prediction_log_exact_uid",
+                "event_type": _settlement_event_type(candidate),
+                "result_evidence_mode": str(candidate["result_evidence_mode"]),
+                "settlement_quality": str(candidate["settlement_quality"]),
+                "attribution_quality": str(candidate["attribution_quality"]),
+                "metric_eligible": str(bool(candidate["metric_eligible"])).lower(),
+                "result_evidence_kind": str(candidate["result_evidence_kind"]),
+                "result_evidence_match_uid": str(
+                    candidate["result_evidence_match_uid"]
+                ),
+                "result_evidence_sha256": str(
+                    candidate["result_evidence_sha256"]
+                ),
+                "session_lineage_quality": str(
+                    candidate["session_lineage_quality"]
+                ),
+                "recorded_exposure_group_size": str(
+                    candidate["recorded_exposure_group_size"]
+                ),
                 "applied_at_utc": applied_at,
                 "bet_id": str(candidate["bet_id"]),
                 "match_uid": str(candidate["match_uid"]),
@@ -2090,6 +3012,9 @@ def _build_applied_frames(
                 "predictions_input_sha256": str(inputs["predictions"]["sha256"]),
                 "bankroll_input_sha256": str(inputs["bankroll"]["sha256"]),
                 "sessions_input_sha256": str(inputs["sessions"]["sha256"]),
+                "result_evidence_manifest_input_sha256": str(
+                    inputs.get("result_evidence_manifest", {}).get("sha256", "")
+                ),
                 "apply_audit_input_sha256": str(
                     inputs["apply_audit"]["sha256"] or ""
                 ),
@@ -2102,7 +3027,13 @@ def _build_applied_frames(
             ignore_index=True,
         )
 
-    affected_sessions = sorted({str(row["session_id"]) for row in candidates})
+    affected_sessions = sorted(
+        {
+            str(row["session_id"])
+            for row in candidates
+            if row["session_lineage_quality"] == SESSION_LINEAGE_EXACT
+        }
+    )
     final_equity = equity
     for session_id in affected_sessions:
         session_indexes = sessions_out[
@@ -2169,16 +3100,19 @@ def _build_applied_frames(
         bankroll_event = bankroll_out.iloc[
             len(bankroll_out) - len(candidates) + int(candidate["event_sequence"]) - 1
         ]
-        session = sessions_out[
-            sessions_out["session_id"].map(_clean).eq(str(candidate["session_id"]))
-        ].iloc[0]
         event["bet_post_row_sha256"] = _row_sha256(bet, list(bets_out.columns))
         event["bankroll_event_row_sha256"] = _row_sha256(
             bankroll_event, list(bankroll_out.columns)
         )
-        event["session_post_row_sha256"] = _row_sha256(
-            session, list(sessions_out.columns)
-        )
+        if candidate["session_lineage_quality"] == SESSION_LINEAGE_EXACT:
+            session = sessions_out[
+                sessions_out["session_id"]
+                .map(_clean)
+                .eq(str(candidate["session_id"]))
+            ].iloc[0]
+            event["session_post_row_sha256"] = _row_sha256(
+                session, list(sessions_out.columns)
+            )
         event["event_payload_sha256"] = _payload_sha256(
             {
                 column: event[column]
@@ -2236,7 +3170,13 @@ def _post_state_manifest(
             }
         )
     session_rows = []
-    for session_id in sorted({str(row["session_id"]) for row in candidates}):
+    for session_id in sorted(
+        {
+            str(row["session_id"])
+            for row in candidates
+            if row["session_lineage_quality"] == SESSION_LINEAGE_EXACT
+        }
+    ):
         matching = sessions[sessions["session_id"].map(_clean).eq(session_id)]
         if len(matching) != 1:
             raise ReconciliationConflict("post-state session is missing or nonunique")
@@ -2817,6 +3757,7 @@ def apply_settlement_plan(
         rebuilt = build_settlement_plan(
             paths,
             starting_capital=plan["account"]["starting_capital"],
+            result_evidence_mode=plan["result_evidence_mode"],
         )
         if rebuilt["plan_digest"] != plan["plan_digest"] or rebuilt != plan:
             raise ReconciliationConflict(
@@ -2934,6 +3875,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="paper-account starting capital bound into a plan (default: 1000)",
     )
     parser.add_argument(
+        "--result-evidence-mode",
+        choices=sorted(RESULT_EVIDENCE_MODES),
+        default=RESULT_EVIDENCE_MODE_EXACT_UID,
+        help=(
+            "plan-time result authority; exact-pair-date is an explicit "
+            "one-time recovery mode"
+        ),
+    )
+    parser.add_argument(
+        "--result-evidence-manifest",
+        type=Path,
+        help="private exact external-result manifest bound into plan/apply",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="print full input hashes, bet IDs, and duplicate identity keys",
@@ -2959,6 +3914,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.output_csv or args.output_json
     ):
         parser.error("review exports and plan/apply are separate operations")
+    if args.result_evidence_manifest and not (args.plan_output or args.apply_plan):
+        parser.error("--result-evidence-manifest requires plan/apply")
+    if (
+        args.result_evidence_mode != RESULT_EVIDENCE_MODE_EXACT_UID
+        and not args.plan_output
+    ):
+        parser.error("--result-evidence-mode is valid only with --plan-output")
     return args
 
 
@@ -2982,6 +3944,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             apply_audit=args.apply_audit.resolve(),
             lock=args.lock_file.resolve(),
             transaction_dir=args.transaction_dir.resolve(),
+            result_evidence_manifest=(
+                args.result_evidence_manifest.resolve()
+                if args.result_evidence_manifest
+                else None
+            ),
         )
         try:
             if args.plan_output:
@@ -2990,11 +3957,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     **paths.as_dict(),
                     "lock": paths.lock,
                     "transaction_dir": paths.transaction_dir,
+                    "result_evidence_manifest": paths.result_evidence_manifest,
                 }.values():
                     raise ValueError("plan output must not overlap an operational path")
                 plan = build_settlement_plan(
                     paths,
                     starting_capital=args.starting_capital,
+                    result_evidence_mode=args.result_evidence_mode,
                 )
                 write_settlement_plan(plan, plan_output)
                 result = {

@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-14.4";
+  const BUILD_ID = "2026-07-14.5";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -400,14 +400,25 @@
     store.snapshots
       .filter((row) => Logic.clean(row.run_id) === acceptedRunId && !Logic.validWinner(row.actual_winner))
       .forEach((row, index) => {
-        const key = Logic.clean(row.match_uid) || `${Logic.clean(row.p1)}|${Logic.clean(row.p2)}|${Logic.clean(row.match_date)}|${index}`;
+        const key = Logic.slateEvidenceKey(row, `snapshot:${index}`);
         const at = Logic.parseTimestamp(row.logged_at) || 0;
         const previous = byMatch.get(key);
         if (!previous || at >= previous.at) byMatch.set(key, { row, at });
       });
 
-    [...byMatch.values()].forEach(({ row }) => {
-      let classification = Logic.classifySlateRow(row, Date.now());
+    const auditsByMatch = new Map();
+    store.skipped
+      .filter((row) => Logic.clean(row.run_id) === acceptedRunId)
+      .forEach((row, index) => {
+        const key = Logic.slateEvidenceKey(row, `audit:${index}`);
+        if (!auditsByMatch.has(key)) auditsByMatch.set(key, new Map());
+        const eventKey = Logic.clean(row.skip_event_id) || `${key}|${Logic.clean(row.stage)}|${Logic.clean(row.skip_reason_code)}|${index}`;
+        auditsByMatch.get(key).set(eventKey, row);
+      });
+
+    [...byMatch.entries()].forEach(([key, { row }]) => {
+      const auditRows = [...(auditsByMatch.get(key) || new Map()).values()];
+      let classification = Logic.classifySlateEvidence(row, auditRows, Date.now());
       const featureReference = Logic.featureReferenceStatus(row, acceptedFeatureIds, featureReferenceLoaded, seenFeatureIds);
       if (!["expired", "settled"].includes(classification.state) && ["unverified", "not_found", "invalid"].includes(featureReference)) {
         const referenceReason = featureReference === "not_found"
@@ -415,27 +426,34 @@
           : featureReference === "invalid"
             ? "Feature row exists but failed status, completeness, hash, or 141-feature integrity checks"
             : "Feature snapshot ID has not been referentially verified";
-        classification = { ...classification, state: "blocked", reasons: [...classification.reasons, referenceReason] };
+        classification = { ...classification, state: "blocked", reasons: Logic.mergeReasons(classification.reasons, [referenceReason]) };
       }
-      const entry = { row, classification, source: "snapshot", featureReference };
+      const entry = { row, classification, source: "snapshot", featureReference, auditRows };
       if (classification.state === "eligible") buckets.eligible.push(entry);
       else if (classification.state === "blocked") buckets.blocked.push(entry);
       else if (classification.state === "expired") buckets.expired.push(entry);
+      auditsByMatch.delete(key);
     });
 
-    const predictedMatchIds = new Set([...byMatch.keys()]);
-    const skippedByEvent = new Map();
-    store.skipped
-      .filter((row) => Logic.clean(row.run_id) === acceptedRunId)
-      .forEach((row, index) => {
-        const matchKey = Logic.clean(row.match_uid) || `${Logic.clean(row.p1)}|${Logic.clean(row.p2)}|${Logic.clean(row.match_date)}`;
-        if (predictedMatchIds.has(matchKey)) return;
-        const eventKey = Logic.clean(row.skip_event_id) || `${matchKey}|${Logic.clean(row.stage)}|${index}`;
-        skippedByEvent.set(eventKey, row);
+    [...auditsByMatch.values()].forEach((eventMap) => {
+      const auditRows = [...eventMap.values()].sort((a, b) => (
+        (Logic.parseTimestamp(b.logged_at) || 0) - (Logic.parseTimestamp(a.logged_at) || 0)
+      ));
+      const row = auditRows[0];
+      const auditClassifications = auditRows.map((audit) => Logic.classifySkippedRow(audit, Date.now()));
+      const expired = auditClassifications.some((item) => item.state === "expired");
+      const classification = {
+        state: expired ? "expired" : "blocked",
+        reasons: Logic.mergeReasons(...auditClassifications.map((item) => item.reasons)),
+        startAt: auditClassifications.find((item) => item.startAt !== null)?.startAt ?? null,
+      };
+      buckets[classification.state].push({
+        row,
+        classification,
+        source: "skipped",
+        featureReference: "not_applicable",
+        auditRows,
       });
-    [...skippedByEvent.values()].forEach((row) => {
-      const classification = Logic.classifySkippedRow(row, Date.now());
-      buckets[classification.state].push({ row, classification, source: "skipped", featureReference: "not_applicable" });
     });
 
     const sorter = (a, b) => {
@@ -611,6 +629,42 @@
     return bottom !== null ? `${formatNumber(top || 0)} / ${formatNumber(bottom)}` : formatNumber(top);
   }
 
+  function renderAcceptedSlateFunnel() {
+    const host = byId("slate-funnel");
+    if (!host) return;
+    clear(host);
+    host.classList.remove("skeleton");
+    const acceptedRunId = Logic.clean(store.manifest && store.manifest.accepted_prediction_run_id);
+    const funnel = Logic.acceptedSlateFunnel(
+      [...currentSlate.eligible, ...currentSlate.blocked, ...currentSlate.expired],
+      new Set(store.acceptedFeatures.ids || []),
+    );
+    const stages = [
+      ["Accepted matches", formatNumber(funnel.counts.accepted), "one unsettled accepted-run cohort"],
+      ["Finite NN outputs", formatNumber(funnel.counts.finite), "intersection with valid inference"],
+      ["Complete vectors", formatNumber(funnel.counts.complete), "intersection with exact 141-feature rows"],
+      ["Identity-clean", formatNumber(funnel.counts.identityClean), "intersection after identity gate"],
+    ];
+    stages.forEach(([label, value, note]) => {
+      const step = element("div", "funnel-step");
+      step.append(
+        element("span", null, label),
+        element("strong", null, value),
+        element("small", null, note),
+      );
+      host.appendChild(step);
+    });
+    setText(
+      "slate-funnel-note",
+      acceptedRunId
+        ? `One accepted unsettled cohort (${acceptedRunId}); every stage is an explicit subset of the previous stage. Data-valid now: ${formatNumber(funnel.counts.dataValidNow)}. Started / expired retained separately: ${formatNumber(funnel.expired)}.`
+        : "No accepted prediction run is available.",
+    );
+    if (!funnel.monotone) {
+      host.replaceChildren(emptyState("Eligibility funnel integrity check failed; stage counts are withheld."));
+    }
+  }
+
   function renderOverview() {
     const run = health.latestAttempt && health.latestAttempt.run;
     const chipHost = byId("overview-run-status");
@@ -651,7 +705,10 @@
     addDefinition(freshness, "Browser delivery", store.browserFetchedAt ? formatDateTime(store.browserFetchedAt) : "not loaded");
 
     const reasonCounts = new Map();
-    currentSlate.blocked.forEach(({ classification }) => classification.reasons.forEach((reason) => reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1)));
+    currentSlate.blocked.forEach((entry) => {
+      const group = Logic.primaryBlockerGroup(entry);
+      reasonCounts.set(group, (reasonCounts.get(group) || 0) + 1);
+    });
     const reasonHost = byId("blocked-reasons");
     clear(reasonHost);
     if (!reasonCounts.size) reasonHost.appendChild(emptyState("No blocked rows in the accepted slate."));
@@ -764,7 +821,7 @@
   }
 
   function renderMatchCard(entry, state) {
-    const { row, classification, source, featureReference } = entry;
+    const { row, classification, source, featureReference, auditRows = [] } = entry;
     const isSkipped = source === "skipped";
     const card = element("article", `match-card ${state}`);
     const header = element("div", "match-card-header");
@@ -798,6 +855,12 @@
     } else {
       summary.append(element("div", "match-meta", "Edge = NN probability − offered price raw break-even"));
       summary.append(element("div", "match-meta", pendingBet ? `Paper bet pending: ${Logic.clean(pendingBet.bet_on)} · ${formatMoney(pendingBet.stake, 0)}` : "Green begins at the configured +2.0 pt decision gate"));
+      if (auditRows.length) {
+        const auditCodes = [...new Set(auditRows.map((audit) => (
+          Logic.clean(audit.skip_reason_code).replaceAll("_", " ")
+        )).filter(Boolean))];
+        summary.append(element("div", "match-meta", `Matched audit evidence: ${auditCodes.join(" · ") || "reason recorded"}`));
+      }
     }
     const allocationGate = Logic.clean(
       health && health.latestAttempt && health.latestAttempt.run.exposure_gate_status,
@@ -826,6 +889,13 @@
     addLineageValue(grid, "accepted run", predictionRunId(row));
     addLineageValue(grid, "logged", row.logged_at);
     addLineageValue(grid, "odds scraped", row.odds_scraped_at);
+    if (auditRows.length) {
+      addLineageValue(
+        grid,
+        "matched audit events",
+        auditRows.map((audit) => Logic.clean(audit.skip_event_id)).filter(Boolean).join(", ") || `${auditRows.length} event(s)`,
+      );
+    }
     if (isSkipped) {
       addLineageValue(grid, "stage", row.stage);
       addLineageValue(grid, "resolver", row.resolver_source);
@@ -893,6 +963,7 @@
     setText("eligible-count", currentSlate.eligible.length);
     setText("blocked-count", currentSlate.blocked.length);
     setText("expired-count", currentSlate.expired.length);
+    renderAcceptedSlateFunnel();
     const acceptedRunId = Logic.clean(store.manifest && store.manifest.accepted_prediction_run_id);
     setText("slate-cohort-note", acceptedRunId ? `Accepted prediction-bearing run ${acceptedRunId}. Tournament boards use immutable prediction snapshots plus skipped-live audit rows; canonical predictions are history-only.` : "No accepted prediction-bearing run is identified by the sync manifest.");
     renderSlateBucket("eligible-slate", currentSlate.eligible, "eligible", "No matches currently satisfy every eligibility precondition.");

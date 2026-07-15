@@ -17,8 +17,8 @@ Start here:
 - [Dashboard README](/Users/zachdodson/Documents/betting-algo/dashboard/README.md)
   How to run the live operations dashboard and which CSVs it reads
 - [Pending Paper-Bet Reconciliation](/Users/zachdodson/Documents/betting-algo/docs/production/PENDING_BET_RECONCILIATION.md)
-  Read-only classification plus manual digest-gated plan/apply for the narrow
-  exact, nonduplicate pending-account subset
+  Read-only classification plus manual digest-gated exact-UID and explicit
+  pair/date or bet-bound official-result recovery
 - [Pending Identity Remediation](/Users/zachdodson/Documents/betting-algo/docs/production/PENDING_IDENTITY_REMEDIATION.md)
   Evidence-bound orphan-UID and duplicate-intent review with an immutable
   decision registry; candidate joins never authorize a remap
@@ -84,10 +84,14 @@ Current production principles:
 - Settlement audit reason `ta_match_unfinished` means Tennis Abstract still has
   the matchup as upcoming/unfinished and has not posted a completed result yet.
 - Pending-bet reconciliation remains read-only by default. Its optional manual
-  apply requires a deterministic reviewed plan and exact digest, holds a
-  canonical lock shared with BetTracker/hydration, and journals bets, bankroll,
-  sessions, and the canonical private apply-audit file with durable crash recovery.
-  Reconciliation itself is not wired into automatic runs.
+  apply uses schema `1.1.0`, requires a deterministic reviewed plan and exact
+  digest, holds a canonical lock shared with BetTracker/hydration, and journals
+  bets, bankroll, applicable sessions, and the canonical private apply-audit
+  file with durable crash recovery. The opt-in exact pair/date and bet-bound
+  official-result paths settle paper accounting without granting model
+  attribution; rotated/unlinked rows remain metric-ineligible. Distinct
+  duplicate exposures settle individually, and unavailable session lineage is
+  accounting-only. Reconciliation itself is not wired into automatic runs.
 - Pending identity remediation is a separate registry-only workflow. It binds
   reviewer decisions to retained source artifacts, URIs, timestamps, and
   hashes, and never mutates the canonical bet log or performs settlement.
