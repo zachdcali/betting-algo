@@ -15,6 +15,7 @@ import json
 import math
 import os
 import sys
+from time import sleep
 import uuid
 
 import pandas as pd
@@ -34,6 +35,10 @@ from operational_state import (  # noqa: E402
     STATE_SPECS, add_row_keys, hydrate_operational_state, load_csv,
     merge_state_frames,
 )
+
+
+RETRYABLE_PUBLICATION_SQLSTATES = frozenset({"40P01", "40001"})
+PUBLICATION_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 
 
 def _json_scalar(value):
@@ -527,7 +532,7 @@ def _write_manifest(cur, *, sync_id: str, status: str,
     _enable_public_read(cur, "dash_sync_manifest")
 
 
-def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
+def _sync_dashboard_tables_once(verbose: bool = True) -> dict[str, int]:
     """Publish one additive, all-or-nothing dashboard generation."""
     sync_id = f"sync_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     planned: dict[str, pd.DataFrame] = {}
@@ -613,6 +618,49 @@ def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
         if missing_files:
             print(f"   ⚠️ missing local state files: {', '.join(missing_files)}")
     return counts
+
+
+def _publication_sqlstate(error: BaseException) -> str:
+    """Return a retryable SQLSTATE from a wrapped database exception, if any."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        sqlstate = str(getattr(current, "sqlstate", "") or "").strip()
+        if sqlstate:
+            return sqlstate
+        current = current.__cause__ or current.__context__
+    return ""
+
+
+def sync_dashboard_tables(verbose: bool = True) -> dict[str, int]:
+    """Publish atomically, retrying only safe transaction-abort failures.
+
+    PostgreSQL aborts the full transaction on a deadlock or serialization
+    failure, so replaying the complete read/merge/replace operation is safe.
+    All other failures still fail closed immediately.
+    """
+    attempts = len(PUBLICATION_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return _sync_dashboard_tables_once(verbose=verbose)
+        except Exception as error:
+            sqlstate = _publication_sqlstate(error)
+            if (
+                sqlstate not in RETRYABLE_PUBLICATION_SQLSTATES
+                or attempt >= attempts
+            ):
+                raise
+            delay = PUBLICATION_RETRY_DELAYS_SECONDS[attempt - 1]
+            if verbose:
+                print(
+                    "   ⚠️ Durable dashboard publication transaction "
+                    f"aborted (SQLSTATE {sqlstate}); retrying full publication "
+                    f"in {delay:g}s ({attempt + 1}/{attempts})"
+                )
+            sleep(delay)
+
+    raise AssertionError("unreachable publication retry state")
 
 
 def main() -> None:
