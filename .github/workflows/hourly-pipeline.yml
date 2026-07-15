@@ -7,11 +7,11 @@ name: Hourly betting pipeline
 on:
   workflow_dispatch:
   schedule:
-    # These are best-effort target slots. GitHub Actions may delay or omit a
-    # scheduled delivery, so neither target nor an hourly cadence is guaranteed.
+    # This is one best-effort hourly target. GitHub Actions may delay or omit a
+    # scheduled delivery, so the target and hourly cadence are not guaranteed.
+    # Keep one slot because a production run can exceed 30 minutes; a second
+    # half-hour target would queue behind the non-canceling concurrency group.
     - cron: "17 * * * *"
-    # The second target reduces expected latency; it is not a delivery guarantee.
-    - cron: "47 * * * *"
 
 concurrency:
   group: hourly-pipeline

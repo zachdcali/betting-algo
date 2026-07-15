@@ -44,16 +44,20 @@ test("deployment-version checks are allowed by the dashboard CSP", () => {
   );
 });
 
-test("scheduled target slots are explicitly best effort, never guaranteed cadence", () => {
-  assert.match(hourlyWorkflow, /best-effort target slots/);
-  assert.match(hourlyWorkflow, /neither target nor an hourly cadence is guaranteed/);
-  assert.match(hourlyWorkflow, /second target reduces expected latency; it is not a delivery guarantee/);
+test("one hourly target is explicitly best effort and cannot queue a half-hour duplicate", () => {
+  assert.match(hourlyWorkflow, /one best-effort hourly target/);
+  assert.match(hourlyWorkflow, /target and hourly cadence are not guaranteed/);
+  assert.match(hourlyWorkflow, /production run can exceed 30 minutes/);
+  assert.equal((hourlyWorkflow.match(/- cron:/g) || []).length, 1);
+  assert.match(hourlyWorkflow, /- cron: "17 \* \* \* \*"/);
+  assert.doesNotMatch(hourlyWorkflow, /- cron: "47 \* \* \* \*"/);
   assert.doesNotMatch(hourlyWorkflow, /keeps effective cadence hourly/);
   assert.match(client, /nextScheduleTarget/);
   assert.match(client, /best effort; delivery (?:is )?not guaranteed/);
   assert.doesNotMatch(client, /inside the expected :17 \/ :47 cadence/);
-  assert.match(html, /Next target slot/);
-  assert.match(html, /best effort; delivery not guaranteed/);
+  assert.match(html, /Next hourly target/);
+  assert.match(html, /:17 · best effort; delivery not guaranteed/);
+  assert.doesNotMatch(html, /:17 \/ :47/);
 });
 
 test("current slate is snapshot and skipped-audit based, never canonical-latest based", () => {

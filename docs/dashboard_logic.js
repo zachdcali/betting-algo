@@ -664,17 +664,14 @@
 
   function nextScheduleTarget(now = Date.now()) {
     const nowDate = now instanceof Date ? new Date(now.getTime()) : new Date(now);
-    const candidates = [];
-    for (const offsetHours of [0, 1]) {
-      for (const minute of [17, 47]) {
-        const candidate = new Date(nowDate.getTime());
-        candidate.setSeconds(0, 0);
-        candidate.setMinutes(minute);
-        candidate.setHours(nowDate.getHours() + offsetHours);
-        if (candidate.getTime() > nowDate.getTime()) candidates.push(candidate);
-      }
+    if (!Number.isFinite(nowDate.getTime())) return null;
+    const candidate = new Date(nowDate.getTime());
+    candidate.setUTCSeconds(0, 0);
+    candidate.setUTCMinutes(17);
+    if (candidate.getTime() <= nowDate.getTime()) {
+      candidate.setUTCHours(candidate.getUTCHours() + 1);
     }
-    return candidates.sort((a, b) => a - b)[0] || null;
+    return candidate;
   }
 
   function compareManifestCounts(expected, actual) {
