@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-15.4";
+  const BUILD_ID = "2026-07-15.5";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -582,7 +582,7 @@
       failed: "Pipeline health cannot be trusted",
     };
     setText("health-title", titles[health.state]);
-    setText("health-message", health.reasons.length ? health.reasons.join(" ") : "Latest attempt and accepted predictions are current. GitHub's :17 / :47 targets are best effort; delivery is not guaranteed.");
+    setText("health-message", health.reasons.length ? health.reasons.join(" ") : "Latest attempt and accepted predictions are current. GitHub's hourly :17 target is best effort; delivery is not guaranteed.");
 
     if (health.latestAttempt) {
       const run = health.latestAttempt.run;
@@ -601,8 +601,8 @@
 
     const nextTarget = Logic.nextScheduleTarget(Date.now());
     setText("next-run", nextTarget
-      ? `${nextTarget.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} target · best effort; delivery not guaranteed`
-      : ":17 / :47 targets · best effort; delivery not guaranteed");
+      ? `${nextTarget.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} hourly target · best effort; delivery not guaranteed`
+      : "Hourly :17 target · best effort; delivery not guaranteed");
     setText("page-fetch-time", store.browserFetchedAt ? `Browser fetched ${new Date(store.browserFetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Loading data…");
   }
 
