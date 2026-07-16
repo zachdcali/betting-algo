@@ -378,20 +378,16 @@ def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
         lambda _conn, name: dict(profiles[str(name).strip().casefold()]),
     )
 
-    class _ItfClient:
-        def close(self):
-            pass
-
-    monkeypatch.setattr(itf_scraper, "ItfClient", _ItfClient)
     monkeypatch.setattr(
         itf_scraper,
-        "get_player_profiles",
-        lambda _client, refs: {
+        "get_player_profiles_resilient",
+        lambda refs: {
             "ITF Player": {
                 "status": "resolved",
                 "hand": "L",
                 "itf_player_id": refs["ITF Player"]["itf_player_id"],
                 "source_uri": "https://www.itftennis.com/en/players/itf-player/800000042/usa/mt/s/",
+                "attempt_count": 1,
             },
         },
     )
@@ -436,6 +432,7 @@ def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
         "official_page_attempts": 1,
         "resolved_hands": 1,
         "failed_profiles": 0,
+        "profile_statuses": {"resolved": 1},
     }
     assert session_cache["itf_hands_by_player_id"] == {42: "L"}
     assert persisted == [(42, "hand", "L")]

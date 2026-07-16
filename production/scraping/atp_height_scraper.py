@@ -66,6 +66,7 @@ ATP_BASE = "https://www.atptour.com"
 DEFAULT_NEGATIVE_TTL_HOURS = 24 * 7
 DEFAULT_TRANSIENT_TTL_MINUTES = 60
 DEFAULT_NEGATIVE_REFRESH_LIMIT = 8
+DEFAULT_PROFILE_PAGE_BATCH_SIZE = 1
 MAX_METADATA_FUTURE_SKEW = timedelta(minutes=5)
 OFFICIAL_PAGE_IDENTITY_BINDING = (
     "official_rankings_or_slug_name_plus_rendered_full_name"
@@ -181,6 +182,17 @@ def _negative_refresh_limit() -> int:
         return max(0, int(raw))
     except (TypeError, ValueError, OverflowError):
         return DEFAULT_NEGATIVE_REFRESH_LIMIT
+
+
+def _profile_page_batch_size() -> int:
+    """Profiles fetched before rotating to a clean browser cookie jar."""
+    raw = os.environ.get(
+        "ATP_PROFILE_PAGE_BATCH_SIZE", str(DEFAULT_PROFILE_PAGE_BATCH_SIZE)
+    )
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_PROFILE_PAGE_BATCH_SIZE
 
 
 def _revalidate_legacy_positives() -> bool:
@@ -881,109 +893,111 @@ def batch_get_profiles(
 
     if needs_scraping:
         if verbose:
-            print(f"  ATP profile scraper: fetching {len(needs_scraping)} players...")
-        pg = None
-        try:
-            pg = _new_browser_page()
-            for name, key, cached_height, cached_hand, bio_url, source_uri in needs_scraping:
-                try:
-                    text = _fetch_profile_text(pg, bio_url)
-                except Exception:
-                    text = ""
-                if not str(text or "").strip():
-                    results[name] = {
-                        "height_cm": cached_height,
-                        "hand": cached_hand,
-                    }
+            print(
+                f"  ATP profile scraper: fetching {len(needs_scraping)} players "
+                f"in clean batches of {_profile_page_batch_size()}..."
+            )
+        page_batch_size = _profile_page_batch_size()
+        for start in range(0, len(needs_scraping), page_batch_size):
+            page_batch = needs_scraping[start:start + page_batch_size]
+            pg = None
+            try:
+                pg = _new_browser_page()
+            except Exception:
+                # A page/context launch failure is transient and applies only
+                # to this bounded batch; later batches still get a chance.
+                for name, key, height, hand, _bio_url, source_uri in page_batch:
+                    results[name] = {"height_cm": height, "hand": hand}
                     _record_lookup(
                         metadata,
                         key=key,
                         source_uri=source_uri,
-                        height_cm=cached_height,
-                        hand=cached_hand,
+                        height_cm=height,
+                        hand=hand,
                         status="fetch_error",
                         canonical_player_id=_canonical_player_id(key),
                     )
-                    continue
-                if not _profile_text_matches_name(text, name):
-                    results[name] = {
-                        "height_cm": cached_height,
-                        "hand": cached_hand,
-                    }
-                    real_profile_conflict = _looks_like_rendered_profile(text)
+                continue
+            try:
+                for name, key, cached_height, cached_hand, bio_url, source_uri in page_batch:
+                    try:
+                        text = _fetch_profile_text(pg, bio_url)
+                    except Exception:
+                        text = ""
+                    if not str(text or "").strip():
+                        results[name] = {
+                            "height_cm": cached_height,
+                            "hand": cached_hand,
+                        }
+                        _record_lookup(
+                            metadata,
+                            key=key,
+                            source_uri=source_uri,
+                            height_cm=cached_height,
+                            hand=cached_hand,
+                            status="fetch_error",
+                            canonical_player_id=_canonical_player_id(key),
+                        )
+                        continue
+                    if not _profile_text_matches_name(text, name):
+                        results[name] = {
+                            "height_cm": cached_height,
+                            "hand": cached_hand,
+                        }
+                        real_profile_conflict = _looks_like_rendered_profile(text)
+                        _record_lookup(
+                            metadata,
+                            key=key,
+                            source_uri=source_uri,
+                            height_cm=cached_height,
+                            hand=cached_hand,
+                            status=(
+                                "identity_mismatch"
+                                if real_profile_conflict
+                                else "fetch_error"
+                            ),
+                            source_content_sha256=sha256(
+                                text.encode("utf-8")
+                            ).hexdigest(),
+                            identity_binding=(
+                                OFFICIAL_PAGE_CONFLICT_BINDING
+                                if real_profile_conflict
+                                else ""
+                            ),
+                            canonical_player_id=_canonical_player_id(key),
+                        )
+                        continue
+                    observed_height = _extract_height_cm(text)
+                    observed_hand = _extract_hand(text)
+                    h = cached_height or observed_height
+                    hd = cached_hand or observed_hand
+                    results[name] = {"height_cm": h, "hand": hd}
+                    if observed_height is not None or key not in h_cache:
+                        h_cache[key] = observed_height
+                    if observed_hand is not None or key not in hd_cache:
+                        hd_cache[key] = observed_hand
+                    missing_count = int(observed_height is None) + int(observed_hand is None)
+                    status = (
+                        "resolved" if missing_count == 0
+                        else "partial" if missing_count == 1
+                        else "not_found"
+                    )
                     _record_lookup(
                         metadata,
                         key=key,
                         source_uri=source_uri,
-                        height_cm=cached_height,
-                        hand=cached_hand,
-                        status=(
-                            "identity_mismatch"
-                            if real_profile_conflict
-                            else "fetch_error"
-                        ),
+                        height_cm=observed_height,
+                        hand=observed_hand,
+                        status=status,
                         source_content_sha256=sha256(
                             text.encode("utf-8")
                         ).hexdigest(),
-                        identity_binding=(
-                            OFFICIAL_PAGE_CONFLICT_BINDING
-                            if real_profile_conflict
-                            else ""
-                        ),
+                        identity_binding=OFFICIAL_PAGE_IDENTITY_BINDING,
                         canonical_player_id=_canonical_player_id(key),
                     )
-                    continue
-                observed_height = _extract_height_cm(text)
-                observed_hand = _extract_hand(text)
-                h = cached_height or observed_height
-                hd = cached_hand or observed_hand
-                results[name] = {"height_cm": h, "hand": hd}
-                if observed_height is not None or key not in h_cache:
-                    h_cache[key] = observed_height
-                if observed_hand is not None or key not in hd_cache:
-                    hd_cache[key] = observed_hand
-                missing_count = int(observed_height is None) + int(observed_hand is None)
-                status = (
-                    "resolved" if missing_count == 0
-                    else "partial" if missing_count == 1
-                    else "not_found"
-                )
-                _record_lookup(
-                    metadata,
-                    key=key,
-                    source_uri=source_uri,
-                    height_cm=observed_height,
-                    hand=observed_hand,
-                    status=status,
-                    source_content_sha256=sha256(
-                        text.encode("utf-8")
-                    ).hexdigest(),
-                    identity_binding=OFFICIAL_PAGE_IDENTITY_BINDING,
-                    canonical_player_id=_canonical_player_id(key),
-                )
-                if verbose:
-                    print(f"    {name}: {h or '?'}cm hand={hd or '?'}")
-        except Exception:
-            if pg is not None:
-                raise
-            # Browser launch failure is operationally transient. Preserve any
-            # positive cached fields, keep missing fields incomplete, and let a
-            # future run retry after the short transient TTL.
-            for name, key, height, hand, _bio_url, source_uri in needs_scraping:
-                if name in results:
-                    continue
-                results[name] = {"height_cm": height, "hand": hand}
-                _record_lookup(
-                    metadata,
-                    key=key,
-                    source_uri=source_uri,
-                    height_cm=height,
-                    hand=hand,
-                    status="fetch_error",
-                    canonical_player_id=_canonical_player_id(key),
-                )
-        finally:
-            if pg is not None:
+                    if verbose:
+                        print(f"    {name}: {h or '?'}cm hand={hd or '?'}")
+            finally:
                 try:
                     pg.close()
                 except Exception:

@@ -24,6 +24,7 @@ honestly, and historical ITF stats (~97%) remain in the canonical store.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import unicodedata
@@ -41,6 +42,8 @@ USER_AGENT = (
 )
 
 BASE = "https://www.itftennis.com"
+DEFAULT_PROFILE_SESSION_BATCH_SIZE = 4
+DEFAULT_PROFILE_FETCH_ATTEMPTS = 2
 
 
 class ItfClient:
@@ -348,6 +351,18 @@ def parse_player_profile(
         and _identity_key(observed_name) == _identity_key(expected_name)
         and observed_id == str(expected_player_id)
     )
+    # Imperva can return a non-profile HTML body with HTTP 200.  That is a
+    # transient source failure, not evidence that the ITF identity binding is
+    # wrong.  Only a fully rendered canonical player identity can prove a real
+    # conflict.
+    identity_conflict = (
+        bool(observed_name)
+        and bool(observed_id)
+        and (
+            _identity_key(observed_name) != _identity_key(expected_name)
+            or observed_id != str(expected_player_id)
+        )
+    )
     hand_match = re.search(
         r"\b(Right|Left)\s+Handed\b",
         " ".join(parser.hand_text),
@@ -360,7 +375,7 @@ def parse_player_profile(
         "status": (
             "resolved" if hand is not None
             else "not_found" if identity_matches
-            else "identity_mismatch" if body
+            else "identity_mismatch" if identity_conflict
             else "fetch_error"
         ),
         "name": observed_name,
@@ -400,6 +415,96 @@ def get_player_profiles(client: ItfClient, refs_by_name: dict[str, dict]) -> dic
         parsed["source_uri"] = source_uri
         parsed["nationality"] = str(ref.get("nationality") or "").strip().upper()
         results[display_name] = parsed
+    return results
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def get_player_profiles_resilient(
+    refs_by_name: dict[str, dict],
+    *,
+    batch_size: Optional[int] = None,
+    max_attempts: Optional[int] = None,
+    client_factory=None,
+) -> dict[str, dict]:
+    """Fetch profiles through bounded, clean ITF browser sessions.
+
+    ITF's JSON endpoints and public profiles share the Imperva boundary.  A
+    browser session can work for the first few profile requests and then
+    receive HTTP-200 block/interstitial HTML.  Rotate to an isolated page and
+    cookie jar after a small batch, and retry only those transient
+    ``fetch_error`` rows.  A proven identity mismatch or a real profile with no
+    hand is never retried or softened.
+    """
+    if not refs_by_name:
+        return {}
+    resolved_batch_size = batch_size or _positive_int_env(
+        "ITF_PROFILE_SESSION_BATCH_SIZE", DEFAULT_PROFILE_SESSION_BATCH_SIZE,
+    )
+    resolved_attempts = max_attempts or _positive_int_env(
+        "ITF_PROFILE_FETCH_ATTEMPTS", DEFAULT_PROFILE_FETCH_ATTEMPTS,
+    )
+    resolved_batch_size = max(1, int(resolved_batch_size))
+    resolved_attempts = max(1, int(resolved_attempts))
+    client_factory = client_factory or ItfClient
+    ordered_names = list(refs_by_name)
+    results: dict[str, dict] = {}
+    attempt_counts = {name: 0 for name in ordered_names}
+
+    for _attempt in range(resolved_attempts):
+        pending_names = [
+            name for name in ordered_names
+            if name not in results or results[name].get("status") == "fetch_error"
+        ]
+        if not pending_names:
+            break
+        for start in range(0, len(pending_names), resolved_batch_size):
+            names = pending_names[start:start + resolved_batch_size]
+            refs = {name: refs_by_name[name] for name in names}
+            client = client_factory()
+            try:
+                fetched = get_player_profiles(client, refs)
+            except Exception as exc:  # defensive: one session must not abort the slate
+                fetched = {
+                    name: {
+                        "status": "fetch_error",
+                        "name": "",
+                        "itf_player_id": str(refs[name].get("itf_player_id") or ""),
+                        "profile_url": str(refs[name].get("profile_url") or ""),
+                        "source_uri": urljoin(
+                            BASE, str(refs[name].get("profile_url") or ""),
+                        ),
+                        "hand": None,
+                        "height_cm": None,
+                        "source_content_sha256": "",
+                        "error": str(exc),
+                    }
+                    for name in names
+                }
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            for name in names:
+                attempt_counts[name] += 1
+                result = dict(fetched.get(name) or {})
+                if not result:
+                    result = {
+                        "status": "fetch_error",
+                        "hand": None,
+                        "height_cm": None,
+                        "source_content_sha256": "",
+                        "error": "profile batch omitted requested player",
+                    }
+                result["attempt_count"] = attempt_counts[name]
+                results[name] = result
+
     return results
 
 
