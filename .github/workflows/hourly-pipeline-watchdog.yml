@@ -1,0 +1,110 @@
+name: Hourly pipeline watchdog
+
+# GitHub's scheduled-workflow delivery is best effort. Check three staggered
+# times per hour and recover only when the real pipeline has no active run and
+# its last successful completion is more than 90 minutes old.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,27,47 * * * *"
+
+concurrency:
+  group: hourly-pipeline-watchdog
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-if-stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PIPELINE_WORKFLOW: hourly-pipeline.yml
+      MAX_SUCCESS_AGE_SECONDS: "5400"
+    steps:
+      - name: Check pipeline freshness and recover a missed delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runs_json="$(gh api \
+            "repos/${REPOSITORY}/actions/workflows/${PIPELINE_WORKFLOW}/runs?per_page=30")"
+
+          active_count="$(jq '[.workflow_runs[] | select(
+            .status == "queued" or
+            .status == "in_progress" or
+            .status == "waiting" or
+            .status == "requested" or
+            .status == "pending"
+          )] | length' <<<"${runs_json}")"
+
+          if (( active_count > 0 )); then
+            echo "Hourly pipeline already has ${active_count} active run(s); no recovery needed."
+            {
+              echo "## Hourly pipeline watchdog"
+              echo ""
+              echo "No dispatch: ${active_count} hourly pipeline run(s) are active."
+            } >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          last_success="$(jq -r '[
+            .workflow_runs[]
+            | select(.status == "completed" and .conclusion == "success")
+            | .updated_at
+          ] | max // empty' <<<"${runs_json}")"
+
+          if [[ -n "${last_success}" ]]; then
+            last_success_epoch="$(date -u -d "${last_success}" +%s)"
+            now_epoch="$(date -u +%s)"
+            success_age_seconds="$((now_epoch - last_success_epoch))"
+          else
+            success_age_seconds="$((MAX_SUCCESS_AGE_SECONDS + 1))"
+          fi
+
+          if (( success_age_seconds <= MAX_SUCCESS_AGE_SECONDS )); then
+            echo "Last successful completion is ${success_age_seconds}s old; no recovery needed."
+            {
+              echo "## Hourly pipeline watchdog"
+              echo ""
+              echo "No dispatch: last successful completion was ${success_age_seconds}s ago."
+            } >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # Narrow the only meaningful race: a normal scheduled run may have
+          # arrived after the first query but before this recovery dispatch.
+          active_count="$(gh api \
+            "repos/${REPOSITORY}/actions/workflows/${PIPELINE_WORKFLOW}/runs?per_page=10" \
+            --jq '[.workflow_runs[] | select(
+              .status == "queued" or
+              .status == "in_progress" or
+              .status == "waiting" or
+              .status == "requested" or
+              .status == "pending"
+            )] | length')"
+
+          if (( active_count > 0 )); then
+            echo "Hourly pipeline became active during the check; no recovery dispatch."
+            {
+              echo "## Hourly pipeline watchdog"
+              echo ""
+              echo "No dispatch: the hourly pipeline became active during the freshness check."
+            } >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          gh workflow run "${PIPELINE_WORKFLOW}" \
+            --repo "${REPOSITORY}" \
+            --ref main
+
+          echo "Dispatched hourly pipeline recovery; last success age was ${success_age_seconds}s."
+          {
+            echo "## Hourly pipeline watchdog"
+            echo ""
+            echo "Recovery dispatched: last successful completion was ${success_age_seconds}s ago."
+          } >>"${GITHUB_STEP_SUMMARY}"

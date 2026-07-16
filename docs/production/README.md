@@ -41,6 +41,13 @@ Start here:
 Current production principles:
 
 - The live pipeline is Tennis Abstract based, not the legacy UTR path.
+- GitHub Actions targets the primary hourly run at `:17`. Because GitHub cron
+  delivery is best effort, `hourly-pipeline-watchdog.yml` checks at
+  `:07`, `:27`, and `:47`; when there is no active hourly run and the latest
+  successful completion is more than 90 minutes old, it dispatches one recovery
+  run. The hourly workflow's non-cancelling concurrency group prevents overlap.
+  This materially reduces missed-hour gaps, but a hard scheduling SLA would
+  still require an external scheduler outside GitHub Actions.
 - Official ITF order-of-play supplies ITF event discovery, surfaces, rounds,
   results, and stable player IDs/profile links. The linked ITF profile is an
   exact-ID handedness fallback, not a height source; ATP/TA remain the verified
