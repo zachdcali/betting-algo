@@ -24,10 +24,16 @@ honestly, and historical ITF stats (~97%) remain in the canonical store.
 from __future__ import annotations
 
 import json
+import re
 import time
+import unicodedata
+from hashlib import sha256
+from html import unescape
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import pandas as pd
+from bs4 import BeautifulSoup
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -48,7 +54,10 @@ class ItfClient:
     def _ensure(self):
         if self._page is not None:
             return
-        from browser_session import new_page
+        try:
+            from .browser_session import new_page
+        except ImportError:  # pragma: no cover - legacy production/ on sys.path
+            from browser_session import new_page
         self._page = new_page()
         self._page.goto(f"{BASE}/en/tournament-calendar/", wait_until="domcontentloaded", timeout=60000)
         time.sleep(5)
@@ -69,6 +78,23 @@ class ItfClient:
         if status != "200":
             raise RuntimeError(f"itftennis API {status} for {path[:80]}")
         return json.loads(body)
+
+    def fetch_text(self, path: str) -> str:
+        """Fetch an official ITF HTML page through the accepted browser session.
+
+        Player profiles are server-rendered, so an in-page fetch is both faster
+        and less failure-prone than navigating the shared page once per player.
+        """
+        self._ensure()
+        text = self._page.evaluate(
+            "async (u) => { const r = await fetch(u, {headers:{accept:'text/html'}});"
+            " return r.status + '|' + await r.text(); }",
+            path,
+        )
+        status, _, body = text.partition("|")
+        if status != "200":
+            raise RuntimeError(f"itftennis profile {status} for {path[:80]}")
+        return body
 
     def close(self):
         try:
@@ -130,6 +156,12 @@ def _team_name(team: dict) -> str:
     return f"{p.get('givenName','')} {p.get('familyName','')}".strip()
 
 
+def _team_player(team: dict) -> dict:
+    """Return the first real singles player from an ITF team payload."""
+    players = [p for p in (team.get("players") or []) if p]
+    return players[0] if players else {}
+
+
 def _score_string(winner_team: dict, loser_team: dict) -> str:
     """Winner-first set scores, TA convention, tiebreak points in parens."""
     sets = []
@@ -147,8 +179,8 @@ def _score_string(winner_team: dict, loser_team: dict) -> str:
 def parse_oop_matches(payload: list, play_date: str, singles_only: bool = True) -> pd.DataFrame:
     """One day's order-of-play → match rows (completed and scheduled).
 
-    Columns: date, round, p1, p2, p1_id, p2_id, winner (1|2|None), score,
-    completed (bool), classification.
+    Columns include date/round, player names, stable ITF IDs, official profile
+    links/nationalities, winner (1|2|None), score, completion, classification.
     """
     rows = []
     for court in payload or []:
@@ -170,20 +202,178 @@ def parse_oop_matches(payload: list, play_date: str, singles_only: bool = True) 
                 if w[0] != w[1]:
                     winner = 1 if w[0] else 2
                     score = _score_string(teams[winner - 1], teams[2 - winner])
-            ids = []
-            for t in teams:
-                players = [p for p in (t.get("players") or []) if p]
-                ids.append(players[0].get("playerId") if players else None)
+            players = [_team_player(t) for t in teams]
             rows.append({
                 "date": play_date,
                 "round": _round_code(m),
                 "p1": names[0], "p2": names[1],
-                "p1_id": ids[0], "p2_id": ids[1],
+                "p1_id": players[0].get("playerId"),
+                "p2_id": players[1].get("playerId"),
+                "p1_profile_url": players[0].get("profileLink") or "",
+                "p2_profile_url": players[1].get("profileLink") or "",
+                "p1_nationality": players[0].get("nationality") or "",
+                "p2_nationality": players[1].get("nationality") or "",
                 "winner": winner, "score": score,
                 "completed": completed,
                 "classification": m.get("eventClassificationDesc", ""),
             })
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Player profiles (official identity + handedness; ITF does not publish height)
+# ---------------------------------------------------------------------------
+
+def _identity_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(
+        char for char in normalized
+        if not unicodedata.combining(char) and char.isascii() and char.isalnum()
+    )
+
+
+def _player_id_string(value) -> str:
+    """Normalize JSON/pandas numeric IDs without ever accepting a guess."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    text = str(value).strip()
+    if re.fullmatch(r"\d+", text):
+        return text
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
+    return ""
+
+
+def profile_refs_for_names(
+    event_frames: dict[str, pd.DataFrame], player_names: list[str],
+) -> dict[str, dict]:
+    """Resolve exact slate names to one stable ITF player ID/profile URL.
+
+    The order-of-play payload is the identity bridge: it binds the displayed
+    full name, numeric ``playerId``, nationality, and official ``profileLink``
+    in one response. Conflicting IDs or URLs fail closed instead of selecting
+    the first match.
+    """
+    names_by_key: dict[str, list[str]] = {}
+    for name in player_names:
+        key = _identity_key(name)
+        if key:
+            names_by_key.setdefault(key, []).append(str(name))
+
+    candidates: dict[str, set[tuple[str, str, str, str]]] = {
+        key: set() for key, names in names_by_key.items() if len(set(names)) == 1
+    }
+    for frame in (event_frames or {}).values():
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        for _, row in frame.iterrows():
+            for side in (1, 2):
+                observed_name = str(row.get(f"p{side}") or "").strip()
+                key = _identity_key(observed_name)
+                if key not in candidates:
+                    continue
+                player_id = _player_id_string(row.get(f"p{side}_id"))
+                profile_url = str(row.get(f"p{side}_profile_url") or "").strip()
+                nationality = str(row.get(f"p{side}_nationality") or "").strip().upper()
+                if not player_id or not profile_url:
+                    continue
+                candidates[key].add((player_id, profile_url, observed_name, nationality))
+
+    resolved: dict[str, dict] = {}
+    for key, refs in candidates.items():
+        ids = {ref[0] for ref in refs}
+        urls = {ref[1] for ref in refs}
+        if len(ids) != 1 or len(urls) != 1:
+            continue
+        display_name = names_by_key[key][0]
+        player_id, profile_url, observed_name, nationality = sorted(refs)[0]
+        resolved[display_name] = {
+            "itf_player_id": player_id,
+            "profile_url": profile_url,
+            "observed_name": observed_name,
+            "nationality": nationality,
+        }
+    return resolved
+
+
+def parse_player_profile(
+    html: str, *, expected_name: str, expected_player_id: str | int,
+) -> dict:
+    """Parse one ITF profile and prove both its name and numeric identity."""
+    body = str(html or "")
+    content_hash = sha256(body.encode("utf-8")).hexdigest() if body else ""
+    soup = BeautifulSoup(body, "lxml")
+    meta = soup.find("meta", attrs={"name": re.compile(r"^keywords$", re.I)})
+    canonical = soup.find("link", attrs={"rel": re.compile(r"canonical", re.I)})
+    observed_name = unescape(str(meta.get("content") or "")).strip() if meta else ""
+    canonical_url = unescape(str(canonical.get("href") or "")).strip() if canonical else ""
+    path_parts = [part for part in urlparse(canonical_url).path.split("/") if part]
+    observed_id = ""
+    try:
+        player_index = [part.casefold() for part in path_parts].index("players")
+        observed_id = path_parts[player_index + 2]
+    except (ValueError, IndexError):
+        pass
+
+    identity_matches = (
+        bool(observed_name)
+        and _identity_key(observed_name) == _identity_key(expected_name)
+        and observed_id == str(expected_player_id)
+    )
+    hand_node = soup.find(id="ga__player-plays-hand")
+    hand_match = re.search(
+        r"\b(Right|Left)\s+Handed\b",
+        hand_node.get_text(" ", strip=True) if hand_node else "",
+        flags=re.IGNORECASE,
+    )
+    hand = None
+    if identity_matches and hand_match:
+        hand = "R" if hand_match.group(1).casefold() == "right" else "L"
+    return {
+        "status": (
+            "resolved" if hand is not None
+            else "not_found" if identity_matches
+            else "identity_mismatch" if body
+            else "fetch_error"
+        ),
+        "name": observed_name,
+        "itf_player_id": observed_id,
+        "profile_url": canonical_url,
+        "hand": hand,
+        "height_cm": None,
+        "source_content_sha256": content_hash,
+    }
+
+
+def get_player_profiles(client: ItfClient, refs_by_name: dict[str, dict]) -> dict[str, dict]:
+    """Fetch an exact-ID-bound set of official ITF player profiles."""
+    results: dict[str, dict] = {}
+    for display_name, ref in refs_by_name.items():
+        profile_url = str(ref.get("profile_url") or "").strip()
+        player_id = str(ref.get("itf_player_id") or "").strip()
+        source_uri = urljoin(BASE, profile_url)
+        try:
+            html = client.fetch_text(profile_url)
+            parsed = parse_player_profile(
+                html,
+                expected_name=display_name,
+                expected_player_id=player_id,
+            )
+        except Exception as exc:
+            parsed = {
+                "status": "fetch_error",
+                "name": "",
+                "itf_player_id": player_id,
+                "profile_url": source_uri,
+                "hand": None,
+                "height_cm": None,
+                "source_content_sha256": "",
+                "error": str(exc),
+            }
+        parsed["source_uri"] = source_uri
+        parsed["nationality"] = str(ref.get("nationality") or "").strip().upper()
+        results[display_name] = parsed
+    return results
 
 
 # ---------------------------------------------------------------------------

@@ -142,6 +142,18 @@ transactions for profile write-through, and closes in the pipeline `finally`
 path so a prior `SELECT` cannot turn a durable update into an uncommitted
 savepoint.
 
+For ITF slates, the already-fetched official order-of-play is also a player-
+identity source: each participant row binds full name, numeric ITF `playerId`,
+nationality, and the official `profileLink`. Legacy pre-hydration keeps only a
+unique exact-name/ID/URL binding, fetches those server-rendered profiles through
+one accepted ITF browser session, and requires the canonical profile URL to
+repeat the same numeric ID and full name before handedness can write through.
+The default run cap is 48 profiles (`ITF_PROFILE_RUN_HYDRATION_LIMIT`). This is
+deliberately a hand-only lane because the public ITF profile does not publish
+height; it never fabricates the height needed for feature completeness. Required
+eligibility mode remains read-only and will consume ITF observations only after
+they are imported, reviewed, and accepted in the sealed generation.
+
 - `eligibility_profiles_bundle.json` contains normalized name bindings,
   canonical player IDs, and accepted height/hand values;
 - `eligibility_cache_manifest.json` pins its generation, projection seal, row

@@ -69,6 +69,7 @@ class UnsafeToInferError(RuntimeError):
 MIN_HEIGHT_CM = 150.0
 MAX_HEIGHT_CM = 230.0
 DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT = 32
+DEFAULT_RUN_ITF_PROFILE_LIMIT = 48
 
 
 def _validated_height_cm(value) -> Optional[float]:
@@ -99,6 +100,17 @@ def _run_height_hydration_limit() -> int:
         return max(0, int(raw))
     except (TypeError, ValueError, OverflowError):
         return DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT
+
+
+def _run_itf_profile_limit() -> int:
+    raw = os.environ.get(
+        "ITF_PROFILE_RUN_HYDRATION_LIMIT",
+        str(DEFAULT_RUN_ITF_PROFILE_LIMIT),
+    )
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_RUN_ITF_PROFILE_LIMIT
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -303,6 +315,17 @@ class TAFeatureCalculator:
             h2, hand2 = _accepted(p2_display, profile2)
             return h1, hand1, h2, hand2
 
+        # The ITF order-of-play carries a stable numeric player ID and exact
+        # official profile URL. Pre-hydration validates that profile before
+        # installing this canonical-ID-keyed run cache. It is a handedness
+        # source only: ITF profiles do not publish height.
+        if session_cache is not None:
+            itf_hands = session_cache.get("itf_hands_by_player_id") or {}
+            if hand1 == "U":
+                hand1 = str(itf_hands.get(profile1.get("player_id")) or "U")
+            if hand2 == "U":
+                hand2 = str(itf_hands.get(profile2.get("player_id")) or "U")
+
         if h1 is None or h2 is None or hand1 == 'U' or hand2 == 'U':
             missing = []
             if (h1 is None or hand1 == 'U') and p1_display:
@@ -342,6 +365,91 @@ class TAFeatureCalculator:
             h1, hand1 = _fill(p1_display, h1, hand1, profile1)
             h2, hand2 = _fill(p2_display, h2, hand2, profile2)
         return h1, hand1, h2, hand2
+
+    def _prehydrate_itf_hands(
+        self, profiles_by_id: dict[int, dict], cache: dict,
+    ) -> dict:
+        """Hydrate unknown hands from exact-ID-bound official ITF profiles."""
+        summary = {
+            "status": "not_started",
+            "candidate_players": 0,
+            "official_page_attempts": 0,
+            "resolved_hands": 0,
+            "failed_profiles": 0,
+        }
+        unknown_names = sorted({
+            str(profile.get("name") or "").strip()
+            for profile in profiles_by_id.values()
+            if str(profile.get("name") or "").strip()
+            and str(profile.get("hand") or "U").strip().upper() not in {"R", "L"}
+        })
+        if not unknown_names:
+            summary["status"] = "no_hand_candidates"
+            cache["itf_profile_hydration"] = summary
+            return summary
+
+        event_frames = cache.get("itf_event_matches") or {}
+        try:
+            from itf_results_scraper import (
+                ItfClient, get_player_profiles, profile_refs_for_names,
+            )
+        except ImportError:  # pragma: no cover - package-style execution
+            from scraping.itf_results_scraper import (  # type: ignore
+                ItfClient, get_player_profiles, profile_refs_for_names,
+            )
+        refs = profile_refs_for_names(event_frames, unknown_names)
+        limit = _run_itf_profile_limit()
+        refs = dict(sorted(refs.items(), key=lambda item: item[0].casefold())[:limit])
+        summary["candidate_players"] = len(refs)
+        if not refs:
+            summary["status"] = "no_exact_itf_profile_refs"
+            cache["itf_profile_hydration"] = summary
+            return summary
+
+        run_profiles = cache.setdefault("itf_player_profiles", {})
+        cached_by_name: dict[str, dict] = {}
+        pending: dict[str, dict] = {}
+        for name, ref in refs.items():
+            player_id = str(ref.get("itf_player_id") or "")
+            cached = run_profiles.get(player_id)
+            if isinstance(cached, dict):
+                cached_by_name[name] = cached
+            else:
+                pending[name] = ref
+
+        fetched: dict[str, dict] = {}
+        if pending:
+            client = ItfClient()
+            try:
+                fetched = get_player_profiles(client, pending)
+            finally:
+                client.close()
+            summary["official_page_attempts"] = len(pending)
+            for name, result in fetched.items():
+                player_id = str((pending.get(name) or {}).get("itf_player_id") or "")
+                if player_id:
+                    run_profiles[player_id] = result
+
+        results = {**cached_by_name, **fetched}
+        hands_by_player_id = cache.setdefault("itf_hands_by_player_id", {})
+        profiles_by_name = {
+            str(profile.get("name") or "").strip(): profile
+            for profile in profiles_by_id.values()
+        }
+        for name, result in results.items():
+            profile = profiles_by_name.get(name)
+            hand = str(result.get("hand") or "").strip().upper()
+            if profile is None or result.get("status") != "resolved" or hand not in {"R", "L"}:
+                summary["failed_profiles"] += 1
+                continue
+            player_id = int(profile["player_id"])
+            hands_by_player_id[player_id] = hand
+            profile["hand"] = hand
+            self._persist_player_field(profile, "hand", hand)
+            summary["resolved_hands"] += 1
+        summary["status"] = "complete"
+        cache["itf_profile_hydration"] = summary
+        return summary
 
     def prehydrate_slate_profiles(
         self,
@@ -462,6 +570,22 @@ class TAFeatureCalculator:
             canonical_player_ids = {}
             refresh_state["canonical_player_ids"] = canonical_player_ids
         canonical_player_ids.update(slate_ids_by_key)
+
+        # Prefetch has already warmed the current ITF order-of-play frames.
+        # Use their stable player IDs to fill handedness before match feature
+        # builds; this lane is independent of the ATP-only height planner.
+        try:
+            self._prehydrate_itf_hands(profiles_by_id, cache)
+        except Exception as itf_profile_exc:
+            cache["itf_profile_hydration"] = {
+                "status": "error",
+                "candidate_players": 0,
+                "official_page_attempts": 0,
+                "resolved_hands": 0,
+                "failed_profiles": 0,
+                "error": str(itf_profile_exc),
+            }
+            print(f"   ⚠️ ITF profile hydration skipped (non-fatal): {itf_profile_exc}")
 
         if not candidate_rows:
             summary["status"] = "no_height_candidates"

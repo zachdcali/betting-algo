@@ -41,6 +41,10 @@ Start here:
 Current production principles:
 
 - The live pipeline is Tennis Abstract based, not the legacy UTR path.
+- Official ITF order-of-play supplies ITF event discovery, surfaces, rounds,
+  results, and stable player IDs/profile links. The linked ITF profile is an
+  exact-ID handedness fallback, not a height source; ATP/TA remain the verified
+  height paths and missing height remains ineligible.
 - Prediction generation and auto-settlement are separate concerns.
 - `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the lineage layer.
 - Supabase `dash_*` tables now act as the durable recovery bridge for ephemeral

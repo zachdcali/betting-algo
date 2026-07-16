@@ -197,6 +197,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   snapshot UID from punctuated display text or rewrite historical UIDs.
 - Missing odds evidence is null, never a fabricated 50/50 market probability.
   A genuine observed even-money market remains a valid 0.5.
+- ITF order-of-play rows retain the official numeric player ID, nationality,
+  and profile link. The linked official profile may supply handedness only
+  after exact name+ID validation; ITF does not publish height there, so height
+  must remain missing/ineligible unless TA, ATP, or accepted profile evidence
+  supplies it.
 - Only `actual_winner in {1, 2}` is settled model ground truth. Voids and
   cancellations are excluded/refunded rather than coerced into a player-two win.
 - Paper-account equity is configured starting capital plus realized settled

@@ -20,6 +20,7 @@ from features.height_hydration import (  # noqa: E402
 from features import ta_feature_calculator as ta_feature_module  # noqa: E402
 from features.ta_feature_calculator import TAFeatureCalculator  # noqa: E402
 from scraping import atp_height_scraper as scraper  # noqa: E402
+import itf_results_scraper as itf_scraper  # noqa: E402
 import canonical_store  # noqa: E402
 import main as production_main  # noqa: E402
 import store_history  # noqa: E402
@@ -351,6 +352,93 @@ def test_slate_prehydration_uses_one_canonical_batch_and_shared_32_lookup_budget
     assert (10, "height_cm", 188.0) in persisted
     assert (10, "hand", "L") in persisted
     assert session_cache["height_hydration"] == summary
+
+
+def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
+    monkeypatch,
+):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    profiles = {
+        "itf player": {
+            "player_id": 42,
+            "name": "ITF Player",
+            "height_cm": 181,
+            "hand": "U",
+        },
+        "known player": {
+            "player_id": 43,
+            "name": "Known Player",
+            "height_cm": 185,
+            "hand": "R",
+        },
+    }
+    monkeypatch.setattr(
+        store_history,
+        "get_profile",
+        lambda _conn, name: dict(profiles[str(name).strip().casefold()]),
+    )
+
+    class _ItfClient:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(itf_scraper, "ItfClient", _ItfClient)
+    monkeypatch.setattr(
+        itf_scraper,
+        "get_player_profiles",
+        lambda _client, refs: {
+            "ITF Player": {
+                "status": "resolved",
+                "hand": "L",
+                "itf_player_id": refs["ITF Player"]["itf_player_id"],
+                "source_uri": "https://www.itftennis.com/en/players/itf-player/800000042/usa/mt/s/",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "batch_get_profiles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no ATP batch is needed when both heights exist")
+        ),
+    )
+
+    calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calc.use_store = True
+    calc._store = lambda: object()
+    persisted = []
+    calc._persist_player_field = lambda profile, field, value: persisted.append(
+        (profile["player_id"], field, value)
+    )
+    slate = pd.DataFrame([{
+        "player1_normalized": "ITF Player",
+        "player2_normalized": "Known Player",
+        "event": "ITF Men Test",
+    }])
+    event_matches = pd.DataFrame([{
+        "p1": "ITF Player",
+        "p2": "Known Player",
+        "p1_id": 800000042,
+        "p2_id": 800000043,
+        "p1_profile_url": "/en/players/itf-player/800000042/usa/mt/s/",
+        "p2_profile_url": "/en/players/known-player/800000043/usa/mt/s/",
+        "p1_nationality": "USA",
+        "p2_nationality": "USA",
+    }])
+    session_cache = {"itf_event_matches": {"m-itf-test-2026-1": event_matches}}
+
+    summary = calc.prehydrate_slate_profiles(slate, session_cache=session_cache)
+
+    assert summary["status"] == "no_height_candidates"
+    assert session_cache["itf_profile_hydration"] == {
+        "status": "complete",
+        "candidate_players": 1,
+        "official_page_attempts": 1,
+        "resolved_hands": 1,
+        "failed_profiles": 0,
+    }
+    assert session_cache["itf_hands_by_player_id"] == {42: "L"}
+    assert persisted == [(42, "hand", "L")]
 
 
 class _OwnedCursor:

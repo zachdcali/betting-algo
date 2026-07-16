@@ -431,6 +431,32 @@ def test_fetch_error_uses_short_retry_ttl_not_weeklong_negative(monkeypatch):
     )
 
 
+def test_unproven_legacy_identity_mismatch_uses_transient_retry_ttl(monkeypatch):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.delenv("ATP_PROFILE_TRANSIENT_TTL_MINUTES", raising=False)
+    source_uri = "https://www.atptour.com/en/players/retry/r001/overview"
+    entry = {
+        "source_uri": source_uri,
+        "observed_at": NOW.isoformat(),
+        "status": "identity_mismatch",
+        "missing_fields": ["height_cm", "hand"],
+        "identity_binding": "",
+    }
+
+    assert scraper._negative_cache_is_fresh(
+        entry,
+        source_uri=source_uri,
+        missing_fields={"height_cm"},
+        now=NOW + timedelta(minutes=59),
+    )
+    assert not scraper._negative_cache_is_fresh(
+        entry,
+        source_uri=source_uri,
+        missing_fields={"height_cm"},
+        now=NOW + timedelta(minutes=61),
+    )
+
+
 def test_future_dated_lookup_evidence_cannot_suppress_retry(monkeypatch):
     monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
     source_uri = "https://www.atptour.com/en/players/retry/r001/overview"
@@ -510,6 +536,35 @@ def test_profile_body_identity_mismatch_never_populates_cache(monkeypatch, tmp_p
     assert json.loads(scraper.CACHE_PATH.read_text()) == {"right player": None}
     metadata = json.loads(scraper.PROFILE_LOOKUP_META_PATH.read_text())
     assert metadata["right player"]["status"] == "identity_mismatch"
+    assert metadata["right player"]["identity_binding"] == (
+        scraper.OFFICIAL_PAGE_CONFLICT_BINDING
+    )
+
+
+def test_non_profile_interstitial_is_a_transient_fetch_error(monkeypatch, tmp_path):
+    _point_cache_paths(monkeypatch, tmp_path)
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.setattr(scraper, "_utc_now", lambda: NOW)
+    scraper.CACHE_PATH.write_text('{"retry player": null}', encoding="utf-8")
+    scraper.HANDS_CACHE_PATH.write_text('{"retry player": null}', encoding="utf-8")
+    monkeypatch.setattr(
+        scraper,
+        "_load_url_map",
+        lambda: {"retry player": "/en/players/retry-player/r001/overview"},
+    )
+    monkeypatch.setattr(scraper, "_new_browser_page", _ProfilePage)
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_profile_text",
+        lambda *_args: "The resource is temporarily unavailable. Please retry.",
+    )
+
+    assert scraper.batch_get_profiles(["Retry Player"], verbose=False) == {
+        "Retry Player": {"height_cm": None, "hand": None},
+    }
+    metadata = json.loads(scraper.PROFILE_LOOKUP_META_PATH.read_text())
+    assert metadata["retry player"]["status"] == "fetch_error"
+    assert metadata["retry player"]["identity_binding"] == ""
 
 
 def test_browser_launch_failure_preserves_partial_positive_and_stays_incomplete(
