@@ -29,11 +29,11 @@ import time
 import unicodedata
 from hashlib import sha256
 from html import unescape
+from html.parser import HTMLParser
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import pandas as pd
-from bs4 import BeautifulSoup
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -244,6 +244,35 @@ def _player_id_string(value) -> str:
     return ""
 
 
+class _ItfProfileParser(HTMLParser):
+    """Extract the three identity/profile fields without optional packages."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.name = ""
+        self.canonical_url = ""
+        self.hand_text: list[str] = []
+        self._inside_hand = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        values = {str(key).casefold(): str(value or "") for key, value in attrs}
+        lowered_tag = tag.casefold()
+        if lowered_tag == "meta" and values.get("name", "").casefold() == "keywords":
+            self.name = values.get("content", "").strip()
+        elif lowered_tag == "link" and "canonical" in values.get("rel", "").casefold():
+            self.canonical_url = values.get("href", "").strip()
+        if values.get("id", "").casefold() == "ga__player-plays-hand":
+            self._inside_hand = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._inside_hand and tag.casefold() == "span":
+            self._inside_hand = False
+
+    def handle_data(self, data: str) -> None:
+        if self._inside_hand:
+            self.hand_text.append(data)
+
+
 def profile_refs_for_names(
     event_frames: dict[str, pd.DataFrame], player_names: list[str],
 ) -> dict[str, dict]:
@@ -302,11 +331,10 @@ def parse_player_profile(
     """Parse one ITF profile and prove both its name and numeric identity."""
     body = str(html or "")
     content_hash = sha256(body.encode("utf-8")).hexdigest() if body else ""
-    soup = BeautifulSoup(body, "lxml")
-    meta = soup.find("meta", attrs={"name": re.compile(r"^keywords$", re.I)})
-    canonical = soup.find("link", attrs={"rel": re.compile(r"canonical", re.I)})
-    observed_name = unescape(str(meta.get("content") or "")).strip() if meta else ""
-    canonical_url = unescape(str(canonical.get("href") or "")).strip() if canonical else ""
+    parser = _ItfProfileParser()
+    parser.feed(body)
+    observed_name = unescape(parser.name).strip()
+    canonical_url = unescape(parser.canonical_url).strip()
     path_parts = [part for part in urlparse(canonical_url).path.split("/") if part]
     observed_id = ""
     try:
@@ -320,10 +348,9 @@ def parse_player_profile(
         and _identity_key(observed_name) == _identity_key(expected_name)
         and observed_id == str(expected_player_id)
     )
-    hand_node = soup.find(id="ga__player-plays-hand")
     hand_match = re.search(
         r"\b(Right|Left)\s+Handed\b",
-        hand_node.get_text(" ", strip=True) if hand_node else "",
+        " ".join(parser.hand_text),
         flags=re.IGNORECASE,
     )
     hand = None
