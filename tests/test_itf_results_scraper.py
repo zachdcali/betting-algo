@@ -12,6 +12,7 @@ from scraping.itf_results_scraper import (
     get_player_profiles_resilient,
     parse_calendar,
     parse_oop_matches,
+    parse_player_details,
     parse_player_profile,
     profile_refs_for_names,
 )
@@ -133,14 +134,29 @@ def test_profile_batch_rotates_sessions_and_retries_only_transient_blocks():
             self.closed = False
             clients.append(self)
 
-        def fetch_text(self, url):
-            if "beta-player" in url and self.number == 1:
-                return "<html><body>Incapsula incident ID</body></html>"
-            if "conflict-player" in url:
-                return _profile_html("Different Player", "800009999")
-            if "alpha-player" in url:
-                return _profile_html("Alpha Player", "800000001")
-            return _profile_html("Beta Player", "800000002", hand="Left")
+        def fetch_json(self, url):
+            if "800000002" in url and self.number == 1:
+                raise ValueError("Imperva HTML is not JSON")
+            if "800000003" in url:
+                return {
+                    "FullName": "Different Player",
+                    "playerId": 800009999,
+                    "playHand": "Right Handed",
+                }
+            if "800000001" in url:
+                return {
+                    "FullName": "Alpha Player",
+                    "playerId": 800000001,
+                    "playHand": "Right Handed",
+                }
+            return {
+                "FullName": "Beta Player",
+                "playerId": 800000002,
+                "playHand": "Left Handed",
+            }
+
+        def fetch_text(self, _url):
+            raise AssertionError("HTML fallback must not run after terminal API results")
 
         def close(self):
             self.closed = True
@@ -161,6 +177,91 @@ def test_profile_batch_rotates_sessions_and_retries_only_transient_blocks():
     assert results["Beta Player"]["attempt_count"] == 2
     assert results["Conflict Player"]["status"] == "identity_mismatch"
     assert results["Conflict Player"]["attempt_count"] == 1
+
+
+def test_profile_batch_uses_one_html_fallback_after_structured_errors():
+    refs = {
+        "Fallback Player": {
+            "itf_player_id": "800000004",
+            "profile_url": "/en/players/fallback-player/800000004/usa/mt/s/",
+        },
+    }
+    clients = []
+
+    class _Client:
+        def __init__(self):
+            self.number = len(clients) + 1
+            self.closed = False
+            clients.append(self)
+
+        def fetch_json(self, _url):
+            raise ValueError("blocked JSON")
+
+        def fetch_text(self, _url):
+            return """
+              <meta name="keywords" content="Fallback Player" />
+              <link rel="canonical" href="https://www.itftennis.com/en/players/fallback-player/800000004/usa/mt/s/overview/" />
+              <span id="ga__player-plays-hand">Right Handed</span>
+            """
+
+        def close(self):
+            self.closed = True
+
+    result = get_player_profiles_resilient(
+        refs,
+        batch_size=1,
+        max_attempts=1,
+        client_factory=_Client,
+    )["Fallback Player"]
+
+    assert len(clients) == 2
+    assert all(client.closed for client in clients)
+    assert result["status"] == "resolved"
+    assert result["hand"] == "R"
+    assert result["source_kind"] == "itf_player_profile_html"
+    assert result["attempt_count"] == 2
+
+
+def test_structured_player_details_prove_identity_and_preserve_unknown_hand():
+    resolved = parse_player_details(
+        {
+            "FullName": "Jannik Sinner",
+            "playerId": 800405198,
+            "playerNationalityCode": "ITA",
+            "playerProfileLink": "/en/players/jannik-sinner/800405198/ita/",
+            "playHand": "Right Handed",
+        },
+        expected_name="Jannik Sinner",
+        expected_player_id="800405198",
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["hand"] == "R"
+    assert resolved["source_kind"] == "itf_player_details_api"
+    assert len(resolved["source_content_sha256"]) == 64
+
+    unknown = parse_player_details(
+        {
+            "FullName": "Jannik Sinner",
+            "playerId": 800405198,
+            "playHand": "Unknown",
+        },
+        expected_name="Jannik Sinner",
+        expected_player_id="800405198",
+    )
+    assert unknown["status"] == "not_found"
+    assert unknown["hand"] is None
+
+    conflict = parse_player_details(
+        {
+            "FullName": "Different Player",
+            "playerId": 800009999,
+            "playHand": "Left Handed",
+        },
+        expected_name="Jannik Sinner",
+        expected_player_id="800405198",
+    )
+    assert conflict["status"] == "identity_mismatch"
+    assert conflict["hand"] is None
 
 
 def test_gather_itf_rows_and_round_with_fixtures(monkeypatch):

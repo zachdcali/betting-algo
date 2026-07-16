@@ -254,9 +254,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   upcoming/unfinished and no completed result has posted yet.
 - Cloud player-profile hydration must rotate bounded clean pages/cookie jars:
   ATP defaults to one profile per page and ITF to four profiles per accepted
-  session with one transient retry. An HTTP-200 block/interstitial body is a
-  transient `fetch_error`, never an `identity_mismatch`; only a fully rendered
-  conflicting official name and stable profile ID proves an identity conflict.
+  session with one transient retry. ITF handedness must prefer the structured
+  `PlayerApi/GetHeadToHeadPlayerDetails` identity/`playHand` payload; HTML is a
+  bounded fallback. An HTTP-200 block/interstitial or non-JSON body is a
+  transient `fetch_error`, never an `identity_mismatch`; only conflicting
+  official full-name and stable-player-ID fields prove an identity conflict.
 
 ## Audit And Dashboard
 

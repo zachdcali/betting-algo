@@ -377,6 +377,7 @@ class TAFeatureCalculator:
             "resolved_hands": 0,
             "failed_profiles": 0,
             "profile_statuses": {},
+            "profile_sources": {},
         }
         unknown_names = sorted({
             str(profile.get("name") or "").strip()
@@ -442,6 +443,9 @@ class TAFeatureCalculator:
             status = str(result.get("status") or "fetch_error")
             statuses = summary["profile_statuses"]
             statuses[status] = int(statuses.get(status, 0)) + 1
+            source_kind = str(result.get("source_kind") or "unknown")
+            sources = summary["profile_sources"]
+            sources[source_kind] = int(sources.get(source_kind, 0)) + 1
             if profile is None or result.get("status") != "resolved" or hand not in {"R", "L"}:
                 summary["failed_profiles"] += 1
                 continue
@@ -587,6 +591,7 @@ class TAFeatureCalculator:
                 "resolved_hands": 0,
                 "failed_profiles": 0,
                 "profile_statuses": {},
+                "profile_sources": {},
                 "error": str(itf_profile_exc),
             }
             print(f"   ⚠️ ITF profile hydration skipped (non-fatal): {itf_profile_exc}")

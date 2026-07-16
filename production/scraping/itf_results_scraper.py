@@ -44,6 +44,7 @@ USER_AGENT = (
 BASE = "https://www.itftennis.com"
 DEFAULT_PROFILE_SESSION_BATCH_SIZE = 4
 DEFAULT_PROFILE_FETCH_ATTEMPTS = 2
+DEFAULT_PROFILE_HTML_FALLBACK_ATTEMPTS = 1
 
 
 class ItfClient:
@@ -387,6 +388,104 @@ def parse_player_profile(
     }
 
 
+def parse_player_details(
+    payload: dict, *, expected_name: str, expected_player_id: str | int,
+) -> dict:
+    """Parse the official structured player-details identity and hand."""
+    data = payload if isinstance(payload, dict) else {}
+    observed_name = str(data.get("FullName") or "").strip()
+    observed_id = _player_id_string(data.get("playerId"))
+    expected_id = _player_id_string(expected_player_id)
+    identity_matches = (
+        bool(observed_name)
+        and _identity_key(observed_name) == _identity_key(expected_name)
+        and observed_id == expected_id
+    )
+    identity_conflict = (
+        bool(observed_name)
+        and bool(observed_id)
+        and (
+            _identity_key(observed_name) != _identity_key(expected_name)
+            or observed_id != expected_id
+        )
+    )
+    play_hand = str(data.get("playHand") or "").strip()
+    hand_match = re.search(r"\b(Right|Left)\s+Handed\b", play_hand, re.IGNORECASE)
+    hand = None
+    if identity_matches and hand_match:
+        hand = "R" if hand_match.group(1).casefold() == "right" else "L"
+    canonical_payload = json.dumps(
+        data, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return {
+        "status": (
+            "resolved" if hand is not None
+            else "not_found" if identity_matches
+            else "identity_mismatch" if identity_conflict
+            else "fetch_error"
+        ),
+        "name": observed_name,
+        "itf_player_id": observed_id,
+        "profile_url": str(data.get("playerProfileLink") or "").strip(),
+        "nationality": str(data.get("playerNationalityCode") or "").strip().upper(),
+        "hand": hand,
+        "height_cm": None,
+        "source_content_sha256": (
+            sha256(canonical_payload.encode("utf-8")).hexdigest() if data else ""
+        ),
+        "source_kind": "itf_player_details_api",
+    }
+
+
+def _profile_circuit_code(profile_url: str) -> str:
+    supported = {"MT", "WT", "JT", "WCT", "VT", "BT"}
+    for part in urlparse(str(profile_url or "")).path.split("/"):
+        candidate = part.strip().upper()
+        if candidate in supported:
+            return candidate
+    return "MT"
+
+
+def get_player_details(client: ItfClient, refs_by_name: dict[str, dict]) -> dict[str, dict]:
+    """Fetch official structured identity/hand data before touching HTML."""
+    results: dict[str, dict] = {}
+    for display_name, ref in refs_by_name.items():
+        player_id = str(ref.get("itf_player_id") or "").strip()
+        circuit_code = _profile_circuit_code(str(ref.get("profile_url") or ""))
+        endpoint = (
+            "/tennis/api/PlayerApi/GetHeadToHeadPlayerDetails"
+            f"?circuitCode={circuit_code}&playerId={player_id}"
+        )
+        source_uri = urljoin(BASE, endpoint)
+        try:
+            payload = client.fetch_json(endpoint)
+            parsed = parse_player_details(
+                payload,
+                expected_name=display_name,
+                expected_player_id=player_id,
+            )
+        except Exception as exc:
+            parsed = {
+                "status": "fetch_error",
+                "name": "",
+                "itf_player_id": player_id,
+                "profile_url": str(ref.get("profile_url") or ""),
+                "hand": None,
+                "height_cm": None,
+                "source_content_sha256": "",
+                "source_kind": "itf_player_details_api",
+                "error": str(exc),
+            }
+        parsed["source_uri"] = source_uri
+        parsed["nationality"] = (
+            str(parsed.get("nationality") or ref.get("nationality") or "")
+            .strip()
+            .upper()
+        )
+        results[display_name] = parsed
+    return results
+
+
 def get_player_profiles(client: ItfClient, refs_by_name: dict[str, dict]) -> dict[str, dict]:
     """Fetch an exact-ID-bound set of official ITF player profiles."""
     results: dict[str, dict] = {}
@@ -414,6 +513,7 @@ def get_player_profiles(client: ItfClient, refs_by_name: dict[str, dict]) -> dic
             }
         parsed["source_uri"] = source_uri
         parsed["nationality"] = str(ref.get("nationality") or "").strip().upper()
+        parsed["source_kind"] = "itf_player_profile_html"
         results[display_name] = parsed
     return results
 
@@ -434,12 +534,12 @@ def get_player_profiles_resilient(
 ) -> dict[str, dict]:
     """Fetch profiles through bounded, clean ITF browser sessions.
 
-    ITF's JSON endpoints and public profiles share the Imperva boundary.  A
-    browser session can work for the first few profile requests and then
-    receive HTTP-200 block/interstitial HTML.  Rotate to an isolated page and
-    cookie jar after a small batch, and retry only those transient
-    ``fetch_error`` rows.  A proven identity mismatch or a real profile with no
-    hand is never retried or softened.
+    Prefer ITF's structured player-details endpoint, which returns the stable
+    player ID, full name, nationality, and ``playHand`` in one response. Rotate
+    to an isolated page/cookie jar after a small batch and retry only transient
+    ``fetch_error`` rows. After structured attempts are exhausted, retain one
+    bounded HTML fallback pass. A proven identity mismatch or an official
+    ``Unknown`` hand is never retried or softened.
     """
     if not refs_by_name:
         return {}
@@ -449,6 +549,10 @@ def get_player_profiles_resilient(
     resolved_attempts = max_attempts or _positive_int_env(
         "ITF_PROFILE_FETCH_ATTEMPTS", DEFAULT_PROFILE_FETCH_ATTEMPTS,
     )
+    html_attempts = _positive_int_env(
+        "ITF_PROFILE_HTML_FALLBACK_ATTEMPTS",
+        DEFAULT_PROFILE_HTML_FALLBACK_ATTEMPTS,
+    )
     resolved_batch_size = max(1, int(resolved_batch_size))
     resolved_attempts = max(1, int(resolved_attempts))
     client_factory = client_factory or ItfClient
@@ -456,54 +560,61 @@ def get_player_profiles_resilient(
     results: dict[str, dict] = {}
     attempt_counts = {name: 0 for name in ordered_names}
 
-    for _attempt in range(resolved_attempts):
-        pending_names = [
-            name for name in ordered_names
-            if name not in results or results[name].get("status") == "fetch_error"
-        ]
-        if not pending_names:
-            break
-        for start in range(0, len(pending_names), resolved_batch_size):
-            names = pending_names[start:start + resolved_batch_size]
-            refs = {name: refs_by_name[name] for name in names}
-            client = client_factory()
-            try:
-                fetched = get_player_profiles(client, refs)
-            except Exception as exc:  # defensive: one session must not abort the slate
-                fetched = {
-                    name: {
-                        "status": "fetch_error",
-                        "name": "",
-                        "itf_player_id": str(refs[name].get("itf_player_id") or ""),
-                        "profile_url": str(refs[name].get("profile_url") or ""),
-                        "source_uri": urljoin(
-                            BASE, str(refs[name].get("profile_url") or ""),
-                        ),
-                        "hand": None,
-                        "height_cm": None,
-                        "source_content_sha256": "",
-                        "error": str(exc),
-                    }
-                    for name in names
-                }
-            finally:
+    fetch_plan = (
+        (get_player_details, resolved_attempts),
+        (get_player_profiles, html_attempts),
+    )
+    for fetcher, source_attempts in fetch_plan:
+        for _attempt in range(source_attempts):
+            pending_names = [
+                name for name in ordered_names
+                if name not in results or results[name].get("status") == "fetch_error"
+            ]
+            if not pending_names:
+                break
+            for start in range(0, len(pending_names), resolved_batch_size):
+                names = pending_names[start:start + resolved_batch_size]
+                refs = {name: refs_by_name[name] for name in names}
+                client = client_factory()
                 try:
-                    client.close()
-                except Exception:
-                    pass
-            for name in names:
-                attempt_counts[name] += 1
-                result = dict(fetched.get(name) or {})
-                if not result:
-                    result = {
-                        "status": "fetch_error",
-                        "hand": None,
-                        "height_cm": None,
-                        "source_content_sha256": "",
-                        "error": "profile batch omitted requested player",
+                    fetched = fetcher(client, refs)
+                except Exception as exc:  # one session must not abort the slate
+                    fetched = {
+                        name: {
+                            "status": "fetch_error",
+                            "name": "",
+                            "itf_player_id": str(
+                                refs[name].get("itf_player_id") or ""
+                            ),
+                            "profile_url": str(refs[name].get("profile_url") or ""),
+                            "source_uri": urljoin(
+                                BASE, str(refs[name].get("profile_url") or ""),
+                            ),
+                            "hand": None,
+                            "height_cm": None,
+                            "source_content_sha256": "",
+                            "error": str(exc),
+                        }
+                        for name in names
                     }
-                result["attempt_count"] = attempt_counts[name]
-                results[name] = result
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                for name in names:
+                    attempt_counts[name] += 1
+                    result = dict(fetched.get(name) or {})
+                    if not result:
+                        result = {
+                            "status": "fetch_error",
+                            "hand": None,
+                            "height_cm": None,
+                            "source_content_sha256": "",
+                            "error": "profile batch omitted requested player",
+                        }
+                    result["attempt_count"] = attempt_counts[name]
+                    results[name] = result
 
     return results
 
