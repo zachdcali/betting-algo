@@ -128,9 +128,11 @@ Before live feature construction, legacy mode now plans one bounded current-
 slate ATP profile batch using only matches that pass the same pre-start clock
 guard as inference. Players are deduplicated by canonical store ID;
 lookups that can complete a matchup are prioritized, Challenger precedes ITF,
-and unobserved/expired evidence precedes a fresh source-bound negative. One
-browser page is reused for up to 32 official-profile attempts by default
-(`ATP_PROFILE_RUN_HYDRATION_LIMIT`). A positive can enter this run-level lane
+and unobserved/expired evidence precedes a fresh source-bound negative. Up to
+32 official-profile attempts are made by default
+(`ATP_PROFILE_RUN_HYDRATION_LIMIT`). Each official profile uses a clean browser
+page/cookie jar by default (`ATP_PROFILE_PAGE_BATCH_SIZE=1`) because the cloud
+source can block later navigations on a reused session. A positive can enter this run-level lane
 only when the official URL, rendered full name, canonical player ID, body
 SHA-256, observed value, and physical range all bind. Every attempt persists
 its exact status; unresolved players remain default-marked and ineligible.
@@ -146,13 +148,17 @@ For ITF slates, the already-fetched official order-of-play is also a player-
 identity source: each participant row binds full name, numeric ITF `playerId`,
 nationality, and the official `profileLink`. Legacy pre-hydration keeps only a
 unique exact-name/ID/URL binding, fetches those server-rendered profiles through
-one accepted ITF browser session, and requires the canonical profile URL to
+bounded clean ITF browser sessions (four profiles per session and two transient
+attempts by default), and requires the canonical profile URL to
 repeat the same numeric ID and full name before handedness can write through.
 The default run cap is 48 profiles (`ITF_PROFILE_RUN_HYDRATION_LIMIT`). This is
 deliberately a hand-only lane because the public ITF profile does not publish
 height; it never fabricates the height needed for feature completeness. Required
 eligibility mode remains read-only and will consume ITF observations only after
 they are imported, reviewed, and accepted in the sealed generation.
+HTTP-200 Imperva/interstitial bodies are recorded as short-lived source errors,
+not identity mismatches; only a fully rendered conflicting name and canonical
+numeric player ID can establish a real identity conflict.
 
 - `eligibility_profiles_bundle.json` contains normalized name bindings,
   canonical player IDs, and accepted height/hand values;

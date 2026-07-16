@@ -65,6 +65,55 @@ class _ProfilePage:
         self.closed = True
 
 
+def test_profile_batch_rotates_clean_pages_before_second_official_fetch(
+    monkeypatch, tmp_path,
+):
+    _point_cache_paths(monkeypatch, tmp_path)
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    monkeypatch.setenv("ATP_PROFILE_NEGATIVE_REFRESH_LIMIT", "2")
+    monkeypatch.setenv("ATP_PROFILE_PAGE_BATCH_SIZE", "1")
+    names = ["First Player", "Second Player"]
+    scraper.CACHE_PATH.write_text(
+        json.dumps({name.lower(): None for name in names}), encoding="utf-8"
+    )
+    scraper.HANDS_CACHE_PATH.write_text(
+        json.dumps({name.lower(): None for name in names}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        scraper,
+        "_load_url_map",
+        lambda: {
+            "first player": "/en/players/first/f001/overview",
+            "second player": "/en/players/second/s001/overview",
+        },
+    )
+    pages = []
+
+    class _CleanPage(_ProfilePage):
+        def __init__(self):
+            super().__init__()
+            self.number = len(pages) + 1
+            pages.append(self)
+
+    monkeypatch.setattr(scraper, "_new_browser_page", _CleanPage)
+
+    def _fetch(page, url):
+        if "first" in url:
+            assert page.number == 1
+            return "First Player Height 185cm Plays: Right-Handed"
+        assert page.number == 2
+        return "Second Player Height 190cm Plays: Left-Handed"
+
+    monkeypatch.setattr(scraper, "_fetch_profile_text", _fetch)
+
+    assert scraper.batch_get_profiles(names, verbose=False) == {
+        "First Player": {"height_cm": 185, "hand": "R"},
+        "Second Player": {"height_cm": 190, "hand": "L"},
+    }
+    assert len(pages) == 2
+    assert all(page.closed for page in pages)
+
+
 def test_fresh_negative_profile_cache_skips_same_source(monkeypatch, tmp_path):
     _point_cache_paths(monkeypatch, tmp_path)
     monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)

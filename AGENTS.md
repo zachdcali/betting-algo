@@ -252,6 +252,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   flags only when you deliberately want a deeper backlog pass.
 - `ta_match_unfinished` in settlement audit means TA still lists the matchup as
   upcoming/unfinished and no completed result has posted yet.
+- Cloud player-profile hydration must rotate bounded clean pages/cookie jars:
+  ATP defaults to one profile per page and ITF to four profiles per accepted
+  session with one transient retry. An HTTP-200 block/interstitial body is a
+  transient `fetch_error`, never an `identity_mismatch`; only a fully rendered
+  conflicting official name and stable profile ID proves an identity conflict.
 
 ## Audit And Dashboard
 

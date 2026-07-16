@@ -376,6 +376,7 @@ class TAFeatureCalculator:
             "official_page_attempts": 0,
             "resolved_hands": 0,
             "failed_profiles": 0,
+            "profile_statuses": {},
         }
         unknown_names = sorted({
             str(profile.get("name") or "").strip()
@@ -391,11 +392,11 @@ class TAFeatureCalculator:
         event_frames = cache.get("itf_event_matches") or {}
         try:
             from itf_results_scraper import (
-                ItfClient, get_player_profiles, profile_refs_for_names,
+                get_player_profiles_resilient, profile_refs_for_names,
             )
         except ImportError:  # pragma: no cover - package-style execution
             from scraping.itf_results_scraper import (  # type: ignore
-                ItfClient, get_player_profiles, profile_refs_for_names,
+                get_player_profiles_resilient, profile_refs_for_names,
             )
         refs = profile_refs_for_names(event_frames, unknown_names)
         limit = _run_itf_profile_limit()
@@ -419,12 +420,11 @@ class TAFeatureCalculator:
 
         fetched: dict[str, dict] = {}
         if pending:
-            client = ItfClient()
-            try:
-                fetched = get_player_profiles(client, pending)
-            finally:
-                client.close()
-            summary["official_page_attempts"] = len(pending)
+            fetched = get_player_profiles_resilient(pending)
+            summary["official_page_attempts"] = sum(
+                max(1, int((result or {}).get("attempt_count", 1) or 1))
+                for result in fetched.values()
+            )
             for name, result in fetched.items():
                 player_id = str((pending.get(name) or {}).get("itf_player_id") or "")
                 if player_id:
@@ -439,6 +439,9 @@ class TAFeatureCalculator:
         for name, result in results.items():
             profile = profiles_by_name.get(name)
             hand = str(result.get("hand") or "").strip().upper()
+            status = str(result.get("status") or "fetch_error")
+            statuses = summary["profile_statuses"]
+            statuses[status] = int(statuses.get(status, 0)) + 1
             if profile is None or result.get("status") != "resolved" or hand not in {"R", "L"}:
                 summary["failed_profiles"] += 1
                 continue
@@ -583,6 +586,7 @@ class TAFeatureCalculator:
                 "official_page_attempts": 0,
                 "resolved_hands": 0,
                 "failed_profiles": 0,
+                "profile_statuses": {},
                 "error": str(itf_profile_exc),
             }
             print(f"   ⚠️ ITF profile hydration skipped (non-fatal): {itf_profile_exc}")
