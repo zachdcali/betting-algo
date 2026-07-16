@@ -92,7 +92,8 @@ jobs:
           git add -A -f production/prediction_log.csv production/prediction_snapshots.csv \
                         production/odds_history.csv production/logs \
                         ':(exclude)production/logs/betting.db' data/atp_rankings.csv \
-                        data/atp_heights.json data/atp_hands.json || true
+                        data/atp_heights.json data/atp_hands.json \
+                        data/espn_heights.json || true
           PROFILE_LOOKUP_META=data/atp_profile_lookup_meta.json
           if [ -e "$PROFILE_LOOKUP_META" ] || \
              git ls-files --error-unmatch "$PROFILE_LOOKUP_META" >/dev/null 2>&1; then

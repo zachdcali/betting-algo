@@ -606,6 +606,15 @@ class LiveBettingOrchestrator:
                         f"{hydration.get('browser_attempts', 0)} official-page attempts; "
                         f"{hydration.get('remaining_budget', 0)} budget remaining"
                     )
+                espn_heights = session_cache.get("espn_height_hydration") or {}
+                if espn_heights.get("candidate_players"):
+                    print(
+                        "   📐 ESPN height fallback: "
+                        f"{espn_heights.get('resolved_heights', 0)}/"
+                        f"{espn_heights.get('candidate_players', 0)} resolved; "
+                        f"{espn_heights.get('source_attempts', 0)} source requests; "
+                        f"statuses={espn_heights.get('profile_statuses', {})}"
+                    )
         except UnsafeToInferError as hydration_identity_exc:
             print(
                 "   🛑 Height pre-hydration identity conflict; failing closed: "

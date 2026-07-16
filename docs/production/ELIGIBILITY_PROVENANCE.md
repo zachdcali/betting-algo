@@ -144,6 +144,18 @@ transactions for profile write-through, and closes in the pipeline `finally`
 path so a prior `SELECT` cannot turn a durable update into an uncommitted
 savepoint.
 
+Players still missing height after the ATP batch may use the public ESPN tennis
+JSON surface as a bounded secondary compatibility source. The default cap is
+64 uncached players per run (`ESPN_PROFILE_RUN_HYDRATION_LIMIT`). A value is
+usable only when the search returns exactly one tennis athlete whose full name
+matches the canonical display name and the fetched athlete body's ID and full
+name independently agree. The persisted observation carries canonical player
+ID, ESPN athlete ID, source URI, observation time, canonical body SHA-256, and
+the identity-binding method. Abbreviated names, duplicate athlete IDs, body
+identity drift, and values outside 150-230cm fail closed. The committed
+`data/espn_heights.json` cache is legacy compatibility evidence and is never an
+accepted normalized eligibility generation by itself.
+
 For ITF slates, the already-fetched official order-of-play is also a player-
 identity source: each participant row binds full name, numeric ITF `playerId`,
 nationality, and the official `profileLink`. Legacy pre-hydration keeps only a

@@ -29,6 +29,25 @@ import store_history  # noqa: E402
 NOW = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _defer_espn_height_fallback(monkeypatch):
+    """Unit tests opt into ESPN explicitly and never make live source calls."""
+    monkeypatch.setattr(
+        ta_feature_module,
+        "batch_height_observations",
+        lambda candidates, **_kwargs: {
+            candidate["player_name"]: {
+                "status": "deferred",
+                "canonical_player_id": candidate["canonical_player_id"],
+                "player_name": candidate["player_name"],
+                "height_cm": None,
+                "attempt_count": 0,
+            }
+            for candidate in candidates
+        },
+    )
+
+
 def _candidate(
     player_id,
     name,
@@ -348,10 +367,96 @@ def test_slate_prehydration_uses_one_canonical_batch_and_shared_32_lookup_budget
         "resolved_heights": 1,
         "remaining_budget": 30,
         "evidence_states": {"unobserved": 2, "fresh_negative": 1},
+        "espn_candidates": 2,
+        "espn_attempts": 0,
+        "espn_resolved_heights": 0,
+        "espn_statuses": {"deferred": 2},
     }
     assert (10, "height_cm", 188.0) in persisted
     assert (10, "hand", "L") in persisted
     assert session_cache["height_hydration"] == summary
+
+
+def test_slate_prehydration_accepts_only_exact_espn_height_evidence(monkeypatch):
+    monkeypatch.delenv("ELIGIBILITY_PROVENANCE_MODE", raising=False)
+    profiles = {
+        "fallback player": {
+            "player_id": 50,
+            "name": "Fallback Player",
+            "height_cm": None,
+            "hand": "R",
+        },
+        "known player": {
+            "player_id": 51,
+            "name": "Known Player",
+            "height_cm": 185,
+            "hand": "L",
+        },
+    }
+    monkeypatch.setattr(
+        store_history,
+        "get_profile",
+        lambda _conn, name: dict(profiles[str(name).strip().casefold()]),
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "profile_lookup_evidence_states",
+        lambda names, **_kwargs: {
+            name: {"state": "unobserved"} for name in names
+        },
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "batch_get_profiles",
+        lambda names, **_kwargs: {
+            name: {"height_cm": None, "hand": None} for name in names
+        },
+    )
+    monkeypatch.setattr(
+        ta_feature_module,
+        "batch_height_observations",
+        lambda candidates, **_kwargs: {
+            "Fallback Player": {
+                "status": "resolved",
+                "canonical_player_id": 50,
+                "player_name": "Fallback Player",
+                "height_cm": 188.0,
+                "source_uri": (
+                    "https://sports.core.api.espn.com/v2/sports/tennis/"
+                    "leagues/atp/athletes/999"
+                ),
+                "source_content_sha256": "a" * 64,
+                "external_player_id": "999",
+                "identity_binding": (
+                    "espn_exact_search_name_plus_exact_athlete_name"
+                ),
+                "attempt_count": 2,
+            }
+        },
+    )
+    calc = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calc.use_store = True
+    calc._store = lambda: object()
+    persisted = []
+    calc._persist_player_field = lambda profile, field, value: persisted.append(
+        (profile["player_id"], field, value)
+    )
+    session_cache = {}
+
+    summary = calc.prehydrate_slate_profiles(
+        pd.DataFrame([{
+            "player1_normalized": "Fallback Player",
+            "player2_normalized": "Known Player",
+            "event": "ITF Men Test",
+        }]),
+        session_cache=session_cache,
+    )
+
+    assert summary["resolved_heights"] == 1
+    assert summary["espn_resolved_heights"] == 1
+    assert summary["espn_statuses"] == {"resolved": 1}
+    assert (50, "height_cm", 188.0) in persisted
+    assert session_cache["espn_height_hydration"]["resolved_heights"] == 1
 
 
 def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
