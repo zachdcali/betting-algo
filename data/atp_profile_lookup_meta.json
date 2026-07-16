@@ -1522,6 +1522,19 @@
     "source_uri": "atp-rankings://unmapped/lucas%20marionneau",
     "status": "no_url"
   },
+  "ludvig fredrik hede": {
+    "canonical_player_id": 214005,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-16T14:56:24+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/ludvig%20fredrik%20hede",
+    "status": "no_url"
+  },
   "luis jose nakamine": {
     "canonical_player_id": 149157,
     "identity_binding": "",
@@ -1919,16 +1932,16 @@
   },
   "michael antonius": {
     "canonical_player_id": 214004,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T11:59:19+00:00",
-    "observed_values": {},
-    "source_content_sha256": "2b37a4f1958b35fd6e2b9ce3fdac7b31afa297bdf9eb7c7270921c7e497689aa",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T14:57:18+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 191
+    },
+    "source_content_sha256": "44b6a9ae979e59a7105057b0ca2e44a541f1668f9305b9398b0b467b4b65f7d3",
     "source_uri": "https://www.atptour.com/en/players/michael-antonius/a0o1/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "michele mecarelli": {
     "canonical_player_id": 213356,
@@ -2624,16 +2637,16 @@
   },
   "sergi fita juan": {
     "canonical_player_id": 211390,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T11:59:39+00:00",
-    "observed_values": {},
-    "source_content_sha256": "ff1ce47a467fedeac4989f9b9e18df391cbc32fe58079234b1b15714d6a0cd6d",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T14:57:27+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "30eaa5eb5e292216317efc7c2ab504110c57611a488584231bf35e2e6dcf7fe9",
     "source_uri": "https://www.atptour.com/en/players/sergi-fita-juan/f0go/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "seydina andre": {
     "canonical_player_id": 210252,
@@ -2888,16 +2901,16 @@
   },
   "tristan mccormick": {
     "canonical_player_id": 210126,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T11:59:44+00:00",
-    "observed_values": {},
-    "source_content_sha256": "6ba0e616742bbc5bff2f5e9d8506b7a99932a2b020d80d2c935719829a2319dd",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T14:57:06+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 196
+    },
+    "source_content_sha256": "924f7e9cc594dc76defb98da41b1f96944a246503d2aab71c44bcbfa97c3862e",
     "source_uri": "https://www.atptour.com/en/players/tristan-mccormick/m0eg/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "tudor batin": {
     "canonical_player_id": 149272,
