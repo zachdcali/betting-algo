@@ -493,6 +493,19 @@
     "source_uri": "atp-rankings://unmapped/connor%20doig",
     "status": "no_url"
   },
+  "dakotah bobo": {
+    "canonical_player_id": 212860,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-16T17:05:11+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/dakotah%20bobo",
+    "status": "no_url"
+  },
   "damien clerc": {
     "identity_binding": "",
     "missing_fields": [
@@ -682,6 +695,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/donghyun%20hwang",
+    "status": "no_url"
+  },
+  "drew fishback": {
+    "canonical_player_id": 213383,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-16T17:05:11+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/drew%20fishback",
     "status": "no_url"
   },
   "dylan long": {
@@ -1144,6 +1170,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jerrid%20gaines",
+    "status": "no_url"
+  },
+  "jerrid gaines jr": {
+    "canonical_player_id": 9002217,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-16T17:05:11+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/jerrid%20gaines%20jr",
     "status": "no_url"
   },
   "joan torres espinosa": {
@@ -1967,6 +2006,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/mircea%20mortasifu",
     "status": "no_url"
+  },
+  "muhammad shoaib": {
+    "canonical_player_id": 207841,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-16T17:05:17+00:00",
+    "observed_values": {},
+    "source_content_sha256": "31367234e6098e17350fe4055910e6c094eaa77128f885199f8dc54488840e79",
+    "source_uri": "https://www.atptour.com/en/players/muhammad-shoaib/s0hp/overview",
+    "status": "not_found"
   },
   "murkel dellien": {
     "canonical_player_id": 9002201,
