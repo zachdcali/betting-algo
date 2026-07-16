@@ -368,16 +368,16 @@
   },
   "cezar gabriel papoe": {
     "canonical_player_id": 212885,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T07:00:25+00:00",
-    "observed_values": {},
-    "source_content_sha256": "6ce56d133f7c3f23440cd50a4354fa7342f861dda8b5491a7f14056ab27e217f",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:45:09+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 188
+    },
+    "source_content_sha256": "256af6b34af965b2c479b3db36c459e0b20f4226b3ff51fb506d5fcc5b2d9dc4",
     "source_uri": "https://www.atptour.com/en/players/cezar-gabriel-papoe/p0mt/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "chak lam coleman wong": {
     "canonical_player_id": 208597,
@@ -407,29 +407,29 @@
   },
   "charlie robertson": {
     "canonical_player_id": 212127,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T07:00:30+00:00",
-    "observed_values": {},
-    "source_content_sha256": "dddb356ef64c5daba11e5d6464dd4113b5880406b0276ecad2b7e60e39c471b1",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:45:28+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 170
+    },
+    "source_content_sha256": "f230f01f3c8044f7ff00d40ea60987ca075ad3821509dfa090430e7089a46eb7",
     "source_uri": "https://www.atptour.com/en/players/charlie-robertson/r0k9/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "chase ferguson": {
     "canonical_player_id": 207994,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T00:34:39+00:00",
-    "observed_values": {},
-    "source_content_sha256": "34de5c030d414836a7fa6722e1ac716ecce465655658b8572b563c2de6e0d1b0",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:46:19+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 185
+    },
+    "source_content_sha256": "907d6e53dc9eb19554cc5abdf7723875b22969a2d05fb204e19cc32918c40ffc",
     "source_uri": "https://www.atptour.com/en/players/chase-ferguson/f0c0/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "chirag duhan": {
     "canonical_player_id": 210003,
@@ -584,16 +584,16 @@
   },
   "davide tortora": {
     "canonical_player_id": 208190,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T03:00:37+00:00",
+    "observed_at": "2026-07-16T22:40:17+00:00",
     "observed_values": {},
-    "source_content_sha256": "7261b728f35c65ebbfcfaed37793a7e4cf5bec123cb6820d4262e84f7852fd7b",
+    "source_content_sha256": "bf632f2d2ed415dd47b0c252faa5008d35283600e87fe31a43ecc2c4d86fddc9",
     "source_uri": "https://www.atptour.com/en/players/davide-tortora/t0cy/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "denis klok": {
     "canonical_player_id": 9000309,
@@ -684,6 +684,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/diogo%20morais",
     "status": "no_url"
+  },
+  "dominick mosejczuk": {
+    "canonical_player_id": 213771,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:40:23+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 191
+    },
+    "source_content_sha256": "8f4273211563b3042c143f2140f8f068bd2bb0c8df2bf0a76c620c23fe365370",
+    "source_uri": "https://www.atptour.com/en/players/dominick-mosejczuk/m0x2/overview",
+    "status": "resolved"
   },
   "donghyun hwang": {
     "identity_binding": "",
@@ -895,6 +908,19 @@
     },
     "source_content_sha256": "1b00cf08cc5bea0aa1c057ddb795b776f5520bbe8f8af9a56c03d0497f3fa7fd",
     "source_uri": "https://www.atptour.com/en/players/giacomo-crisostomo/c0mo/overview",
+    "status": "resolved"
+  },
+  "giulio perego": {
+    "canonical_player_id": 212280,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:45:36+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 185
+    },
+    "source_content_sha256": "5ed312391e1a9e4ad33428047a5c6a835fd025a263cb0f50e4506410c24b2f9d",
+    "source_uri": "https://www.atptour.com/en/players/giulio-perego/p0ge/overview",
     "status": "resolved"
   },
   "glib sekachov": {
@@ -2123,16 +2149,16 @@
   },
   "nicolas robert": {
     "canonical_player_id": 9001188,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T06:58:47+00:00",
-    "observed_values": {},
-    "source_content_sha256": "904266c35e502b9fda20920d21bc18272c9ab2fe6cc13b515b5a28eaa1979904",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:40:28+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "d8a3ac3ede14df928971594378d5057d97f9f392e992026f07dc8174854395a6",
     "source_uri": "https://www.atptour.com/en/players/nicolas-robert/r0i9/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "nicolo toffanin": {
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -2940,16 +2966,16 @@
   },
   "toufik sahtali": {
     "canonical_player_id": 200086,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T06:59:33+00:00",
-    "observed_values": {},
-    "source_content_sha256": "dd1e62f420bfa9e13eeef70d9884dd8433453566787b9721baebba0d43838e16",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-16T22:40:34+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 173
+    },
+    "source_content_sha256": "99a6042b9080a9405e6925b9d8d870baeb0badcb727198d643aca1263b44910b",
     "source_uri": "https://www.atptour.com/en/players/toufik-sahtali/sy94/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "tristan mccormick": {
     "canonical_player_id": 210126,

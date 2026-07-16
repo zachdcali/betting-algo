@@ -35,10 +35,10 @@
   "conor gannon": null,
   "ognjen milic": null,
   "carlos maria zarate": "R",
-  "cezar gabriel papoe": null,
+  "cezar gabriel papoe": "R",
   "noritaka koizumi": null,
   "alejandro juan mano": "R",
-  "charlie robertson": null,
+  "charlie robertson": "R",
   "spencer johnson": "R",
   "antoni fabre": null,
   "vasco leote prata": null,
@@ -61,7 +61,7 @@
   "hoyoung roh": "R",
   "rodrigo alujas": null,
   "christopher papa": null,
-  "nicolas robert": null,
+  "nicolas robert": "R",
   "reece falck": null,
   "yanis ghazouani durand": null,
   "youssef kadiri hassani": null,
@@ -376,5 +376,7 @@
   "dakotah bobo": null,
   "drew fishback": null,
   "jerrid gaines jr": null,
-  "muhammad shoaib": null
+  "muhammad shoaib": null,
+  "dominick mosejczuk": "R",
+  "chase ferguson": "R"
 }
