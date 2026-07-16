@@ -33,8 +33,11 @@ Live `Hand_U` ran hot vs training — unknown handedness was acting as a missing
 challenger 9.6% live vs 2.4% training (4×), ITF-15 44% vs 18% (2.4×), tour/slam ≈ parity.
 Fix shipped: the ATP bio fetch now captures `Plays:` alongside height (same page, zero extra
 fetches), caches to `data/atp_hands.json`, and writes through to `players.hand` — every
-ranked player self-heals on first encounter. Honest residual: deep-ITF juniors with no ATP
-profile stay `U` (they are also the bulk of training's 18% `U` at that level).
+ranked player self-heals on first encounter. The live ITF order-of-play bridge now also
+retains each numeric `playerId` plus official `profileLink`, verifies both against the
+rendered ITF profile, and writes exact handedness through to the canonical player. ITF
+does not publish height on these profiles, so missing height remains honestly incomplete;
+an unavailable or identity-conflicting ITF profile remains `U` rather than being guessed.
 
 ## Data coverage (2026 rows, granular serve stats)
 
@@ -64,7 +67,7 @@ profile stay `U` (they are also the bulk of training's 18% `U` at that level).
 `Level_15`, `Level_25`, `Level_A`, `Level_C`, `Level_D`, `Level_F`, `Level_G`, `Level_M`, `Level_O`, `Level_S`, `Round_BR`, `Round_ER`, `Round_F`, `Round_Q1`, `Round_Q2`, `Round_Q3`, `Round_Q4`, `Round_QF`, `Round_R128`, `Round_R16`, `Round_R32`, `Round_R64`, `Round_RR`, `Round_SF`, `draw_size`
 
 ### Physical & bio — 22 features
-*Source:* store `players` → TA profile fallback → ATP height scraper; missing → flagged not-bettable
+*Source:* store `players` → TA profile fallback → ATP height+hand scraper → exact-ID ITF hand-only fallback; missing → flagged not-bettable
 
 `Age_Diff`, `Avg_Age`, `Avg_Height`, `Handedness_Matchup_LL`, `Handedness_Matchup_LR`, `Handedness_Matchup_RL`, `Handedness_Matchup_RR`, `Height_Diff`, `P1_Hand_A`, `P1_Hand_L`, `P1_Hand_R`, `P1_Hand_U`, `P1_Peak_Age`, `P2_Hand_A`, `P2_Hand_L`, `P2_Hand_R`, `P2_Hand_U`, `P2_Peak_Age`, `Player1_Age`, `Player1_Height`, `Player2_Age`, `Player2_Height`
 

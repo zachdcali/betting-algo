@@ -70,6 +70,9 @@ MAX_METADATA_FUTURE_SKEW = timedelta(minutes=5)
 OFFICIAL_PAGE_IDENTITY_BINDING = (
     "official_rankings_or_slug_name_plus_rendered_full_name"
 )
+OFFICIAL_PAGE_CONFLICT_BINDING = (
+    "official_rendered_profile_fields_plus_conflicting_full_name"
+)
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -245,11 +248,15 @@ def _negative_cache_is_fresh(
     observed_utc = observed.astimezone(timezone.utc)
     if observed_utc > current.astimezone(timezone.utc) + MAX_METADATA_FUTURE_SKEW:
         return False
-    ttl = (
-        _transient_ttl()
-        if entry.get("status") == "fetch_error"
-        else _negative_ttl()
+    # Historical rows labeled every non-empty interstitial/error page as an
+    # identity mismatch. Only a mismatch with explicit conflicting-profile
+    # markers deserves the long negative TTL; old/unproven mismatches retry on
+    # the short transient cadence.
+    transient = entry.get("status") == "fetch_error" or (
+        entry.get("status") == "identity_mismatch"
+        and entry.get("identity_binding") != OFFICIAL_PAGE_CONFLICT_BINDING
     )
+    ttl = _transient_ttl() if transient else _negative_ttl()
     return current <= observed_utc + ttl
 
 
@@ -452,6 +459,20 @@ def _profile_text_matches_name(text: str, player_name: str) -> bool:
     requested = _identity_key(player_name)
     rendered = _identity_key(text)
     return bool(requested and requested in rendered)
+
+
+def _looks_like_rendered_profile(text: str) -> bool:
+    """Separate a real wrong-player profile from a block/interstitial page."""
+    value = str(text or "").casefold()
+    markers = (
+        "personal details",
+        "career high rank",
+        "height",
+        "plays",
+        "country",
+        "birthplace",
+    )
+    return sum(marker in value for marker in markers) >= 2
 
 
 
@@ -889,16 +910,26 @@ def batch_get_profiles(
                         "height_cm": cached_height,
                         "hand": cached_hand,
                     }
+                    real_profile_conflict = _looks_like_rendered_profile(text)
                     _record_lookup(
                         metadata,
                         key=key,
                         source_uri=source_uri,
                         height_cm=cached_height,
                         hand=cached_hand,
-                        status="identity_mismatch",
+                        status=(
+                            "identity_mismatch"
+                            if real_profile_conflict
+                            else "fetch_error"
+                        ),
                         source_content_sha256=sha256(
                             text.encode("utf-8")
                         ).hexdigest(),
+                        identity_binding=(
+                            OFFICIAL_PAGE_CONFLICT_BINDING
+                            if real_profile_conflict
+                            else ""
+                        ),
                         canonical_player_id=_canonical_player_id(key),
                     )
                     continue

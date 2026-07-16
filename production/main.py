@@ -551,9 +551,9 @@ class LiveBettingOrchestrator:
             axis=1
         )].copy()
 
-        # Cloud runs skip ITF futures (SKIP_ITF_MATCHES=1): no round source exists
-        # for ITF yet (itftennis.com scraper unbuilt) so they are never bettable,
-        # and their per-player fetches were blowing the hourly runner's budget.
+        # Optional emergency switch. The normal cloud path keeps ITF enabled:
+        # official order-of-play supplies rounds/results/player IDs and official
+        # profiles can supply handedness. Missing height still fails completeness.
         if os.environ.get("SKIP_ITF_MATCHES") == "1":
             n_before = len(odds_df)
             odds_df = odds_df[~odds_df['event'].astype(str).str.contains("ITF", case=False, na=False)].copy()
@@ -588,6 +588,15 @@ class LiveBettingOrchestrator:
                     hydration_odds,
                     session_cache=session_cache,
                 )
+                itf_profiles = session_cache.get("itf_profile_hydration") or {}
+                if itf_profiles.get("candidate_players") or itf_profiles.get("status") == "error":
+                    print(
+                        "   🪪 ITF profile hydration: "
+                        f"{itf_profiles.get('resolved_hands', 0)}/"
+                        f"{itf_profiles.get('candidate_players', 0)} hands resolved; "
+                        f"{itf_profiles.get('official_page_attempts', 0)} official-page attempts; "
+                        f"{itf_profiles.get('failed_profiles', 0)} unresolved"
+                    )
                 if hydration.get("planned_players"):
                     print(
                         "   📏 Height hydration: "
