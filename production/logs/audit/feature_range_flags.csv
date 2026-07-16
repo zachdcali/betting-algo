@@ -13098,3 +13098,8 @@ logged_at,run_id,p1,p2,flag
 2026-07-16T00:40:06+00:00,run_20260716T001357Z,jerome kym,stefanos tsitsipas,P1_Country_SUI=1 (z=8.2)
 2026-07-16T00:40:14+00:00,run_20260716T001357Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
 2026-07-16T00:43:00+00:00,run_20260716T001357Z,nikola jovic,sebastiano cocola,P1_Country_SRB=1 (z=8.3)
+2026-07-16T03:01:20+00:00,run_20260716T024146Z,juan manuel cerundolo,miomir kecmanovic,P2_Country_SRB=1 (z=8.3)
+2026-07-16T03:03:10+00:00,run_20260716T024146Z,jerome kym,stefanos tsitsipas,P1_Country_SUI=1 (z=8.2)
+2026-07-16T03:03:18+00:00,run_20260716T024146Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
+2026-07-16T03:03:27+00:00,run_20260716T024146Z,tomas lanik,nicolas parizzia,P2_Country_SUI=1 (z=8.2)
+2026-07-16T03:03:44+00:00,run_20260716T024146Z,nikola jovic,sebastiano cocola,P1_Country_SRB=1 (z=8.3)
