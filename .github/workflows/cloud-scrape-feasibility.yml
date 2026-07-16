@@ -1,8 +1,8 @@
 name: Cloud scrape feasibility
 
 # Manual-trigger only — never runs on push/schedule. Click "Run workflow" in the
-# Actions tab to test whether Bovada + Tennis Abstract serve GitHub's datacenter IP
-# before we commit to building out the hourly cloud pipeline.
+# Actions tab to test whether Bovada, ATP, and structured ITF player details
+# serve GitHub's datacenter IP before relying on the hourly cloud pipeline.
 on:
   workflow_dispatch:
 
@@ -23,5 +23,5 @@ jobs:
           pip install playwright pandas requests beautifulsoup4 lxml
           python -m playwright install --with-deps chromium
 
-      - name: Probe Bovada + Tennis Abstract from this cloud IP
+      - name: Probe required sources from this cloud IP
         run: python production/cloud/scrape_feasibility_test.py

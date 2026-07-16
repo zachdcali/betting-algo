@@ -594,9 +594,10 @@ class LiveBettingOrchestrator:
                         "   🪪 ITF profile hydration: "
                         f"{itf_profiles.get('resolved_hands', 0)}/"
                         f"{itf_profiles.get('candidate_players', 0)} hands resolved; "
-                        f"{itf_profiles.get('official_page_attempts', 0)} official-page attempts; "
+                        f"{itf_profiles.get('official_page_attempts', 0)} official-source attempts; "
                         f"{itf_profiles.get('failed_profiles', 0)} unresolved; "
-                        f"statuses={itf_profiles.get('profile_statuses', {})}"
+                        f"statuses={itf_profiles.get('profile_statuses', {})}; "
+                        f"sources={itf_profiles.get('profile_sources', {})}"
                     )
                 if hydration.get("planned_players"):
                     print(

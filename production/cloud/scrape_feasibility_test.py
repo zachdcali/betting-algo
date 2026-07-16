@@ -6,7 +6,8 @@ cloud ranges? This runs ONLY the scrapers (no models, no torch, no DB) so it's a
 fast, cheap, isolated test — meant to run on a cloud runner (e.g. GitHub Actions)
 before investing in the full cloud build.
 
-Exit code 0 = both sources served us; 1 = at least one blocked (would need a proxy).
+Exit code 0 = required odds/results/profile sources served us; 1 = at least one
+required source was blocked (and needs a different execution path).
 """
 import sys
 from pathlib import Path
@@ -80,16 +81,71 @@ def probe_atptour() -> bool:
         return False
 
 
+def probe_itf_player_details() -> bool:
+    """Exercise the production JSON-first exact-ID handedness path."""
+    try:
+        from scraping.itf_results_scraper import get_player_profiles_resilient
+
+        refs = {
+            "Jannik Sinner": {
+                "itf_player_id": "800405198",
+                "profile_url": "/en/players/jannik-sinner/800405198/ita/mt/s/",
+                "nationality": "ITA",
+            },
+            "Ben Shelton": {
+                "itf_player_id": "800529052",
+                "profile_url": "/en/players/ben-shelton/800529052/usa/mt/s/",
+                "nationality": "USA",
+            },
+            "Taylor Fritz": {
+                "itf_player_id": "800395123",
+                "profile_url": "/en/players/taylor-fritz/800395123/usa/mt/s/",
+                "nationality": "USA",
+            },
+        }
+        results = get_player_profiles_resilient(refs)
+        resolved = {
+            name: result.get("hand")
+            for name, result in results.items()
+            if result.get("status") == "resolved"
+            and result.get("source_kind") == "itf_player_details_api"
+        }
+        statuses = {
+            name: {
+                "status": result.get("status"),
+                "source": result.get("source_kind"),
+                "attempts": result.get("attempt_count"),
+            }
+            for name, result in results.items()
+        }
+        ok = len(resolved) == len(refs)
+        print(
+            f"[ITF player details] structured_resolved={len(resolved)}/{len(refs)} "
+            f"statuses={statuses} -> {'OK' if ok else 'BLOCKED/INCOMPLETE'}"
+        )
+        return ok
+    except Exception as e:  # noqa: BLE001
+        print(f"[ITF player details] EXCEPTION {type(e).__name__}: {e} -> BLOCKED")
+        return False
+
+
 def main() -> int:
     print("=== Cloud scrape feasibility (datacenter IP) ===")
     atp_ok = probe_atptour()
     bovada_ok = probe_bovada()
+    itf_ok = probe_itf_player_details()
     ta_ok = probe_tennis_abstract()
     print()
-    print(f"VERDICT: atptour = {'OK' if atp_ok else 'BLOCKED'} | Bovada = {'OK' if bovada_ok else 'BLOCKED'} | "
-          f"Tennis Abstract (optional since features-from-store) = {'OK' if ta_ok else 'BLOCKED'}")
-    if atp_ok and bovada_ok:
-        print("Required sources (atptour + Bovada) serve this cloud IP -> hourly cloud runs are viable "
+    print(
+        f"VERDICT: atptour = {'OK' if atp_ok else 'BLOCKED'} | "
+        f"Bovada = {'OK' if bovada_ok else 'BLOCKED'} | "
+        f"ITF player details = {'OK' if itf_ok else 'BLOCKED'} | "
+        "Tennis Abstract (optional since features-from-store) = "
+        f"{'OK' if ta_ok else 'BLOCKED'}"
+    )
+    if atp_ok and bovada_ok and itf_ok:
+        print("Required sources (atptour + Bovada + ITF player details) serve this "
+              "cloud IP -> hourly cloud runs are viable with official profile evidence "
               "(store mode needs no TA at predict time).")
         return 0
     print("A REQUIRED source blocked the cloud IP -> home box or proxy needed.")

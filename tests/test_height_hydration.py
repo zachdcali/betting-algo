@@ -387,6 +387,7 @@ def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
                 "hand": "L",
                 "itf_player_id": refs["ITF Player"]["itf_player_id"],
                 "source_uri": "https://www.itftennis.com/en/players/itf-player/800000042/usa/mt/s/",
+                "source_kind": "itf_player_details_api",
                 "attempt_count": 1,
             },
         },
@@ -433,6 +434,7 @@ def test_slate_prehydration_uses_itf_player_id_profile_for_unknown_hand(
         "resolved_hands": 1,
         "failed_profiles": 0,
         "profile_statuses": {"resolved": 1},
+        "profile_sources": {"itf_player_details_api": 1},
     }
     assert session_cache["itf_hands_by_player_id"] == {42: "L"}
     assert persisted == [(42, "hand", "L")]

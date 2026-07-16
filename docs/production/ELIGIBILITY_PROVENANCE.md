@@ -147,18 +147,21 @@ savepoint.
 For ITF slates, the already-fetched official order-of-play is also a player-
 identity source: each participant row binds full name, numeric ITF `playerId`,
 nationality, and the official `profileLink`. Legacy pre-hydration keeps only a
-unique exact-name/ID/URL binding, fetches those server-rendered profiles through
-bounded clean ITF browser sessions (four profiles per session and two transient
-attempts by default), and requires the canonical profile URL to
-repeat the same numeric ID and full name before handedness can write through.
-The default run cap is 48 profiles (`ITF_PROFILE_RUN_HYDRATION_LIMIT`). This is
-deliberately a hand-only lane because the public ITF profile does not publish
+unique exact-name/ID/URL binding, then calls ITF's structured
+`PlayerApi/GetHeadToHeadPlayerDetails` endpoint first. The accepted JSON must
+repeat the full name and numeric `playerId` and provides `playHand`, nationality,
+and the canonical profile link in one response. Fetches use bounded clean ITF
+browser sessions (four players per session and two transient attempts by
+default); one HTML profile pass remains a compatibility fallback only after the
+structured attempts are exhausted. The default run cap is 48 profiles
+(`ITF_PROFILE_RUN_HYDRATION_LIMIT`). This is deliberately a hand-only lane
+because the public ITF profile does not publish
 height; it never fabricates the height needed for feature completeness. Required
 eligibility mode remains read-only and will consume ITF observations only after
 they are imported, reviewed, and accepted in the sealed generation.
-HTTP-200 Imperva/interstitial bodies are recorded as short-lived source errors,
-not identity mismatches; only a fully rendered conflicting name and canonical
-numeric player ID can establish a real identity conflict.
+HTTP-200 Imperva/interstitial bodies and non-JSON API responses are recorded as
+short-lived source errors, not identity mismatches; only conflicting official
+full-name and numeric-player-ID fields can establish a real identity conflict.
 
 - `eligibility_profiles_bundle.json` contains normalized name bindings,
   canonical player IDs, and accepted height/hand values;
