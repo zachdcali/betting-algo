@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-17.2";
+  const BUILD_ID = "2026-07-17.3";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -117,6 +117,8 @@
     metrics: [],
     calibration: [],
     roc: [],
+    rocLoadedKeys: new Set(),
+    rocRequests: new Map(),
     meta: {
       odds: null,
       kalshi: null,
@@ -126,6 +128,7 @@
       skipped_total: null,
       settlement: null,
       sessions: null,
+      roc_total: null,
     },
     manifest: null,
     loadedSyncId: "",
@@ -372,6 +375,12 @@
     );
     const generationFilter = { sync_id: syncId };
     const currentRunFilter = acceptedRunId ? { sync_id: syncId, run_id: acceptedRunId } : null;
+    if (store.loadedSyncId !== syncId) {
+      store.roc = [];
+      store.rocLoadedKeys.clear();
+      store.rocRequests.clear();
+      delete store.errors.rocCurve;
+    }
 
     await Promise.all([
       refreshResource("predictions", () => fetchAll("dash_predictions", PREDICTION_COLUMNS, "match_date.asc,p1.asc,p2.asc", generationFilter), (rows) => rows.map(normalizedPrediction)),
@@ -411,9 +420,9 @@
       refreshResource("calibration", () => calibrationPublished
         ? fetchAll("dash_model_calibration", CALIBRATION_COLUMNS, "tier.asc,model.asc,bin_index.asc", generationFilter)
         : Promise.resolve([])),
-      refreshResource("roc", () => rocPublished
-        ? fetchAll("dash_model_roc", ROC_COLUMNS, "tier.asc,model.asc,point_index.asc", generationFilter)
-        : Promise.resolve([])),
+      refreshMeta("roc_total", () => rocPublished
+        ? fetchTableMeta("dash_model_roc", "roc_row_key", "roc_row_key.asc", generationFilter)
+        : Promise.resolve({ count: 0, latest: null })),
       refreshMeta("odds", () => fetchTableMeta("dash_odds_history", "logged_at,odds_scraped_at,run_id,match_uid", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("kalshi", () => kalshiPublished
         ? fetchTableMeta("dash_kalshi_odds_history", "polled_at,run_id,match_uid,market_ticker", "polled_at.desc.nullslast", generationFilter)
@@ -582,7 +591,7 @@
       actual.dash_model_calibration = arrayCount("calibration");
     }
     if (Object.prototype.hasOwnProperty.call(expected, "dash_model_roc")) {
-      actual.dash_model_roc = arrayCount("roc");
+      actual.dash_model_roc = metaCount("roc_total");
     }
     if (Object.prototype.hasOwnProperty.call(expected, "dash_kalshi_odds_history")) {
       Object.assign(actual, { dash_kalshi_odds_history: metaCount("kalshi") });
@@ -1590,6 +1599,42 @@
       : `${metricLabels[metric] || metric} is shown on each model's own coverage. n can differ, so color only marks absolute ROI/calibration signals—not a direct model ranking.`);
   }
 
+  function rocCurveKey(syncId, tier, model) {
+    return `${syncId}:${tier}:${model}`;
+  }
+
+  function ensureRocCurve(tier, model) {
+    const syncId = Logic.clean(store.loadedSyncId);
+    const key = rocCurveKey(syncId, tier, model);
+    if (!syncId || !model || store.rocLoadedKeys.has(key) || store.rocRequests.has(key)) {
+      return;
+    }
+    const request = fetchAll(
+      "dash_model_roc", ROC_COLUMNS, "point_index.asc",
+      { sync_id: syncId, tier, model },
+    ).then((rows) => {
+      if (Logic.clean(store.loadedSyncId) !== syncId) return;
+      store.roc = store.roc.filter((row) => !(
+        Logic.clean(row.sync_id) === syncId
+        && Logic.clean(row.tier).toLowerCase() === tier
+        && Logic.clean(row.model) === model
+      ));
+      store.roc.push(...rows);
+      store.rocLoadedKeys.add(key);
+      delete store.errors.rocCurve;
+      renderPerformance();
+    }).catch((error) => {
+      if (Logic.clean(store.loadedSyncId) !== syncId) return;
+      store.errors.rocCurve = error && error.name === "AbortError"
+        ? "request timed out"
+        : Logic.clean(error.message) || "request failed";
+      renderPerformance();
+    }).finally(() => {
+      store.rocRequests.delete(key);
+    });
+    store.rocRequests.set(key, request);
+  }
+
   function renderRocChart(rows, tier) {
     const select = byId("roc-model-select");
     const previous = select.value;
@@ -1608,6 +1653,8 @@
     const model = select.value;
     const host = byId("roc-chart");
     clear(host);
+    const syncId = Logic.clean(store.loadedSyncId);
+    const key = rocCurveKey(syncId, tier, model);
     const points = store.roc
       .filter((row) => Logic.clean(row.tier).toLowerCase() === tier && Logic.clean(row.model) === model)
       .map((row) => ({
@@ -1621,9 +1668,20 @@
       .filter((row) => row.index !== null && row.fpr !== null && row.tpr !== null)
       .sort((a, b) => a.index - b.index);
     if (!points.length) {
-      host.appendChild(element("div", "chart-empty", store.roc.length
-        ? "No defined ROC curve is available for this model and cohort. Both outcome classes are required."
-        : "ROC curves will appear after the first dashboard generation published by this build."));
+      const total = store.meta.roc_total
+        ? Logic.numberOrNull(store.meta.roc_total.count)
+        : null;
+      const error = Logic.clean(store.errors.rocCurve);
+      const loaded = store.rocLoadedKeys.has(key);
+      const message = error
+        ? `Authoritative ROC points are temporarily unavailable (${error}).`
+        : loaded
+          ? "No defined ROC curve is available for this model and cohort. Both outcome classes are required."
+          : total
+            ? "Loading the selected authoritative ROC curve…"
+            : "ROC curves will appear after the first dashboard generation published by this build.";
+      host.appendChild(element("div", "chart-empty", message));
+      if (!error && !loaded && total) ensureRocCurve(tier, model);
       return;
     }
 
@@ -2164,7 +2222,7 @@
       ["Shadow observations", store.meta.shadows && store.meta.shadows.count, "secondary; loaded per match"],
       ["Model metric rows", store.metrics.length, `${new Set(store.metrics.map((row) => Logic.clean(row.model))).size} promoted, benchmark, and shadow identities`],
       ["Calibration bins", store.calibration.length, store.calibration.length ? "authoritative ledger reliability projection" : "awaiting first compatible generation"],
-      ["ROC points", store.roc.length, store.roc.length ? "authoritative ledger threshold projection" : "awaiting first compatible generation"],
+      ["ROC points", store.meta.roc_total && store.meta.roc_total.count, store.meta.roc_total && store.meta.roc_total.count ? "authoritative ledger threshold projection · curves loaded on demand" : "awaiting first compatible generation"],
       ["Feature vectors", store.meta.features && store.meta.features.count, "exact ID lookup only"],
       ["Accepted feature references", store.acceptedFeatures.ids.length, store.errors.acceptedFeatures ? `unverified: ${store.errors.acceptedFeatures}` : `${store.acceptedFeatures.seenIds.length} IDs present · verified status + complete + schema/vector hashes + 141 features · ${Logic.clean(store.acceptedFeatures.runId) || "no accepted run"}`],
       ["Settlement audit", store.meta.settlement && store.meta.settlement.count, "full generation count verified"],
