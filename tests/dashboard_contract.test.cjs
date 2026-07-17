@@ -241,8 +241,11 @@ test("calibration and market-timing views consume manifest-pinned authoritative 
 });
 
 test("ROC is an authoritative threshold curve rather than a browser-computed AUC bar", () => {
-  assert.match(client, /fetchAll\("dash_model_roc", ROC_COLUMNS, "tier\.asc,model\.asc,point_index\.asc", generationFilter\)/);
-  assert.match(client, /actual\.dash_model_roc = arrayCount\("roc"\)/);
+  assert.match(client, /fetchTableMeta\("dash_model_roc", "roc_row_key", "roc_row_key\.asc", generationFilter\)/);
+  assert.match(client, /actual\.dash_model_roc = metaCount\("roc_total"\)/);
+  assert.match(client, /fetchAll\(\s*"dash_model_roc", ROC_COLUMNS, "point_index\.asc",\s*\{ sync_id: syncId, tier, model \}/);
+  assert.match(client, /store\.rocLoadedKeys\.has\(key\)/);
+  assert.match(client, /Loading the selected authoritative ROC curve/);
   assert.match(client, /store\.roc\s*\.filter\(\(row\) => Logic\.clean\(row\.tier\)/);
   assert.match(client, /False-positive rate/);
   assert.match(client, /True-positive rate/);
@@ -251,7 +254,7 @@ test("ROC is an authoritative threshold curve rather than a browser-computed AUC
   assert.match(html, /id="roc-chart"/);
   assert.match(html, /AUC summarizes the area under this curve/);
   assert.match(html, /Scalar comparison—not a diagnostic curve/);
-  assert.doesNotMatch(client, /rocCurve|roc_curve|sort.*p1_prob/);
+  assert.doesNotMatch(client, /roc_curve|roc_auc|sort.*p1_prob/);
 });
 
 test("odds movement is an exact-match lazy projection and delegates strict timing to shared logic", () => {
