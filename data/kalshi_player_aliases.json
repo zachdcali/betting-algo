@@ -1,0 +1,30 @@
+{
+  "schema_version": "kalshi_player_aliases@1.0.0",
+  "aliases": [
+    {
+      "kalshi_name": "Aleksandr Shevchenko",
+      "board_name": "Alexander Shevchenko",
+      "reason": "Reviewed Kalshi/Bovada spelling variant on the same player pair and match date."
+    },
+    {
+      "kalshi_name": "Dominic Stricker",
+      "board_name": "Dominic Stephan Stricker",
+      "reason": "Reviewed middle-name omission on the same player pair and match date."
+    },
+    {
+      "kalshi_name": "Daniel Merida",
+      "board_name": "Daniel Merida Aguilar",
+      "reason": "Reviewed second-surname omission on the same player pair and match date."
+    },
+    {
+      "kalshi_name": "M Rifqi Fitriadi",
+      "board_name": "Muhammad Rifqi Fitriadi",
+      "reason": "Reviewed given-name abbreviation on the same player pair and match date."
+    },
+    {
+      "kalshi_name": "Nikita Belozertsev",
+      "board_name": "Nikita Bilozertsev",
+      "reason": "Reviewed transliteration variant on the same player pair and match date."
+    }
+  ]
+}

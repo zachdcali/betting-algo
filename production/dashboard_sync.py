@@ -368,7 +368,8 @@ def _accepted_prediction_run_id(run_frame: pd.DataFrame,
 def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
                          shadow_log: pd.DataFrame | None = None,
                          feature_log: pd.DataFrame | None = None,
-                         odds_history: pd.DataFrame | None = None) -> pd.DataFrame:
+                         odds_history: pd.DataFrame | None = None,
+                         kalshi_history: pd.DataFrame | None = None) -> pd.DataFrame:
     """Materialize authoritative live metrics through evaluation's one math path."""
     from evaluation import cohorts
     from evaluation.ledger import LIVE_COLUMNS, build_live_ledger
@@ -450,7 +451,11 @@ def _build_model_metrics(sync_id: str, pred_log: pd.DataFrame | None = None,
         )
     if shadow_log is None:
         shadow_log = cohorts.load_shadow_log(os.path.dirname(__file__))
-    scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
+    if kalshi_history is None:
+        kalshi_history = cohorts.load_kalshi_history(os.path.dirname(__file__))
+    scored = cohorts.build_scored_frame(
+        pred_log, shadow_log, odds_history, kalshi_history,
+    )
     frame = build_live_ledger(scored)
     if frame.empty:
         frame = pd.DataFrame(columns=LIVE_COLUMNS)
@@ -472,6 +477,7 @@ def _build_model_calibration(
     shadow_log: pd.DataFrame | None,
     odds_history: pd.DataFrame | None,
     metrics_frame: pd.DataFrame,
+    kalshi_history: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Materialize manifest-pinned reliability bins without browser math."""
     from evaluation import cohorts
@@ -479,7 +485,9 @@ def _build_model_calibration(
 
     scored = metrics_frame.attrs.get("scored_frame")
     if not isinstance(scored, pd.DataFrame):
-        scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
+        scored = cohorts.build_scored_frame(
+            pred_log, shadow_log, odds_history, kalshi_history,
+        )
     live_columns = [column for column in metrics_frame.columns if column in {
         "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
         "cal_slope", "cal_intercept", "roi_flat", "n_bets_flat", "pnl_flat",
@@ -576,6 +584,7 @@ def _sync_dashboard_tables_once(verbose: bool = True) -> dict[str, int]:
                     shadow_log=planned.get("dash_shadow"),
                     feature_log=planned.get("dash_features"),
                     odds_history=planned.get("dash_odds_history"),
+                    kalshi_history=planned.get("dash_kalshi_odds_history"),
                 )
                 planned["dash_model_metrics"] = model_metrics
                 counts["dash_model_metrics"] = len(model_metrics)
@@ -584,6 +593,7 @@ def _sync_dashboard_tables_once(verbose: bool = True) -> dict[str, int]:
                     pred_log=planned.get("dash_predictions", pd.DataFrame()),
                     shadow_log=planned.get("dash_shadow"),
                     odds_history=planned.get("dash_odds_history"),
+                    kalshi_history=planned.get("dash_kalshi_odds_history"),
                     metrics_frame=model_metrics,
                 )
                 planned["dash_model_calibration"] = model_calibration

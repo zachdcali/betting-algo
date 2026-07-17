@@ -79,7 +79,22 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 ## Logging And Lineage
 
 - `prediction_log.csv` is the operational log.
-- `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the immutable lineage layer.
+- `prediction_snapshots.csv`, `odds_history.csv`, `kalshi_odds_history.csv`, and
+  `logs/features_*.csv` are the immutable lineage layer.
+- `kalshi_odds_history.csv` / `dash_kalshi_odds_history` is a forward-only,
+  unauthenticated, read-only measurement feed. Never add auth or order placement
+  to this path and never backfill Kalshi's historical endpoint. Preserve the
+  suffixed raw fields (`yes_bid_dollars`, `yes_ask_dollars`,
+  `last_price_dollars`, depth, volume, and open interest). Match only a complete
+  two-market player pair to the same exact match date, series, run, and
+  `match_uid`; fuzzy identity inference is forbidden, while reviewed variants
+  belong in `data/kalshi_player_aliases.json`.
+- Kalshi prices are already probabilities and must not be de-vigged. The
+  Kalshi-priced edge hurdle is the selected side's raw `yes_ask_dollars`; flat
+  ROI uses effective decimal odds `1 / ask` and subtracts
+  `0.07 * price * (1 - price)` per winning contract. Keep this as a separately
+  labeled forward cohort with its first logging timestamp and sample count;
+  do not feature the experimental Kelly track as the edge verdict.
 - Supabase `dash_*` tables are an additive durable recovery bridge while CSV
   remains the application-facing write format. Every cloud run hydrates from
   the latest accepted generation before settlement/dedupe, then publishes all

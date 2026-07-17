@@ -210,6 +210,7 @@ class LiveBettingOrchestrator:
         # One cache per run.  Prefetch warms this before feature extraction;
         # extract_features must reuse it rather than replacing it.
         self._session_cache = {}
+        self._kalshi_poll = None
         self.run_id = None
         self.run_started_at = None
         self.run_metrics = {}
@@ -225,6 +226,7 @@ class LiveBettingOrchestrator:
         self.run_id = make_run_id(started)
         self.run_started_at = started.replace(microsecond=0).isoformat()
         self._session_cache = {}
+        self._kalshi_poll = None
         self.run_metrics = {
             'run_id': self.run_id,
             'run_kind': 'prediction_pipeline',
@@ -235,6 +237,13 @@ class LiveBettingOrchestrator:
             'rankings_refresh_enabled': '',
             'odds_rows_fetched': 0,
             'odds_rows_candidate': 0,
+            'kalshi_fetch_status': 'not_started',
+            'kalshi_market_rows_fetched': 0,
+            'kalshi_two_sided_events': 0,
+            'kalshi_observations_logged': 0,
+            'kalshi_matches_matched': 0,
+            'kalshi_match_status_summary': {},
+            'kalshi_fetch_error': '',
             'feature_rows_total': 0,
             'feature_rows_ok': 0,
             'feature_rows_skipped': 0,
@@ -526,6 +535,88 @@ class LiveBettingOrchestrator:
             print("❌ No matches found")
             
         return odds_df
+
+    def fetch_kalshi_odds(self) -> None:
+        """Capture one unauthenticated Kalshi poll without gating Bovada."""
+        print("📈 Fetching read-only Kalshi tennis markets...")
+        try:
+            from odds.fetch_kalshi import fetch_open_tennis_markets
+
+            markets, polled_at = fetch_open_tennis_markets()
+            self._kalshi_poll = (markets, polled_at)
+            self.run_metrics['kalshi_market_rows_fetched'] = len(markets)
+            event_groups = {}
+            for market in markets:
+                event_groups.setdefault(
+                    str(market.get('event_ticker') or ''), []
+                ).append(market)
+            self.run_metrics['kalshi_two_sided_events'] = sum(
+                len(group) == 2
+                and len({
+                    str(item.get('yes_sub_title') or '').strip()
+                    for item in group
+                }) == 2
+                for group in event_groups.values()
+            )
+            self.run_metrics['kalshi_fetch_status'] = (
+                'success' if markets else 'empty'
+            )
+            print(
+                f"✅ Kalshi: {len(markets)} markets across "
+                f"{self.run_metrics['kalshi_two_sided_events']} two-sided events"
+            )
+        except Exception as exc:
+            self._kalshi_poll = None
+            self.run_metrics['kalshi_fetch_status'] = 'error'
+            self.run_metrics['kalshi_fetch_error'] = str(exc)[:300]
+            print(f"  ⚠️ Kalshi logging unavailable (Bovada path continues): {exc}")
+
+    def _log_kalshi_poll(self, board: pd.DataFrame, *, write: bool = True) -> None:
+        """Bind and persist the captured poll after exact match UIDs exist."""
+        if self._kalshi_poll is None:
+            return
+        markets, polled_at = self._kalshi_poll
+        try:
+            from odds.fetch_kalshi import (
+                append_kalshi_observations,
+                build_kalshi_observations,
+            )
+
+            observations = build_kalshi_observations(
+                markets,
+                board,
+                run_id=self.run_id,
+                polled_at=polled_at,
+            )
+            created = append_kalshi_observations(observations) if write else 0
+            matched = observations[
+                observations['match_status'].eq('matched')
+            ] if not observations.empty else observations
+            status_counts = (
+                observations['match_status'].value_counts().sort_index().to_dict()
+                if not observations.empty else {}
+            )
+            self.run_metrics['kalshi_observations_logged'] = int(created)
+            self.run_metrics['kalshi_matches_matched'] = int(
+                matched['match_uid'].nunique() if not matched.empty else 0
+            )
+            self.run_metrics['kalshi_match_status_summary'] = status_counts
+            if not write:
+                print(
+                    f"🧪 Kalshi dry run: {len(observations)} observations; "
+                    f"{self.run_metrics['kalshi_matches_matched']} matches bound"
+                )
+            else:
+                print(
+                    f"🧾 Kalshi: logged {created}/{len(observations)} observations; "
+                    f"{self.run_metrics['kalshi_matches_matched']} matches bound"
+                )
+        except Exception as exc:
+            self.run_metrics['kalshi_fetch_status'] = 'log_error'
+            self.run_metrics['kalshi_fetch_error'] = str(exc)[:300]
+            print(f"  ⚠️ Kalshi observation logging failed (non-fatal): {exc}")
+        finally:
+            self._kalshi_poll = None
     
     def extract_features(self, odds_df: pd.DataFrame) -> pd.DataFrame:
         """Extract 141 features for all matches via Tennis Abstract scraper"""
@@ -1696,7 +1787,9 @@ class LiveBettingOrchestrator:
 
             # Step 1: Fetch odds
             odds_df = self.fetch_odds()
+            self.fetch_kalshi_odds()
             if odds_df.empty:
+                self._log_kalshi_poll(pd.DataFrame(), write=not dry_run)
                 # settlement already ran; persist its work first, THEN decide
                 # health: a parsed-but-empty board is a genuine no-odds hour;
                 # a fetch crash is tolerated once (transient) and hard-fails
@@ -1725,6 +1818,7 @@ class LiveBettingOrchestrator:
 
             # Step 2: Extract features
             features_df = self.extract_features(odds_df)
+            self._log_kalshi_poll(features_df, write=not dry_run)
             if features_df.empty:
                 print("⚠️  Feature extraction failed, stopping pipeline")
                 self._ingest_store_events()

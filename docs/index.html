@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-15.5">
-  <script src="dashboard_logic.js?v=2026-07-15.5" defer></script>
-  <script src="dashboard.js?v=2026-07-15.5" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-16.1">
+  <script src="dashboard_logic.js?v=2026-07-16.1" defer></script>
+  <script src="dashboard.js?v=2026-07-16.1" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,7 +23,7 @@
       </div>
       <div class="header-meta" aria-label="Dashboard metadata">
         <span class="paper-pill">Paper only</span>
-        <span id="dashboard-build">Build 2026-07-15.5</span>
+        <span id="dashboard-build">Build 2026-07-16.1</span>
         <span id="page-fetch-time">Loading data…</span>
       </div>
     </header>
@@ -151,7 +151,7 @@
           </div>
         </div>
         <div class="notice warning">
-          The scores below are current for the accepted dashboard sync shown on this page. They are materialized by <code>production.evaluation.ledger</code> during durable publication and withheld if their sync generation disagrees with the manifest. The linked Markdown report is a dated full ledger snapshot (live metrics plus offline experiments) and may lag this manifest-pinned table. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Counterfactual Kelly uses the configured 0.18 multiplier but does not replay the live run-wide exposure allocator.
+          The scores below are current for the accepted dashboard sync shown on this page. They are materialized by <code>production.evaluation.ledger</code> during durable publication and withheld if their sync generation disagrees with the manifest. The linked Markdown report is a dated full ledger snapshot (live metrics plus offline experiments) and may lag this manifest-pinned table. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Kalshi ROI uses the raw buy ask without de-vigging and subtracts the configured taker fee from winning payouts; it is forward-only from the displayed logging date.
         </div>
         <article class="panel-card performance-population-card">
           <div class="card-heading">
@@ -176,7 +176,7 @@
                   <option value="accuracy">Accuracy · higher is better</option>
                   <option value="auc">AUC · higher is better</option>
                   <option value="roi_flat">Flat ROI · zero is break-even</option>
-                  <option value="roi_kelly">Kelly ROI · zero is break-even</option>
+                  <option value="roi_flat_kalshi">Flat ROI · Kalshi vig-free asks</option>
                 </select>
               </label>
             </div>
@@ -194,10 +194,10 @@
             <div id="calibration-chart" class="calibration-chart" aria-live="polite"></div>
           </article>
         </div>
-        <div class="table-shell"><table id="performance-table"><caption>Current manifest-pinned model metrics for the selected accepted dashboard generation</caption><thead><tr><th scope="col">Model</th><th scope="col">n</th><th scope="col">Log loss ↓</th><th scope="col">Brier ↓</th><th scope="col">ECE ↓</th><th scope="col">Cal slope</th><th scope="col">Accuracy</th><th scope="col">AUC</th><th scope="col">Flat ROI</th><th scope="col">Flat bets</th><th scope="col">Counterfactual Kelly ROI</th><th scope="col">Counterfactual Kelly bets</th><th scope="col">Counterfactual Kelly max DD ($)</th></tr></thead><tbody></tbody></table></div>
+        <div class="table-shell"><table id="performance-table"><caption>Current manifest-pinned model metrics for the selected accepted dashboard generation</caption><thead><tr><th scope="col">Model</th><th scope="col">n</th><th scope="col">Log loss ↓</th><th scope="col">Brier ↓</th><th scope="col">ECE ↓</th><th scope="col">Cal slope</th><th scope="col">Accuracy</th><th scope="col">AUC</th><th scope="col">Flat ROI (Bovada)</th><th scope="col">Bovada flat bets</th><th scope="col">Flat ROI (Kalshi, vig-free)</th><th scope="col">Kalshi bets since</th></tr></thead><tbody></tbody></table></div>
         <details class="research-disclosure">
           <summary>How to read shadows and ROI</summary>
-          <p>Each shadow variant uses one deterministic opening observation per match and model version, joined to the operational opening feature snapshot. Hourly repeats do not increase n. “Actual paper” performance remains in Paper bets; flat and Kelly figures here are counterfactual cohort replays. Treat n below 250 as exploratory even when ROI is green.</p>
+          <p>Each shadow variant uses one deterministic opening observation per match and model version, joined to the operational opening feature snapshot. Hourly repeats do not increase n. “Actual paper” performance remains in Paper bets; both flat figures here are counterfactual cohort replays. Bovada uses the offered decimal odds and raw break-even hurdle. Kalshi uses each side’s raw ask as the hurdle and payout price, with no de-vigging, and subtracts taker fees from wins. Treat n below 250 as exploratory even when ROI is green.</p>
         </details>
       </section>
 

@@ -87,3 +87,90 @@ def simulate(df: pd.DataFrame, mode: str = "flat", edge_threshold: float = 0.02,
         "ending_bankroll": bankroll + pnl,
         "max_drawdown": max_dd,
     }
+
+
+def simulate_kalshi(
+    df: pd.DataFrame,
+    *,
+    edge_threshold: float = 0.02,
+    fee_rate: float = 0.07,
+) -> dict:
+    """Flat-stake ROI using raw Kalshi asks and fee-adjusted winning payouts.
+
+    ``kalshi_p1_ask`` and ``kalshi_p2_ask`` are already probabilities. They are
+    deliberately not normalized or de-vigged. One unit of stake buys
+    ``1 / ask`` contracts. On a win, the taker fee per contract is
+    ``fee_rate * ask * (1 - ask)``, or ``fee_rate * (1 - ask)`` per unit
+    staked. A loss remains the full one-unit stake, matching the requested
+    conservative measurement contract.
+    """
+    n_candidates = n_bets = wins = 0
+    staked = pnl = fees = 0.0
+    logging_times: list[pd.Timestamp] = []
+
+    ordered = df.copy()
+    if "kalshi_observation_at" in ordered.columns:
+        ordered["_kalshi_observation_at"] = pd.to_datetime(
+            ordered["kalshi_observation_at"], errors="coerce", utc=True,
+            format="mixed",
+        )
+        ordered = ordered.sort_values(
+            "_kalshi_observation_at", kind="stable", na_position="last",
+        )
+
+    for _, row in ordered.iterrows():
+        try:
+            p1 = float(row["p1_prob"])
+            ask1 = float(row.get("kalshi_p1_ask"))
+            ask2 = float(row.get("kalshi_p2_ask"))
+            y1 = int(row["y1"])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not (
+            np.isfinite(p1) and 0.0 <= p1 <= 1.0
+            and np.isfinite(ask1) and 0.0 < ask1 < 1.0
+            and np.isfinite(ask2) and 0.0 < ask2 < 1.0
+            and y1 in {0, 1}
+        ):
+            continue
+        n_candidates += 1
+        observation_at = pd.to_datetime(
+            row.get("kalshi_observation_at"), errors="coerce", utc=True,
+            format="mixed",
+        )
+        if not pd.isna(observation_at):
+            logging_times.append(observation_at)
+
+        edge1 = p1 - ask1
+        edge2 = (1.0 - p1) - ask2
+        if edge1 >= edge2:
+            side_probability, price, edge, won = p1, ask1, edge1, y1 == 1
+        else:
+            side_probability, price, edge, won = 1.0 - p1, ask2, edge2, y1 == 0
+        if not np.isfinite(side_probability) or edge < edge_threshold:
+            continue
+
+        stake = 1.0
+        n_bets += 1
+        staked += stake
+        if won:
+            fee = stake * fee_rate * (1.0 - price)
+            profit = stake * ((1.0 / price) - 1.0) - fee
+            wins += 1
+            fees += fee
+        else:
+            profit = -stake
+        pnl += profit
+
+    logging_since = min(logging_times).isoformat() if logging_times else ""
+    return {
+        "mode": "flat_kalshi",
+        "n_candidates": n_candidates,
+        "n_bets": n_bets,
+        "win_rate": (wins / n_bets) if n_bets else np.nan,
+        "total_staked": staked,
+        "pnl": pnl,
+        "fees": fees,
+        "roi": (pnl / staked) if staked else np.nan,
+        "logging_since": logging_since,
+    }

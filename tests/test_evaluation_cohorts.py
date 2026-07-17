@@ -660,3 +660,76 @@ def test_market_timing_prefers_explicit_utc_scrape_clock_over_naive_logged_at():
         "market_close": 0.49,
     }
     assert timing["prediction_time"].max() < pd.Timestamp("2026-07-01T14:00:00Z")
+
+
+def test_kalshi_asks_join_only_on_complete_exact_run_and_match_pair():
+    predictions = _pred_log().iloc[:1].copy()
+    predictions["run_id"] = "run_exact"
+    kalshi_history = pd.DataFrame([
+        {
+            "kalshi_observation_uid": "k1", "match_uid": "m1",
+            "run_id": "run_exact", "polled_at": "2026-07-01T09:00:00Z",
+            "event_ticker": "event_1", "market_ticker": "market_p1",
+            "board_side": "p1", "yes_ask_dollars": "0.6100",
+            "match_status": "matched",
+        },
+        {
+            "kalshi_observation_uid": "k2", "match_uid": "m1",
+            "run_id": "run_exact", "polled_at": "2026-07-01T09:00:00Z",
+            "event_ticker": "event_1", "market_ticker": "market_p2",
+            "board_side": "p2", "yes_ask_dollars": "0.4000",
+            "match_status": "matched",
+        },
+        # Same match but another run must never be borrowed by run_exact.
+        {
+            "kalshi_observation_uid": "k3", "match_uid": "m1",
+            "run_id": "run_other", "polled_at": "2026-07-01T09:01:00Z",
+            "event_ticker": "event_1", "market_ticker": "other_p1",
+            "board_side": "p1", "yes_ask_dollars": "0.1000",
+            "match_status": "matched",
+        },
+        {
+            "kalshi_observation_uid": "k4", "match_uid": "m1",
+            "run_id": "run_other", "polled_at": "2026-07-01T09:01:00Z",
+            "event_ticker": "event_1", "market_ticker": "other_p2",
+            "board_side": "p2", "yes_ask_dollars": "0.9000",
+            "match_status": "matched",
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(
+        predictions, None, kalshi_history=kalshi_history,
+    )
+
+    assert scored["run_id"].eq("run_exact").all()
+    assert scored["kalshi_p1_ask"].eq(0.61).all()
+    assert scored["kalshi_p2_ask"].eq(0.40).all()
+    assert scored["kalshi_observation_at"].eq(
+        pd.Timestamp("2026-07-01T09:00:00Z")
+    ).all()
+
+
+def test_kalshi_price_join_rejects_one_sided_or_unmatched_observations():
+    predictions = _pred_log().iloc[:1].copy()
+    predictions["run_id"] = "run_exact"
+    history = pd.DataFrame([
+        {
+            "match_uid": "m1", "run_id": "run_exact",
+            "polled_at": "2026-07-01T09:00:00Z", "event_ticker": "event_1",
+            "market_ticker": "market_p1", "board_side": "p1",
+            "yes_ask_dollars": "0.6100", "match_status": "matched",
+        },
+        {
+            "match_uid": "m1", "run_id": "run_exact",
+            "polled_at": "2026-07-01T09:00:00Z", "event_ticker": "event_1",
+            "market_ticker": "market_p2", "board_side": "p2",
+            "yes_ask_dollars": "0.4000", "match_status": "ambiguous_board_match",
+        },
+    ])
+
+    scored = cohorts.build_scored_frame(
+        predictions, None, kalshi_history=history,
+    )
+
+    assert scored["kalshi_p1_ask"].isna().all()
+    assert scored["kalshi_p2_ask"].isna().all()

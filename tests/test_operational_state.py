@@ -13,6 +13,31 @@ from operational_state import STATE_SPECS, merge_state_frames  # noqa: E402
 SPECS = {spec.table: spec for spec in STATE_SPECS}
 
 
+def test_kalshi_state_is_forward_immutable_lineage():
+    spec = SPECS["dash_kalshi_odds_history"]
+    assert spec.relative_path == "kalshi_odds_history.csv"
+    assert spec.primary_fields == ("kalshi_observation_uid",)
+    assert spec.quality_mode == "strict_immutable"
+
+
+def test_kalshi_state_replay_is_idempotent_but_conflicts_fail_closed():
+    original = pd.DataFrame([{
+        "kalshi_observation_uid": "k1", "market_ticker": "KX-M1",
+        "yes_ask_dollars": "0.57", "polled_at": "2026-07-17T01:00:00Z",
+    }])
+    replay = original.copy()
+    merged = merge_state_frames(
+        original, replay, SPECS["dash_kalshi_odds_history"],
+    )
+    assert len(merged) == 1
+    changed = replay.copy()
+    changed.loc[0, "yes_ask_dollars"] = "0.58"
+    with pytest.raises(RuntimeError, match="conflicting immutable"):
+        merge_state_frames(
+            original, changed, SPECS["dash_kalshi_odds_history"],
+        )
+
+
 def test_prediction_merge_preserves_remote_only_settlement():
     existing = pd.DataFrame([
         {"match_uid": "m1", "actual_winner": "1", "features_complete": "True",

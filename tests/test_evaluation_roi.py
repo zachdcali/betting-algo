@@ -8,6 +8,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 import numpy as np
 import pandas as pd
+import pytest
 from evaluation import roi
 
 
@@ -79,3 +80,59 @@ def test_kelly_drawdown_orders_mixed_timestamp_formats_chronologically():
         explicit, mode="kelly", kelly_mult=1.0, cap=0.05,
     )
     assert chronological["max_drawdown"] == explicitly_sorted["max_drawdown"]
+
+
+def test_kalshi_flat_roi_uses_raw_ask_and_subtracts_winner_fee():
+    rows = pd.DataFrame([{
+        "p1_prob": 0.80,
+        "kalshi_p1_ask": 0.60,
+        "kalshi_p2_ask": 0.41,
+        "kalshi_observation_at": "2026-07-17T10:00:00Z",
+        "y1": 1,
+    }])
+
+    result = roi.simulate_kalshi(rows)
+
+    expected_fee = 0.07 * (1.0 - 0.60)
+    expected_profit = (1.0 / 0.60) - 1.0 - expected_fee
+    assert result["n_candidates"] == 1
+    assert result["n_bets"] == 1
+    assert result["fees"] == pytest.approx(expected_fee)
+    assert result["pnl"] == pytest.approx(expected_profit)
+    assert result["roi"] == pytest.approx(expected_profit)
+    assert result["logging_since"] == "2026-07-17T10:00:00+00:00"
+
+
+def test_kalshi_asks_are_not_devigged_before_edge_selection():
+    # The asks sum to 1.05. Normalizing them would manufacture a larger P1 edge;
+    # the raw 0.62 hurdle leaves this 0.63 model below the two-point gate.
+    rows = pd.DataFrame([{
+        "p1_prob": 0.63,
+        "kalshi_p1_ask": 0.62,
+        "kalshi_p2_ask": 0.43,
+        "kalshi_observation_at": "2026-07-17T10:00:00Z",
+        "y1": 1,
+    }])
+
+    result = roi.simulate_kalshi(rows, edge_threshold=0.02)
+
+    assert result["n_candidates"] == 1
+    assert result["n_bets"] == 0
+    assert np.isnan(result["roi"])
+
+
+def test_kalshi_loss_is_one_flat_unit_without_fabricated_payout():
+    rows = pd.DataFrame([{
+        "p1_prob": 0.85,
+        "kalshi_p1_ask": 0.55,
+        "kalshi_p2_ask": 0.46,
+        "kalshi_observation_at": "2026-07-17T10:00:00Z",
+        "y1": 0,
+    }])
+
+    result = roi.simulate_kalshi(rows)
+
+    assert result["n_bets"] == 1
+    assert result["pnl"] == -1.0
+    assert result["roi"] == -1.0
+    assert result["fees"] == 0.0

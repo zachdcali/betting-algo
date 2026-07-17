@@ -22,9 +22,10 @@ MODEL_PROB_COLS = {
 IDENTITY_TERMINAL_STATUSES = {"identity_conflict", "superseded_identity"}
 SHADOW_FAMILIES = ["xgboost", "catboost", "lightgbm", "nn"]
 SCORED_COLUMNS = [
-    "match_uid", "model", "family", "p1_prob",
+    "match_uid", "run_id", "model", "family", "p1_prob",
     "p1_odds_decimal", "p2_odds_decimal", "y1",
     "is_gold", "is_complete", "prediction_time",
+    "kalshi_p1_ask", "kalshi_p2_ask", "kalshi_observation_at",
 ]
 
 
@@ -263,6 +264,74 @@ def load_odds_history(prod_dir: str) -> pd.DataFrame | None:
     """Load immutable market observations when the lineage file exists."""
     path = os.path.join(prod_dir, "odds_history.csv")
     return pd.read_csv(path, low_memory=False) if os.path.exists(path) else None
+
+
+def load_kalshi_history(prod_dir: str) -> pd.DataFrame | None:
+    """Load forward-only raw Kalshi observations when the lineage file exists."""
+    path = os.path.join(prod_dir, "kalshi_odds_history.csv")
+    return pd.read_csv(path, low_memory=False) if os.path.exists(path) else None
+
+
+def _kalshi_price_frame(history: pd.DataFrame | None) -> pd.DataFrame:
+    """Collapse two raw yes markets into one exact run/match ask pair."""
+    columns = [
+        "match_uid", "run_id", "kalshi_p1_ask", "kalshi_p2_ask",
+        "kalshi_observation_at",
+    ]
+    required = {
+        "match_uid", "run_id", "polled_at", "event_ticker", "market_ticker",
+        "board_side", "yes_ask_dollars", "match_status",
+    }
+    if history is None or history.empty or not required.issubset(history.columns):
+        return pd.DataFrame(columns=columns)
+    frame = history.copy()
+    frame = frame[
+        frame["match_status"].fillna("").astype(str).eq("matched")
+    ].copy()
+    frame["match_uid"] = frame["match_uid"].fillna("").astype(str).str.strip()
+    frame["run_id"] = frame["run_id"].fillna("").astype(str).str.strip()
+    frame["board_side"] = frame["board_side"].fillna("").astype(str).str.lower()
+    frame["_ask"] = pd.to_numeric(frame["yes_ask_dollars"], errors="coerce")
+    frame["_polled_at"] = pd.to_datetime(
+        frame["polled_at"], errors="coerce", utc=True, format="mixed",
+    )
+    frame = frame[
+        frame["match_uid"].ne("")
+        & frame["run_id"].ne("")
+        & frame["board_side"].isin(["p1", "p2"])
+        & frame["_ask"].between(0.0, 1.0, inclusive="neither")
+        & frame["_polled_at"].notna()
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict] = []
+    grouping = ["match_uid", "run_id", "_polled_at", "event_ticker"]
+    for keys, group in frame.groupby(grouping, sort=False):
+        if len(group) != 2 or group["market_ticker"].nunique() != 2:
+            continue
+        side_counts = group["board_side"].value_counts().to_dict()
+        if side_counts != {"p1": 1, "p2": 1}:
+            continue
+        asks = group.set_index("board_side")["_ask"]
+        rows.append({
+            "match_uid": keys[0],
+            "run_id": keys[1],
+            "kalshi_p1_ask": float(asks.loc["p1"]),
+            "kalshi_p2_ask": float(asks.loc["p2"]),
+            "kalshi_observation_at": keys[2],
+        })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    # A normal pipeline run polls once. If a manual run polls more than once,
+    # use its earliest complete pair so later price movement cannot improve an
+    # already-issued prediction retrospectively.
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["match_uid", "run_id", "kalshi_observation_at"], kind="stable")
+        .drop_duplicates(["match_uid", "run_id"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def _oriented_player_keys(row: pd.Series | dict) -> tuple[str, str] | None:
@@ -606,6 +675,7 @@ def _market_timing_rows(
                 continue
             rows.append({
                 "match_uid": uid,
+                "run_id": _identity_text(observation.get("run_id")),
                 "model": model,
                 "family": "market",
                 "p1_prob": float(observation["_market_probability"]),
@@ -627,8 +697,20 @@ def build_scored_frame(
     pred_log: pd.DataFrame,
     shadow_log: pd.DataFrame | None,
     odds_history: pd.DataFrame | None = None,
+    kalshi_history: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Long format: one row per (match_uid, model), settled rows with a non-null prob."""
+    kalshi_logging_start = ""
+    if (
+        kalshi_history is not None
+        and not kalshi_history.empty
+        and "polled_at" in kalshi_history
+    ):
+        observed_at = pd.to_datetime(
+            kalshi_history["polled_at"], errors="coerce", utc=True, format="mixed",
+        ).dropna()
+        if not observed_at.empty:
+            kalshi_logging_start = observed_at.min().isoformat()
     gt = build_ground_truth(pred_log)
     tiers = _tier_flags(pred_log).set_index("match_uid")
     settled = (
@@ -649,7 +731,8 @@ def build_scored_frame(
             if probability is None:
                 continue
             rows.append({
-                "match_uid": uid, "model": model, "family": model,
+                "match_uid": uid, "run_id": _identity_text(r.get("run_id")),
+                "model": model, "family": model,
                 "p1_prob": probability,
                 "p1_odds_decimal": _coerce_decimal_odds(r.get("p1_odds_decimal")),
                 "p2_odds_decimal": _coerce_decimal_odds(r.get("p2_odds_decimal")),
@@ -691,6 +774,7 @@ def build_scored_frame(
             label = str(r["_model_label"])
             rows.append({
                 "match_uid": uid,
+                "run_id": _identity_text(r.get("run_id")),
                 "model": f"shadow_{label}",
                 "family": r["model_family"],
                 "p1_prob": probability,
@@ -705,10 +789,24 @@ def build_scored_frame(
             })
 
     frame = pd.DataFrame(rows, columns=SCORED_COLUMNS)
+    prices = _kalshi_price_frame(kalshi_history)
+    if not prices.empty and not frame.empty:
+        frame = frame.drop(columns=[
+            "kalshi_p1_ask", "kalshi_p2_ask", "kalshi_observation_at",
+        ]).merge(
+            prices,
+            on=["match_uid", "run_id"],
+            how="left",
+            validate="many_to_one",
+        )
     # Preserve a typed empty result so a fully invalid hydrated cohort produces
     # an empty ledger instead of failing during boolean tier selection.
     frame["is_gold"] = frame["is_gold"].astype(bool)
     frame["is_complete"] = frame["is_complete"].astype(bool)
+    # Source-level start is deliberately independent of settlement. This lets
+    # the dashboard say "0 bets since <first poll>" while the first matched
+    # cohort is still pending instead of hiding the tiny forward-only sample.
+    frame.attrs["kalshi_logging_start"] = kalshi_logging_start
     return frame
 
 

@@ -684,6 +684,8 @@ test("metric signals respect direction, comparability, and calibration's target 
   assert.equal(Logic.metricSignal("roi_kelly", 0.001), "good");
   assert.equal(Logic.metricSignal("roi_kelly", -0.001), "bad");
   assert.equal(Logic.metricSignal("roi_kelly", 0), "neutral");
+  assert.equal(Logic.metricSignal("roi_flat_kalshi", 0.001), "good");
+  assert.equal(Logic.metricSignal("roi_flat_kalshi", -0.001), "bad");
   assert.equal(Logic.metricSignal("n", 249), "warning");
   assert.equal(Logic.metricSignal("n", 250), "neutral");
 });

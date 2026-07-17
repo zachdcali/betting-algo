@@ -742,7 +742,7 @@
     const number = numberOrNull(value);
     if (number === null) return "neutral";
     const key = clean(metric).toLowerCase();
-    if (["roi_flat", "roi_kelly", "pnl_flat", "pnl_kelly"].includes(key)) {
+    if (["roi_flat", "roi_kelly", "roi_flat_kalshi", "pnl_flat", "pnl_kelly", "pnl_flat_kalshi"].includes(key)) {
       if (number > 1e-12) return "good";
       if (number < -1e-12) return "bad";
       return "neutral";

@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-15.5";
+  const BUILD_ID = "2026-07-16.1";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -30,7 +30,10 @@
 
   const RUN_COLUMNS = [
     "run_id", "run_kind", "started_at", "completed_at", "status", "odds_rows_fetched",
-    "odds_rows_candidate", "feature_rows_total", "feature_rows_ok", "feature_rows_skipped",
+    "odds_rows_candidate", "kalshi_fetch_status", "kalshi_market_rows_fetched",
+    "kalshi_two_sided_events", "kalshi_observations_logged", "kalshi_matches_matched",
+    "kalshi_match_status_summary", "kalshi_fetch_error",
+    "feature_rows_total", "feature_rows_ok", "feature_rows_skipped",
     "prediction_rows_total", "prediction_rows_success", "prediction_rows_error",
     "bet_opportunities", "bets_logged", "settlement_candidates", "settlement_newly_settled",
     "auto_settle_status", "auto_settle_error", "canonical_ingest_status",
@@ -58,12 +61,21 @@
   const SNAPSHOT_COLUMNS = "*";
   const SKIPPED_COLUMNS = "*";
 
-  const MODEL_METRIC_COLUMNS = [
+  const LEGACY_MODEL_METRIC_COLUMNS = [
     "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
     "cal_slope", "cal_intercept", "roi_flat", "n_bets_flat", "pnl_flat",
     "win_rate_flat", "roi_kelly", "n_bets_kelly", "pnl_kelly",
     "max_drawdown_kelly", "generated_at", "metric_source", "dashboard_row_key",
     "sync_id",
+  ].join(",");
+
+  const MODEL_METRIC_COLUMNS = [
+    "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
+    "cal_slope", "cal_intercept", "roi_flat", "n_bets_flat", "pnl_flat",
+    "win_rate_flat", "roi_flat_kalshi", "n_bets_flat_kalshi",
+    "pnl_flat_kalshi", "win_rate_flat_kalshi", "kalshi_since",
+    "roi_kelly", "n_bets_kelly", "pnl_kelly", "max_drawdown_kelly",
+    "generated_at", "metric_source", "dashboard_row_key", "sync_id",
   ].join(",");
 
   const CALIBRATION_COLUMNS = [
@@ -83,6 +95,7 @@
     calibration: [],
     meta: {
       odds: null,
+      kalshi: null,
       shadows: null,
       features: null,
       snapshots_total: null,
@@ -322,6 +335,9 @@
     const calibrationPublished = Object.prototype.hasOwnProperty.call(
       publishedCounts, "dash_model_calibration",
     );
+    const kalshiPublished = Object.prototype.hasOwnProperty.call(
+      publishedCounts, "dash_kalshi_odds_history",
+    );
     const generationFilter = { sync_id: syncId };
     const currentRunFilter = acceptedRunId ? { sync_id: syncId, run_id: acceptedRunId } : null;
 
@@ -349,11 +365,19 @@
       refreshResource("runs", () => fetchAll("dash_runs", RUN_COLUMNS, "started_at.desc.nullslast,run_id.desc", generationFilter)),
       refreshResource("bets", () => fetchAll("dash_bets", BET_COLUMNS, "timestamp.desc.nullslast,bet_id.desc", generationFilter)),
       refreshResource("bankroll", () => fetchAll("dash_bankroll", BANKROLL_COLUMNS, "timestamp.desc.nullslast,dashboard_row_key.desc", generationFilter)),
-      refreshResource("metrics", () => fetchAll("dash_model_metrics", MODEL_METRIC_COLUMNS, "tier.asc,log_loss.asc.nullslast,model.asc", generationFilter)),
+      refreshResource("metrics", () => fetchAll(
+        "dash_model_metrics",
+        kalshiPublished ? MODEL_METRIC_COLUMNS : LEGACY_MODEL_METRIC_COLUMNS,
+        "tier.asc,log_loss.asc.nullslast,model.asc",
+        generationFilter,
+      )),
       refreshResource("calibration", () => calibrationPublished
         ? fetchAll("dash_model_calibration", CALIBRATION_COLUMNS, "tier.asc,model.asc,bin_index.asc", generationFilter)
         : Promise.resolve([])),
       refreshMeta("odds", () => fetchTableMeta("dash_odds_history", "logged_at,odds_scraped_at,run_id,match_uid", "logged_at.desc.nullslast", generationFilter)),
+      refreshMeta("kalshi", () => kalshiPublished
+        ? fetchTableMeta("dash_kalshi_odds_history", "polled_at,run_id,match_uid,market_ticker", "polled_at.desc.nullslast", generationFilter)
+        : Promise.resolve({ count: 0, latest: null })),
       refreshMeta("shadows", () => fetchTableMeta("dash_shadow", "logged_at,run_id,match_uid,model_version", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("features", () => fetchTableMeta("dash_features", "logged_at,run_id", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("snapshots_total", () => fetchTableMeta("dash_snapshots", "logged_at,run_id,prediction_uid", "logged_at.desc.nullslast", generationFilter)),
@@ -516,6 +540,9 @@
     };
     if (Object.prototype.hasOwnProperty.call(expected, "dash_model_calibration")) {
       actual.dash_model_calibration = arrayCount("calibration");
+    }
+    if (Object.prototype.hasOwnProperty.call(expected, "dash_kalshi_odds_history")) {
+      Object.assign(actual, { dash_kalshi_odds_history: metaCount("kalshi") });
     }
     const comparison = Logic.compareManifestCounts(expected, actual);
     return { ...comparison, expected, actual };
@@ -1280,7 +1307,7 @@
     clear(body);
     const row = element("tr");
     const cell = element("td", null, message);
-    cell.colSpan = 13;
+    cell.colSpan = 12;
     row.appendChild(cell);
     body.appendChild(row);
     clear(byId("metric-chart"));
@@ -1300,7 +1327,7 @@
   }
 
   function metricDisplay(metric, value) {
-    if (["accuracy", "auc", "roi_flat", "roi_kelly"].includes(metric)) return formatPercent(value);
+    if (["accuracy", "auc", "roi_flat", "roi_kelly", "roi_flat_kalshi"].includes(metric)) return formatPercent(value);
     if (metric === "max_drawdown_kelly") return formatMoney(value);
     if (metric === "cal_slope") return metricValue(value, 3);
     return metricValue(value, 4);
@@ -1336,6 +1363,9 @@
     const nnMetric = selectedTierRows.find(
       (row) => Logic.clean(row.model).toLowerCase() === "nn",
     );
+    const nnKalshiSince = nnMetric
+      ? Logic.parseTimestamp(nnMetric.kalshi_since)
+      : null;
     const decidedBets = store.bets.filter((bet) =>
       ["win", "loss"].includes(Logic.normalizeBetOutcome(bet)),
     );
@@ -1352,7 +1382,8 @@
     const stages = [
       ["Settled prediction rows", formatNumber(settledPredictions.length), "outcome known; not automatically unique or GOLD"],
       ["Selected model cohort", selectedCohort, cohortDescription],
-      ["NN counterfactual bets", nnMetric ? formatNumber(nnMetric.n_bets_kelly) : "—", "simulated rule; not placed paper bets"],
+      ["NN flat bets · Bovada", nnMetric ? formatNumber(nnMetric.n_bets_flat) : "—", "counterfactual at logged sportsbook odds"],
+      ["NN flat bets · Kalshi", nnMetric ? formatNumber(nnMetric.n_bets_flat_kalshi) : "—", nnKalshiSince === null ? "awaiting forward matched settlements" : `vig-free ask track since ${formatDate(nnKalshiSince)}`],
       ["Placed bets · exact", formatNumber(exactBets.length), "explicit metric_eligible attribution"],
       ["Placed bets · accounting only", formatNumber(accountingOnly.length), "P&L retained; excluded from model metrics"],
       ["Placed bets · legacy unknown", formatNumber(unknownAttribution), "eligibility was never asserted"],
@@ -1389,7 +1420,7 @@
     const comparable = tier.includes("_intersection") || tier.endsWith("_market_timing");
     const baseline = performanceBaseline(benchmarkRows, tier);
     const baselineValue = baseline ? Logic.numberOrNull(baseline[metric]) : null;
-    const diverging = ["roi_flat", "roi_kelly"].includes(metric);
+    const diverging = ["roi_flat", "roi_kelly", "roi_flat_kalshi"].includes(metric);
     const rawValues = values.map((item) => item.value);
     const maxAbs = Math.max(...rawValues.map(Math.abs), 1e-9);
     const min = Math.min(...rawValues);
@@ -1418,7 +1449,8 @@
     });
     const metricLabels = {
       log_loss: "Log loss", brier: "Brier", ece: "ECE", cal_slope: "Calibration slope",
-      accuracy: "Accuracy", auc: "AUC", roi_flat: "Flat ROI", roi_kelly: "Counterfactual Kelly ROI",
+      accuracy: "Accuracy", auc: "AUC", roi_flat: "Flat ROI (Bovada)",
+      roi_flat_kalshi: "Flat ROI (Kalshi, vig-free)",
     };
     setText("metric-chart-note", comparable
       ? `${metricLabels[metric] || metric} uses one common match cohort. Color is relative to ${tier.endsWith("_market_timing") ? "first observed market" : "the market"}, except ROI (zero) and calibration slope (target 1.0).`
@@ -1645,12 +1677,17 @@
         row.appendChild(metricCell(field, metric[field], baseline && baseline[field], comparable));
       });
       row.appendChild(element("td", null, formatNumber(metric.n_bets_flat)));
-      row.appendChild(metricCell("roi_kelly", metric.roi_kelly, baseline && baseline.roi_kelly, comparable));
-      row.appendChild(element("td", null, formatNumber(metric.n_bets_kelly)));
       row.appendChild(metricCell(
-        "max_drawdown_kelly", metric.max_drawdown_kelly,
-        baseline && baseline.max_drawdown_kelly, comparable,
+        "roi_flat_kalshi", metric.roi_flat_kalshi,
+        baseline && baseline.roi_flat_kalshi, comparable,
       ));
+      const kalshiSample = element("td", null, formatNumber(metric.n_bets_flat_kalshi));
+      const kalshiSince = Logic.parseTimestamp(metric.kalshi_since);
+      kalshiSample.appendChild(element(
+        "span", "cell-secondary",
+        kalshiSince === null ? "awaiting forward sample" : `since ${formatDate(kalshiSince)}`,
+      ));
+      row.appendChild(kalshiSample);
       body.appendChild(row);
     });
   }
@@ -1859,6 +1896,7 @@
       ["Run audit", store.runs.length, health.latestAttempt ? Logic.clean(health.latestAttempt.run.status) : "latest attempt unavailable"],
       ["Paper bets", store.bets.length, accountState.verified ? `${pending.active.length} active · ${pending.overdue.length} overdue · ${pending.unverified.length} time unverified` : `account state withheld: ${accountState.reason}`],
       ["Odds observations", store.meta.odds && store.meta.odds.count, store.meta.odds && store.meta.odds.latest ? formatDateTime(store.meta.odds.latest.logged_at) : "unavailable"],
+      ["Kalshi observations", store.meta.kalshi && store.meta.kalshi.count, store.meta.kalshi && store.meta.kalshi.latest ? `read-only · ${formatDateTime(store.meta.kalshi.latest.polled_at)}` : "forward logger awaiting first accepted poll"],
       ["Shadow observations", store.meta.shadows && store.meta.shadows.count, "secondary; loaded per match"],
       ["Model metric rows", store.metrics.length, `${new Set(store.metrics.map((row) => Logic.clean(row.model))).size} promoted, benchmark, and shadow identities`],
       ["Calibration bins", store.calibration.length, store.calibration.length ? "authoritative ledger reliability projection" : "awaiting first compatible generation"],
