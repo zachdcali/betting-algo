@@ -148,6 +148,7 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(client, /n_bets_flat_kalshi/);
   assert.match(client, /kalshi_since/);
   assert.match(client, /kalshiPublished \? MODEL_METRIC_COLUMNS : LEGACY_MODEL_METRIC_COLUMNS/);
+  assert.match(client, /kalshiPublished \? RUN_COLUMNS : LEGACY_RUN_COLUMNS/);
   assert.match(client, /metricCell\(\s*"roi_flat_kalshi", metric\.roi_flat_kalshi/);
   assert.match(client, /startsWith\("shadow_"\)/);
   for (const tier of ["gold_intersection", "complete_intersection", "gold", "complete"]) {

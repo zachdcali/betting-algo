@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-16.1";
+  const BUILD_ID = "2026-07-16.2";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -26,6 +26,17 @@
     "latest_rf_model_version_seen", "feature_snapshot_id", "latest_feature_snapshot_id",
     "prediction_uid", "latest_prediction_uid", "odds_scraped_at", "latest_odds_scraped_at",
     "match_start_at_utc", "latest_match_start_at_utc",
+  ].join(",");
+
+  const LEGACY_RUN_COLUMNS = [
+    "run_id", "run_kind", "started_at", "completed_at", "status", "odds_rows_fetched",
+    "odds_rows_candidate", "feature_rows_total", "feature_rows_ok", "feature_rows_skipped",
+    "prediction_rows_total", "prediction_rows_success", "prediction_rows_error",
+    "bet_opportunities", "bets_logged", "settlement_candidates", "settlement_newly_settled",
+    "auto_settle_status", "auto_settle_error", "canonical_ingest_status",
+    "canonical_ingest_rows", "canonical_ingest_error", "reconcile_status",
+    "reconcile_error", "account_equity", "pending_exposure", "available_bankroll",
+    "exposure_gate_status", "error_message",
   ].join(",");
 
   const RUN_COLUMNS = [
@@ -362,7 +373,12 @@
           )).map((row) => Logic.clean(row.feature_snapshot_id)).filter(Boolean),
         }),
       ),
-      refreshResource("runs", () => fetchAll("dash_runs", RUN_COLUMNS, "started_at.desc.nullslast,run_id.desc", generationFilter)),
+      refreshResource("runs", () => fetchAll(
+        "dash_runs",
+        kalshiPublished ? RUN_COLUMNS : LEGACY_RUN_COLUMNS,
+        "started_at.desc.nullslast,run_id.desc",
+        generationFilter,
+      )),
       refreshResource("bets", () => fetchAll("dash_bets", BET_COLUMNS, "timestamp.desc.nullslast,bet_id.desc", generationFilter)),
       refreshResource("bankroll", () => fetchAll("dash_bankroll", BANKROLL_COLUMNS, "timestamp.desc.nullslast,dashboard_row_key.desc", generationFilter)),
       refreshResource("metrics", () => fetchAll(
