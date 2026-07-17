@@ -45,6 +45,11 @@ CALIBRATION_COLUMNS = [
     "frac_pos", "count",
 ]
 
+ROC_COLUMNS = [
+    "model", "tier", "point_index", "threshold", "false_positive_rate",
+    "true_positive_rate", "positive_count", "negative_count",
+]
+
 
 def _score_block(model: str, tier: str, g: pd.DataFrame) -> dict:
     m = metrics.compute_all(g["y1"].values, g["p1_prob"].values)
@@ -188,49 +193,56 @@ def build_live_ledger(
     return result
 
 
+def _aggregate_block(
+    scored: pd.DataFrame,
+    live: pd.DataFrame,
+    *,
+    model: str,
+    tier: str,
+) -> pd.DataFrame:
+    """Reconstruct the exact scored rows behind one materialized aggregate."""
+    base_tier, tour_segment = _split_tour_tier(tier)
+    scoped = scored
+    if tour_segment:
+        if "tour_segment" not in scored.columns:
+            return scored.iloc[0:0]
+        scoped = scored[scored["tour_segment"].eq(tour_segment)]
+    if base_tier == "gold":
+        return scoped[scoped["is_gold"] & scoped["model"].eq(model)]
+    if base_tier == "complete":
+        return scoped[scoped["is_complete"] & scoped["model"].eq(model)]
+    if base_tier == "settled_market_timing":
+        common = _unrestricted_intersection_uids(
+            scoped, ["market_open", "market_close"]
+        )
+        return scoped[
+            scoped["model"].eq(model) & scoped["match_uid"].isin(common)
+        ]
+
+    tier_col = "is_gold" if base_tier.startswith("gold_") else "is_complete"
+    if base_tier.endswith("_all_model_intersection"):
+        models = sorted(
+            value for value in live.loc[live["tier"].eq(tier), "model"]
+        )
+    elif base_tier.endswith("_market_timing"):
+        models = ["market_open", "market_close"]
+    else:
+        models = CORE_MODELS
+    common = cohorts.intersection_uids(scoped, models, tier_col)
+    return scoped[
+        scoped[tier_col]
+        & scoped["model"].eq(model)
+        & scoped["match_uid"].isin(common)
+    ]
+
+
 def build_calibration_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.DataFrame:
     """Materialize reliability bins for every authoritative aggregate row."""
     rows: list[dict] = []
     for _, aggregate in live.iterrows():
         model = str(aggregate["model"])
         tier = str(aggregate["tier"])
-        base_tier, tour_segment = _split_tour_tier(tier)
-        scoped = scored
-        if tour_segment:
-            if "tour_segment" not in scored.columns:
-                continue
-            scoped = scored[scored["tour_segment"].eq(tour_segment)]
-        if base_tier == "gold":
-            block = scoped[scoped["is_gold"] & scoped["model"].eq(model)]
-        elif base_tier == "complete":
-            block = scoped[
-                scoped["is_complete"] & scoped["model"].eq(model)
-            ]
-        elif base_tier == "settled_market_timing":
-            common = _unrestricted_intersection_uids(
-                scoped, ["market_open", "market_close"]
-            )
-            block = scoped[
-                scoped["model"].eq(model) & scoped["match_uid"].isin(common)
-            ]
-        else:
-            tier_col = (
-                "is_gold" if base_tier.startswith("gold_") else "is_complete"
-            )
-            if base_tier.endswith("_all_model_intersection"):
-                models = sorted(
-                    value for value in live.loc[live["tier"].eq(tier), "model"]
-                )
-            elif base_tier.endswith("_market_timing"):
-                models = ["market_open", "market_close"]
-            else:
-                models = CORE_MODELS
-            common = cohorts.intersection_uids(scoped, models, tier_col)
-            block = scoped[
-                scoped[tier_col]
-                & scoped["model"].eq(model)
-                & scoped["match_uid"].isin(common)
-            ]
+        block = _aggregate_block(scored, live, model=model, tier=tier)
         if block.empty:
             continue
         reliability = metrics.reliability_table(
@@ -248,6 +260,34 @@ def build_calibration_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.Dat
                 "count": int(bin_row["count"]),
             })
     return pd.DataFrame(rows, columns=CALIBRATION_COLUMNS)
+
+
+def build_roc_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.DataFrame:
+    """Materialize honest ROC threshold sweeps for authoritative cohorts."""
+    rows: list[dict] = []
+    for _, aggregate in live.iterrows():
+        model = str(aggregate["model"])
+        tier = str(aggregate["tier"])
+        block = _aggregate_block(scored, live, model=model, tier=tier)
+        if block.empty:
+            continue
+        curve = metrics.roc_table(block["y1"].values, block["p1_prob"].values)
+        if curve.empty:
+            continue
+        positive_count = int((block["y1"] == 1).sum())
+        negative_count = int((block["y1"] == 0).sum())
+        for _, point in curve.iterrows():
+            rows.append({
+                "model": model,
+                "tier": tier,
+                "point_index": int(point["point_index"]),
+                "threshold": point["threshold"],
+                "false_positive_rate": point["false_positive_rate"],
+                "true_positive_rate": point["true_positive_rate"],
+                "positive_count": positive_count,
+                "negative_count": negative_count,
+            })
+    return pd.DataFrame(rows, columns=ROC_COLUMNS)
 
 
 # ---------------------------------------------------------------------------

@@ -509,6 +509,38 @@ def _build_model_calibration(
     return calibration
 
 
+def _build_model_roc(
+    sync_id: str,
+    pred_log: pd.DataFrame,
+    shadow_log: pd.DataFrame | None,
+    odds_history: pd.DataFrame | None,
+    metrics_frame: pd.DataFrame,
+    kalshi_history: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Materialize manifest-pinned ROC points from the verified scored frame."""
+    from evaluation import cohorts
+    from evaluation.ledger import ROC_COLUMNS, build_roc_ledger
+
+    scored = metrics_frame.attrs.get("scored_frame")
+    if not isinstance(scored, pd.DataFrame):
+        scored = cohorts.build_scored_frame(
+            pred_log, shadow_log, odds_history, kalshi_history,
+        )
+    roc = build_roc_ledger(scored, metrics_frame)
+    if roc.empty:
+        roc = pd.DataFrame(columns=ROC_COLUMNS)
+    roc["generated_at"] = datetime.now(timezone.utc).isoformat(
+        timespec="microseconds"
+    )
+    roc["roc_row_key"] = (
+        roc.get("tier", pd.Series("", index=roc.index)).astype(str)
+        + ":" + roc.get("model", pd.Series("", index=roc.index)).astype(str)
+        + ":" + roc.get("point_index", pd.Series("", index=roc.index)).astype(str)
+    )
+    roc["sync_id"] = sync_id
+    return roc
+
+
 def _write_manifest(cur, *, sync_id: str, status: str,
                     latest_attempt_run_id: str, accepted_prediction_run_id: str,
                     counts: dict[str, int], missing_files: list[str], error: str = "") -> None:
@@ -598,6 +630,16 @@ def _sync_dashboard_tables_once(verbose: bool = True) -> dict[str, int]:
                 )
                 planned["dash_model_calibration"] = model_calibration
                 counts["dash_model_calibration"] = len(model_calibration)
+                model_roc = _build_model_roc(
+                    sync_id,
+                    pred_log=planned.get("dash_predictions", pd.DataFrame()),
+                    shadow_log=planned.get("dash_shadow"),
+                    odds_history=planned.get("dash_odds_history"),
+                    kalshi_history=planned.get("dash_kalshi_odds_history"),
+                    metrics_frame=model_metrics,
+                )
+                planned["dash_model_roc"] = model_roc
+                counts["dash_model_roc"] = len(model_roc)
 
                 for table, frame in planned.items():
                     _replace_table(cur, table, frame)

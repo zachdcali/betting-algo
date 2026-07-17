@@ -8,6 +8,7 @@ if str(PRODUCTION_DIR) not in sys.path:
 
 import numpy as np
 import pandas as pd
+import pytest
 from evaluation import ledger, metrics
 
 
@@ -77,6 +78,36 @@ def test_tour_segment_ledgers_preserve_overall_and_materialize_common_cohorts():
             & calibration["model"].eq("nn")
         ]
         assert int(bins["count"].sum()) == expected_n
+
+    roc = ledger.build_roc_ledger(scored, live)
+    for segment, expected_n in [("atp", 30), ("challenger", 25), ("itf", 25)]:
+        points = roc[
+            roc["tier"].eq(f"gold_intersection__{segment}")
+            & roc["model"].eq("nn")
+        ].sort_values("point_index")
+        assert not points.empty
+        assert set(points["positive_count"] + points["negative_count"]) == {expected_n}
+        assert tuple(points.iloc[0][["false_positive_rate", "true_positive_rate"]]) == (0.0, 0.0)
+        assert tuple(points.iloc[-1][["false_positive_rate", "true_positive_rate"]]) == (1.0, 1.0)
+
+
+def test_roc_ledger_area_matches_scalar_auc_and_one_class_is_undefined():
+    scored = _scored()
+    live = ledger.build_live_ledger(scored)
+    roc = ledger.build_roc_ledger(scored, live)
+    points = roc[
+        roc["model"].eq("nn") & roc["tier"].eq("gold")
+    ].sort_values("point_index")
+    expected_auc = float(
+        live[live["model"].eq("nn") & live["tier"].eq("gold")].iloc[0]["auc"]
+    )
+    assert np.trapezoid(
+        points["true_positive_rate"], points["false_positive_rate"]
+    ) == pytest.approx(expected_auc)
+
+    one_class = scored.copy()
+    one_class["y1"] = 1
+    assert metrics.roc_table(one_class["y1"], one_class["p1_prob"]).empty
 
 
 def test_write_outputs(tmp_path):

@@ -464,6 +464,16 @@ def test_calibration_reuses_the_verified_scored_frame_from_materialized_metrics(
     assert calibration["calibration_row_key"].is_unique
     assert set(calibration["sync_id"]) == {"sync_verified"}
 
+    roc = dashboard_sync._build_model_roc(
+        "sync_verified", pred_log=pd.DataFrame(), shadow_log=pd.DataFrame(),
+        odds_history=pd.DataFrame(), metrics_frame=metrics_frame,
+    )
+    nn_roc = roc[roc["model"].eq("nn") & roc["tier"].eq("gold")]
+    assert not nn_roc.empty
+    assert set(nn_roc["positive_count"] + nn_roc["negative_count"]) == {2}
+    assert roc["roc_row_key"].is_unique
+    assert set(roc["sync_id"]) == {"sync_verified"}
+
 
 def test_sync_publishes_calibration_in_same_generation_and_manifest_counts(monkeypatch):
     class FakeCursor:
@@ -513,11 +523,21 @@ def test_sync_publishes_calibration_in_same_generation_and_manifest_counts(monke
             {"model": "nn", "tier": "gold", "bin_index": 1, "sync_id": sync_id},
         ])
 
+    def fake_roc(sync_id, *_args, metrics_frame, **_kwargs):
+        assert sync_id == generation["sync_id"]
+        assert set(metrics_frame["sync_id"]) == {sync_id}
+        return pd.DataFrame([
+            {"model": "nn", "tier": "gold", "point_index": 0, "sync_id": sync_id},
+            {"model": "nn", "tier": "gold", "point_index": 1, "sync_id": sync_id},
+            {"model": "nn", "tier": "gold", "point_index": 2, "sync_id": sync_id},
+        ])
+
     monkeypatch.setattr(dashboard_sync, "_build_model_metrics", fake_metrics)
     monkeypatch.setattr(
         dashboard_sync, "_build_model_calibration",
         fake_calibration,
     )
+    monkeypatch.setattr(dashboard_sync, "_build_model_roc", fake_roc)
 
     published = {}
     monkeypatch.setattr(
@@ -533,12 +553,19 @@ def test_sync_publishes_calibration_in_same_generation_and_manifest_counts(monke
 
     counts = dashboard_sync.sync_dashboard_tables(verbose=False)
 
-    assert counts == {"dash_model_metrics": 1, "dash_model_calibration": 2}
-    assert set(published) == {"dash_model_metrics", "dash_model_calibration"}
+    assert counts == {
+        "dash_model_metrics": 1,
+        "dash_model_calibration": 2,
+        "dash_model_roc": 3,
+    }
+    assert set(published) == {
+        "dash_model_metrics", "dash_model_calibration", "dash_model_roc",
+    }
     assert manifest["counts"] == counts
     assert manifest["sync_id"] == generation["sync_id"]
     assert set(published["dash_model_metrics"]["sync_id"]) == {manifest["sync_id"]}
     assert set(published["dash_model_calibration"]["sync_id"]) == {manifest["sync_id"]}
+    assert set(published["dash_model_roc"]["sync_id"]) == {manifest["sync_id"]}
     assert connection.committed
 
 
