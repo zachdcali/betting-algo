@@ -33,6 +33,8 @@ LIVE_COLUMNS = [
     "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
     "cal_slope", "cal_intercept",
     "roi_flat", "n_bets_flat", "pnl_flat", "win_rate_flat",
+    "roi_flat_kalshi", "n_bets_flat_kalshi", "pnl_flat_kalshi",
+    "win_rate_flat_kalshi", "kalshi_since",
     "roi_kelly", "n_bets_kelly", "pnl_kelly", "max_drawdown_kelly",
 ]
 
@@ -45,6 +47,7 @@ CALIBRATION_COLUMNS = [
 def _score_block(model: str, tier: str, g: pd.DataFrame) -> dict:
     m = metrics.compute_all(g["y1"].values, g["p1_prob"].values)
     flat = roi.simulate(g, mode="flat")
+    kalshi_flat = roi.simulate_kalshi(g)
     kelly = roi.simulate(g, mode="kelly")
     return {
         "model": model, "tier": tier,
@@ -53,6 +56,11 @@ def _score_block(model: str, tier: str, g: pd.DataFrame) -> dict:
         "cal_slope": m["cal_slope"], "cal_intercept": m["cal_intercept"],
         "roi_flat": flat["roi"], "n_bets_flat": flat["n_bets"],
         "pnl_flat": flat["pnl"], "win_rate_flat": flat["win_rate"],
+        "roi_flat_kalshi": kalshi_flat["roi"],
+        "n_bets_flat_kalshi": kalshi_flat["n_bets"],
+        "pnl_flat_kalshi": kalshi_flat["pnl"],
+        "win_rate_flat_kalshi": kalshi_flat["win_rate"],
+        "kalshi_since": kalshi_flat["logging_since"],
         "roi_kelly": kelly["roi"], "n_bets_kelly": kelly["n_bets"],
         "pnl_kelly": kelly["pnl"], "max_drawdown_kelly": kelly["max_drawdown"],
     }
@@ -118,7 +126,12 @@ def build_live_ledger(
     ]
     for model, g in settled_timing.groupby("model"):
         rows.append(_score_block(model, "settled_market_timing", g))
-    return pd.DataFrame(rows, columns=LIVE_COLUMNS)
+    result = pd.DataFrame(rows, columns=LIVE_COLUMNS)
+    logging_start = str(scored.attrs.get("kalshi_logging_start") or "")
+    if logging_start and not result.empty:
+        result["kalshi_since"] = result["kalshi_since"].fillna("")
+        result.loc[result["kalshi_since"].eq(""), "kalshi_since"] = logging_start
+    return result
 
 
 def build_calibration_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.DataFrame:
@@ -212,8 +225,9 @@ def _verdict(live: pd.DataFrame) -> str:
         lines.append(
             f"- **{r['model']}** — log_loss {_fmt(r['log_loss'])}, brier {_fmt(r['brier'])}, "
             f"acc {_fmt(r['accuracy'])}, AUC {_fmt(r['auc'])}, "
-            f"ROI(flat) {_fmt(100*r['roi_flat'],1)}% over {int(r['n_bets_flat'])} bets, "
-            f"ROI(Kelly) {_fmt(100*r['roi_kelly'],1)}%"
+            f"ROI(flat Bovada) {_fmt(100*r['roi_flat'],1)}% over {int(r['n_bets_flat'])} bets, "
+            f"ROI(flat Kalshi) {_fmt(100*r['roi_flat_kalshi'],1)}% over "
+            f"{int(r['n_bets_flat_kalshi'])} bets"
         )
     nn = block[block.model == "nn"]
     mkt = block[block.model == "market"]
@@ -253,7 +267,8 @@ def _verdict(live: pd.DataFrame) -> str:
         pos = gold[gold["roi_flat"] > 0].sort_values("roi_flat", ascending=False)
         if not pos.empty:
             items = "; ".join(
-                f"`{r['model']}` {_fmt(100*r['roi_flat'],1)}% flat / {_fmt(100*r['roi_kelly'],1)}% Kelly "
+                f"`{r['model']}` {_fmt(100*r['roi_flat'],1)}% flat Bovada / "
+                f"{_fmt(100*r['roi_flat_kalshi'],1)}% flat Kalshi "
                 f"({int(r['n_bets_flat'])} bets, n={int(r['n'])})"
                 for _, r in pos.iterrows()
             )
@@ -268,7 +283,8 @@ def _verdict(live: pd.DataFrame) -> str:
 
 def _report_md(live: pd.DataFrame, offline_df: pd.DataFrame, run_date: str) -> str:
     show = ["model", "n", "accuracy", "auc", "log_loss", "brier", "ece",
-            "cal_slope", "roi_flat", "roi_kelly", "n_bets_flat"]
+            "cal_slope", "roi_flat", "n_bets_flat", "roi_flat_kalshi",
+            "n_bets_flat_kalshi", "kalshi_since"]
     parts = [
         f"# Model Ledger snapshot — {run_date}",
         "",
@@ -353,7 +369,10 @@ def main(argv=None):
         pred_log = cohorts.load_prediction_log(args.prod_dir)
         shadow_log = cohorts.load_shadow_log(args.prod_dir)
     odds_history = None if args.db else cohorts.load_odds_history(args.prod_dir)
-    scored = cohorts.build_scored_frame(pred_log, shadow_log, odds_history)
+    kalshi_history = None if args.db else cohorts.load_kalshi_history(args.prod_dir)
+    scored = cohorts.build_scored_frame(
+        pred_log, shadow_log, odds_history, kalshi_history,
+    )
     live = build_live_ledger(scored)
     offline_df = offline.discover_experiment_metrics(args.experiments_root)
     write_outputs(live, offline_df, args.out_dir, args.report, args.run_date)

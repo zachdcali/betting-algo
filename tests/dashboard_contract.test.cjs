@@ -123,7 +123,7 @@ test("slate wording separates valid decision inputs from available capital", () 
 
 test("manifest counts cover every published operational projection", () => {
   for (const table of [
-    "dash_predictions", "dash_odds_history", "dash_shadow", "dash_runs", "dash_bets",
+    "dash_predictions", "dash_odds_history", "dash_kalshi_odds_history", "dash_shadow", "dash_runs", "dash_bets",
     "dash_snapshots", "dash_skipped_live_matches", "dash_settlement_audit", "dash_features",
     "dash_bankroll", "dash_sessions", "dash_model_metrics",
   ]) {
@@ -134,7 +134,7 @@ test("manifest counts cover every published operational projection", () => {
 });
 
 test("performance UI consumes ledger rows without client metric math", () => {
-  assert.match(client, /fetchAll\("dash_model_metrics"[^\n]+generationFilter\)/);
+  assert.match(client, /fetchAll\(\s*"dash_model_metrics",[\s\S]{0,300}generationFilter/);
   assert.doesNotMatch(client, /Math\.log|expectedCalibrationError|scoreDiagnosticCohort|buildCommonCohort/);
   assert.match(html, /scores below are current for the accepted dashboard sync shown on this page/);
   assert.match(html, /Open dated full ledger snapshot/);
@@ -144,15 +144,21 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(html, /Current manifest-pinned model metrics for the selected accepted dashboard generation/);
   assert.match(client, /Current dashboard authority: ledger metrics match accepted sync \$\{manifestSyncId\}/);
   assert.match(client, /The dated Markdown report may lag this generation/);
-  assert.match(client, /if \(metric === "max_drawdown_kelly"\) return formatMoney\(value\)/);
-  assert.match(client, /metricCell\(\s*"max_drawdown_kelly", metric\.max_drawdown_kelly/);
+  assert.match(client, /roi_flat_kalshi/);
+  assert.match(client, /n_bets_flat_kalshi/);
+  assert.match(client, /kalshi_since/);
+  assert.match(client, /kalshiPublished \? MODEL_METRIC_COLUMNS : LEGACY_MODEL_METRIC_COLUMNS/);
+  assert.match(client, /metricCell\(\s*"roi_flat_kalshi", metric\.roi_flat_kalshi/);
   assert.match(client, /startsWith\("shadow_"\)/);
   for (const tier of ["gold_intersection", "complete_intersection", "gold", "complete"]) {
     assert.match(html, new RegExp(`<option value="${tier}"`));
   }
   const performanceHead = html.match(/<table id="performance-table">[\s\S]*?<thead><tr>([\s\S]*?)<\/tr><\/thead>/);
   assert.ok(performanceHead, "performance table header must exist");
-  assert.equal((performanceHead[1].match(/<th\b/g) || []).length, 13);
+  assert.equal((performanceHead[1].match(/<th\b/g) || []).length, 12);
+  assert.match(performanceHead[1], /Flat ROI \(Kalshi, vig-free\)/);
+  assert.match(performanceHead[1], /Kalshi bets since/);
+  assert.doesNotMatch(performanceHead[1], /Kelly/);
 });
 
 test("performance UI separates prediction, counterfactual, and placed-bet populations", () => {
@@ -161,7 +167,8 @@ test("performance UI separates prediction, counterfactual, and placed-bet popula
   for (const label of [
     "Settled prediction rows",
     "Selected model cohort",
-    "NN counterfactual bets",
+    "NN flat bets · Bovada",
+    "NN flat bets · Kalshi",
     "Placed bets · exact",
     "Placed bets · accounting only",
     "Placed bets · legacy unknown",

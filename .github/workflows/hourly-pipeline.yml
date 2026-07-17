@@ -90,7 +90,7 @@ jobs:
           # -f: production/logs is gitignored locally, but cloud runs MUST persist
           # the shadow predictions + audit trail or they die with the runner VM
           git add -A -f production/prediction_log.csv production/prediction_snapshots.csv \
-                        production/odds_history.csv production/logs \
+                        production/odds_history.csv production/kalshi_odds_history.csv production/logs \
                         ':(exclude)production/logs/betting.db' data/atp_rankings.csv \
                         data/atp_heights.json data/atp_hands.json || true
           PROFILE_LOOKUP_META=data/atp_profile_lookup_meta.json

@@ -30,7 +30,8 @@ def test_build_live_ledger_columns_and_ranking():
     live = ledger.build_live_ledger(_scored())
     assert {"nn", "xgb", "rf", "market"} <= set(live["model"])
     for col in ["accuracy", "log_loss", "brier", "auc", "ece",
-                "roi_flat", "roi_kelly", "n", "tier"]:
+                "roi_flat", "roi_flat_kalshi", "n_bets_flat_kalshi",
+                "kalshi_since", "roi_kelly", "n", "tier"]:
         assert col in live.columns
     # gold tier present, plus intersection tier
     assert "gold" in set(live["tier"])
@@ -38,6 +39,17 @@ def test_build_live_ledger_columns_and_ranking():
     # xgb is the most skillful synthetic model -> lower log loss than nn on gold
     g = live[live.tier == "gold"].set_index("model")
     assert g.loc["xgb", "log_loss"] < g.loc["nn", "log_loss"]
+
+
+def test_live_ledger_discloses_source_start_before_first_kalshi_bet():
+    scored = _scored()
+    scored["kalshi_p1_ask"] = float("nan")
+    scored["kalshi_p2_ask"] = float("nan")
+    scored["kalshi_observation_at"] = pd.NaT
+    scored.attrs["kalshi_logging_start"] = "2026-07-17T01:02:03+00:00"
+    live = ledger.build_live_ledger(scored)
+    assert set(live["n_bets_flat_kalshi"]) == {0}
+    assert set(live["kalshi_since"]) == {"2026-07-17T01:02:03+00:00"}
 
 
 def test_write_outputs(tmp_path):

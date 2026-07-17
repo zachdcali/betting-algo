@@ -53,7 +53,18 @@ Current production principles:
   exact-ID handedness fallback, not a height source; ATP/TA remain the verified
   height paths and missing height remains ineligible.
 - Prediction generation and auto-settlement are separate concerns.
-- `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`, `odds_history.csv`, and `logs/features_*.csv` are the lineage layer.
+- `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`,
+  `odds_history.csv`, `kalshi_odds_history.csv`, and `logs/features_*.csv` are
+  the lineage layer. `kalshi_odds_history.csv` is a forward-only,
+  unauthenticated read-only feed: it retains every open tennis market poll and
+  exact run/match binding without placing orders or calling authenticated APIs.
+- Kalshi's suffixed dollar/fixed-point fields are retained raw. A matched price
+  uses the selected side's raw `yes_ask_dollars` as both realistic entry price
+  and break-even probability; it is never de-vigged. The separate flat ROI
+  track subtracts `0.07 * price * (1 - price)` per winning contract. It joins
+  only an exact two-market pair from the same event, poll, run, and `match_uid`
+  after normalization plus the reviewed `data/kalshi_player_aliases.json`
+  registry. No historical Kalshi data is backfilled.
 - Supabase `dash_*` tables now act as the durable recovery bridge for ephemeral
   runners. A run hydrates local CSV state from the latest accepted manifest,
   then publishes a complete generation transactionally. CSV is still the

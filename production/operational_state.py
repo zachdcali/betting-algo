@@ -83,6 +83,9 @@ STATE_SPECS = (
               ("p1", "p2", "match_date"), "prediction"),
     StateSpec("dash_odds_history", "odds_history.csv", ("odds_snapshot_uid",),
               ("match_uid", "odds_scraped_at", "p1_odds_decimal", "p2_odds_decimal")),
+    StateSpec("dash_kalshi_odds_history", "kalshi_odds_history.csv",
+              ("kalshi_observation_uid",),
+              ("run_id", "polled_at", "market_ticker"), "strict_immutable"),
     StateSpec("dash_shadow", "logs/performance_v1_shadow_predictions.csv",
               ("shadow_prediction_uid",),
               ("match_uid", "model_version", "feature_snapshot_id")),
@@ -580,7 +583,7 @@ def _freshness(frame: pd.DataFrame) -> pd.Series:
     result = pd.Series(0, index=frame.index, dtype="int64")
     for column in (
         "completed_at", "settled_timestamp", "settled_at", "latest_logged_at",
-        "logged_at", "timestamp", "started_at", "start_time",
+        "logged_at", "polled_at", "timestamp", "started_at", "start_time",
     ):
         if column not in frame.columns:
             continue
@@ -612,6 +615,17 @@ def merge_state_frames(existing: pd.DataFrame, incoming: pd.DataFrame,
     if spec.quality_mode == "bet":
         for row_key_value, group in combined.groupby("_row_key", sort=False):
             _validate_bet_group(group, row_key_value)
+    if spec.quality_mode == "strict_immutable":
+        for row_key_value, group in combined.groupby("_row_key", sort=False):
+            for field in ordered_columns:
+                values = {
+                    _clean(value) for value in group[field] if _clean(value)
+                }
+                if len(values) > 1:
+                    raise RuntimeError(
+                        f"conflicting immutable {spec.table} {field} for "
+                        f"{row_key_value}: {sorted(values)}"
+                    )
     if spec.quality_mode == "prediction":
         combined = _reconcile_prediction_groups(combined, ordered_columns)
     else:

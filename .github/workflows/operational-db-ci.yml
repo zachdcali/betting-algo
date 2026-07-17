@@ -79,6 +79,7 @@ jobs:
           tests/test_dashboard_data.py
           tests/test_dashboard_smoke.py
           tests/test_operational_state.py
+          tests/test_kalshi_odds.py
           tests/test_evaluation_cohorts.py
           tests/test_evaluation_ledger.py
           tests/test_evaluation_metrics.py
