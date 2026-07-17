@@ -102,16 +102,16 @@
   },
   "aleksa ciric": {
     "canonical_player_id": 208237,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T11:58:34+00:00",
-    "observed_values": {},
-    "source_content_sha256": "90ff850b58b01057454b8799cdc2567a41342150f586e30cdb7545bc934c77ca",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T06:48:49+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 188
+    },
+    "source_content_sha256": "38b3506ad0a03bc6fad40a2ca4d439ff345de15db275f426ca53445772b8db90",
     "source_uri": "https://www.atptour.com/en/players/aleksa-ciric/c0fj/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "alessio basile": {
     "canonical_player_id": 211450,
@@ -166,16 +166,16 @@
   },
   "amir omarkhanov": {
     "canonical_player_id": 212788,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T07:00:04+00:00",
-    "observed_values": {},
-    "source_content_sha256": "011c7d520787207f74cf283ea514803dd1a92b750e145aa56f59a8694746b597",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T06:50:50+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "019be6cdf5f4153c1d50536d0386b9a77f8b9f8f4b57bf7ba53ca8277ce2bd7a",
     "source_uri": "https://www.atptour.com/en/players/amir-omarkhanov/o0e7/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "anas mazdrashki": {
     "canonical_player_id": 212748,
@@ -394,16 +394,16 @@
   },
   "charles bertimon": {
     "canonical_player_id": 202293,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T06:58:31+00:00",
-    "observed_values": {},
-    "source_content_sha256": "1f64c89cfbb5111e5f65bfc7d9e211d3ce57202445bae8a1f2f139d5a21d5a51",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T06:48:55+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "4bf3e03b9f1f86695891bcb97da9d0dbd5fae00c8a1cd6e8d173ded24f327d5e",
     "source_uri": "https://www.atptour.com/en/players/charles-bertimon/b0c4/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "charlie robertson": {
     "canonical_player_id": 212127,
@@ -2034,6 +2034,19 @@
     "source_uri": "https://www.atptour.com/en/players/michele-mecarelli/m0xl/overview",
     "status": "identity_mismatch"
   },
+  "mihai razvan marinescu": {
+    "canonical_player_id": 208250,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T06:48:44+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "03acd3e53a10984468861a7996382e6a04a528b99025646cc2ec45ba71ef83a0",
+    "source_uri": "https://www.atptour.com/en/players/mihai-razvan-marinescu/m0ho/overview",
+    "status": "resolved"
+  },
   "mircea mortasifu": {
     "identity_binding": "",
     "missing_fields": [
@@ -2905,16 +2918,17 @@
   },
   "tiago pereira": {
     "canonical_player_id": 211500,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
-      "height_cm",
-      "hand"
+      "height_cm"
     ],
-    "observed_at": "2026-07-15T15:23:08+00:00",
-    "observed_values": {},
-    "source_content_sha256": "060194e7dfb21f1fbe9a871eff1dee4c310150387c9c1c4d85b62649adf1047d",
+    "observed_at": "2026-07-17T06:48:38+00:00",
+    "observed_values": {
+      "hand": "R"
+    },
+    "source_content_sha256": "d3854cf666d9b116d0c3a0d984df48413c411a2cc6e175c4a3ac9d8c88802e02",
     "source_uri": "https://www.atptour.com/en/players/tiago-pereira/p0k4/overview",
-    "status": "identity_mismatch"
+    "status": "partial"
   },
   "timofei derepasko": {
     "canonical_player_id": 212157,
