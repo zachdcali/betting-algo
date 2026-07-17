@@ -420,6 +420,23 @@ h3 {
 }
 
 .analytics-card h3 { margin: 0; font-size: 1.05rem; }
+.metric-overview-card { min-height: 0; margin: 15px 0; }
+.metric-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(235px, 1fr)); gap: 10px; }
+.metric-overview-item { min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); padding: 12px; }
+.metric-overview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.metric-overview-heading strong { font-size: 0.8rem; }
+.metric-overview-heading span { color: var(--muted); text-align: right; font: 0.59rem var(--mono); }
+.metric-overview-rows { display: grid; gap: 7px; }
+.metric-overview-row { display: grid; grid-template-columns: minmax(72px, 0.9fr) minmax(72px, 1.4fr) 48px; align-items: center; gap: 7px; }
+.metric-overview-model { overflow: hidden; color: var(--ink-soft); font-size: 0.65rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.metric-overview-track { position: relative; height: 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.metric-overview-track::before { position: absolute; inset-block: -2px; left: var(--target-position, -100%); width: 1px; content: ""; background: var(--line-strong); }
+.metric-overview-dot { position: absolute; top: 50%; width: 9px; height: 9px; border: 2px solid var(--surface); border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px var(--line-strong); transform: translate(-50%, -50%); }
+.metric-overview-dot.good { background: var(--green); }
+.metric-overview-dot.bad { background: var(--red); }
+.metric-overview-dot.warning { background: var(--amber); }
+.metric-overview-value { text-align: right; font: 700 0.63rem var(--mono); }
+.metric-overview-axis { display: flex; justify-content: space-between; margin: 6px 48px 0 79px; color: var(--muted); font: 0.54rem var(--mono); }
 .metric-chart { display: grid; gap: 9px; min-height: 120px; }
 .metric-bar-row { display: grid; grid-template-columns: minmax(130px, 1.2fr) minmax(150px, 2fr) 72px; align-items: center; gap: 9px; }
 .metric-bar-label { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 0.72rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
@@ -563,6 +580,7 @@ footer { border-top: 1px solid var(--line); margin-top: 32px; padding-top: 17px;
   .health-times { grid-column: 1 / -1; min-width: 0; }
   .metric-grid, .metric-grid.compact { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-overview-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
   .analytics-grid { grid-template-columns: 1fr; }
 }
 
@@ -590,6 +608,7 @@ footer { border-top: 1px solid var(--line); margin-top: 32px; padding-top: 17px;
   .lineage-grid { grid-template-columns: 1fr; }
   .field-label, .field-label select, .field-label input { width: 100%; min-width: 0; }
   .performance-controls { width: 100%; }
+  .metric-overview-grid { grid-template-columns: 1fr; }
   .metric-bar-row { grid-template-columns: minmax(105px, 1fr) minmax(100px, 1.5fr) 62px; }
   .tournament-heading { align-items: flex-start; }
   .tournament-summary { max-width: 42%; }

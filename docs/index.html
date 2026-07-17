@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-16.3">
-  <script src="dashboard_logic.js?v=2026-07-16.3" defer></script>
-  <script src="dashboard.js?v=2026-07-16.3" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-17.1">
+  <script src="dashboard_logic.js?v=2026-07-17.1" defer></script>
+  <script src="dashboard.js?v=2026-07-17.1" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -127,6 +127,14 @@
         <div class="section-heading">
           <div><p class="eyebrow">Diagnostic, not promotion evidence</p><h2>Model performance laboratory</h2></div>
           <div class="performance-controls">
+            <label class="field-label">Tour
+              <select id="tour-select">
+                <option value="all">All tours</option>
+                <option value="atp">ATP Tour</option>
+                <option value="challenger">Challenger</option>
+                <option value="itf">ITF</option>
+              </select>
+            </label>
             <label class="field-label">Cohort
               <select id="cohort-select">
                 <option value="gold_intersection">GOLD · core common cohort</option>
@@ -151,7 +159,7 @@
           </div>
         </div>
         <div class="notice warning">
-          The scores below are current for the accepted dashboard sync shown on this page. They are materialized by <code>production.evaluation.ledger</code> during durable publication and withheld if their sync generation disagrees with the manifest. The linked Markdown report is a dated full ledger snapshot (live metrics plus offline experiments) and may lag this manifest-pinned table. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Kalshi ROI uses the raw buy ask without de-vigging and subtracts the configured taker fee from winning payouts; it is forward-only from the displayed logging date.
+          The scores below are current for the accepted dashboard sync shown on this page. They are materialized by <code>production.evaluation.ledger</code> during durable publication and withheld if their sync generation disagrees with the manifest. Tour filters are also server-materialized: ATP includes ATP-level, Masters, and Grand Slam rows; Challenger and ITF remain separate. The linked Markdown report is a dated full ledger snapshot (live metrics plus offline experiments) and may lag this manifest-pinned table. Green and red compare like-for-like rows against the market when the cohort is shared; ROI uses zero as break-even. Per-model cohorts retain their own n and are exploratory, not a fair ranking. Kalshi ROI uses the raw buy ask without de-vigging and subtracts the configured taker fee from winning payouts; it is forward-only from the displayed logging date.
         </div>
         <article class="panel-card performance-population-card">
           <div class="card-heading">
@@ -163,6 +171,14 @@
         <div id="cohort-definition" class="cohort-definition"></div>
         <div id="ledger-publication-state" class="notice neutral">Loading current manifest-pinned metrics and verifying their accepted sync generation…</div>
         <p><a class="secondary-button" href="modeling/MODEL_LEDGER.md">Open dated full ledger snapshot</a> <span class="section-note">This report may lag the accepted sync shown above.</span></p>
+        <article class="panel-card metric-overview-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">Core models + market</p><h3>Quality metrics at a glance</h3></div>
+            <span class="status-chip neutral">Same selected cohort</span>
+          </div>
+          <p id="metric-overview-note" class="section-note">AUC, probabilistic error, calibration, and accuracy shown together.</p>
+          <div id="metric-overview" class="metric-overview-grid" aria-live="polite"></div>
+        </article>
         <div class="analytics-grid">
           <article class="analytics-card">
             <div class="card-heading">

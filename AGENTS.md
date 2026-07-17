@@ -320,6 +320,11 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   - `*_intersection` = restricted to match_uids where all of nn/xgb/rf/market
     predicted; the cross-model "which model wins" verdict uses this, to avoid
     coverage bias (nn has broader settled coverage than xgb/rf).
+  - Every live tier may also be materialized with `__atp`, `__challenger`, or
+    `__itf`. These are computed inside the evaluation ledger before Supabase
+    publication, never sliced or rescored in the browser. The shared classifier
+    maps A/M/G to ATP, C/CH to Challenger, and 15/25 to ITF; an explicit ITF
+    tournament label overrides the small legacy set incorrectly written as A.
 - ROI is a counterfactual backtest at the odds logged at prediction time. Bet
   qualification matches live execution: model probability must clear the
   offered price's raw break-even probability by 0.02; de-vigged market

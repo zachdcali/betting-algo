@@ -150,6 +150,9 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(client, /kalshiPublished \? MODEL_METRIC_COLUMNS : LEGACY_MODEL_METRIC_COLUMNS/);
   assert.match(client, /kalshiPublished \? RUN_COLUMNS : LEGACY_RUN_COLUMNS/);
   assert.match(client, /metricCell\(\s*"roi_flat_kalshi", metric\.roi_flat_kalshi/);
+  assert.match(client, /performanceTierForTour\(tier, tour\)/);
+  assert.match(client, /materializedTier/);
+  assert.match(client, /renderMetricOverview\(/);
   assert.match(client, /startsWith\("shadow_"\)/);
   for (const tier of ["gold_intersection", "complete_intersection", "gold", "complete"]) {
     assert.match(html, new RegExp(`<option value="${tier}"`));
@@ -162,6 +165,14 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.doesNotMatch(performanceHead[1], /Kelly/);
   assert.match(client, /if \(typeof value === "number"\)/);
   assert.match(client, /new Date\(value\)\.toLocaleDateString/);
+  for (const tour of ["all", "atp", "challenger", "itf"]) {
+    assert.match(html, new RegExp(`<option value="${tour}"`));
+  }
+  for (const metric of ["AUC", "Log loss", "Brier score", "ECE", "Calibration slope", "Accuracy"]) {
+    assert.match(client, new RegExp(`label: "${metric}"`));
+  }
+  assert.match(html, /id="metric-overview"/);
+  assert.match(html, /Tour filters are also server-materialized/);
 });
 
 test("performance UI separates prediction, counterfactual, and placed-bet populations", () => {
@@ -183,7 +194,7 @@ test("performance UI separates prediction, counterfactual, and placed-bet popula
   }
   assert.match(client, /Logic\.isTrue\(bet\.metric_eligible\)/);
   assert.match(client, /withholdPerformancePopulationMap\(/);
-  assert.match(client, /renderPerformancePopulationMap\(selectedTierRows, sourceRows, tier\)/);
+  assert.match(client, /renderPerformancePopulationMap\(selectedTierRows, sourceRows, tier, tour\)/);
 });
 
 test("slate renders tournament-grouped two-player decision boards with an explicit EV hurdle", () => {
