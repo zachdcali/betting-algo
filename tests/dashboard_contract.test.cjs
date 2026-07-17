@@ -160,6 +160,8 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(performanceHead[1], /Flat ROI \(Kalshi, vig-free\)/);
   assert.match(performanceHead[1], /Kalshi bets since/);
   assert.doesNotMatch(performanceHead[1], /Kelly/);
+  assert.match(client, /if \(typeof value === "number"\)/);
+  assert.match(client, /new Date\(value\)\.toLocaleDateString/);
 });
 
 test("performance UI separates prediction, counterfactual, and placed-bet populations", () => {
