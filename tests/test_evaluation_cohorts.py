@@ -242,6 +242,23 @@ def test_scored_frame_models_and_tiers():
     assert scored[(scored.match_uid == "m1") & (scored.model == "nn")].y1.iloc[0] == 1
 
 
+def test_tour_segment_classification_uses_explicit_level_contract_and_itf_override():
+    cases = [
+        ("A", "Miami", "atp"),
+        ("M", "Monte Carlo", "atp"),
+        ("G", "French Open Men's Singles", "atp"),
+        ("C", "Iasi", "challenger"),
+        ("CH", "Alicante", "challenger"),
+        ("15", "Monastir", "itf"),
+        (25.0, "Mumbai", "itf"),
+        # Legacy source defect: explicit ITF identity outranks level A.
+        ("A", "ITF Men Wodonga", "itf"),
+        ("", "Unknown event", "unclassified"),
+    ]
+    for level, tournament, expected in cases:
+        assert cohorts.classify_tour_segment(level, tournament) == expected
+
+
 def test_hydrated_string_probabilities_and_odds_are_sanitized_before_metrics():
     hydrated = pd.DataFrame([
         dict(

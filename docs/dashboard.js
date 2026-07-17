@@ -5,13 +5,19 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-16.3";
+  const BUILD_ID = "2026-07-17.1";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
   const REQUEST_TIMEOUT_MS = 18000;
   const SETTLEMENT_SLA_HOURS = 18;
   const CONSERVATIVE_UNZONED_PENDING_HOURS = 72;
+  const TOUR_LABELS = {
+    all: "All tours",
+    atp: "ATP Tour · ATP / Masters / Grand Slam",
+    challenger: "ATP Challenger",
+    itf: "ITF",
+  };
 
   const PREDICTION_COLUMNS = [
     "match_uid", "run_id", "latest_run_id", "logged_at", "latest_logged_at",
@@ -1331,8 +1337,13 @@
     cell.colSpan = 12;
     row.appendChild(cell);
     body.appendChild(row);
+    clear(byId("metric-overview"));
     clear(byId("metric-chart"));
     clear(byId("calibration-chart"));
+  }
+
+  function performanceTierForTour(baseTier, tour = byId("tour-select").value) {
+    return tour === "all" ? baseTier : `${baseTier}__${tour}`;
   }
 
   function performanceScopeRows(rows, scope) {
@@ -1365,7 +1376,7 @@
     return rows.find((row) => Logic.clean(row.model).toLowerCase() === preferred) || null;
   }
 
-  function renderPerformancePopulationMap(selectedTierRows, sourceRows, tier) {
+  function renderPerformancePopulationMap(selectedTierRows, sourceRows, tier, tour) {
     const host = byId("performance-population-map");
     clear(host);
     host.classList.remove("skeleton");
@@ -1400,14 +1411,16 @@
       : tier.includes("complete")
         ? "complete-feature context cohort"
         : "selected authoritative ledger cohort";
+    const isTourScoped = tour !== "all";
+    const tourLabel = TOUR_LABELS[tour] || tour;
     const stages = [
-      ["Settled prediction rows", formatNumber(settledPredictions.length), "outcome known; not automatically unique or GOLD"],
-      ["Selected model cohort", selectedCohort, cohortDescription],
-      ["NN flat bets · Bovada", nnMetric ? formatNumber(nnMetric.n_bets_flat) : "—", "counterfactual at logged sportsbook odds"],
-      ["NN flat bets · Kalshi", nnMetric ? formatNumber(nnMetric.n_bets_flat_kalshi) : "—", nnKalshiSince === null ? "awaiting forward matched settlements" : `vig-free ask track since ${formatDate(nnKalshiSince)}`],
-      ["Placed bets · exact", formatNumber(exactBets.length), "explicit metric_eligible attribution"],
-      ["Placed bets · accounting only", formatNumber(accountingOnly.length), "P&L retained; excluded from model metrics"],
-      ["Placed bets · legacy unknown", formatNumber(unknownAttribution), "eligibility was never asserted"],
+      [isTourScoped ? "Settled predictions · all tours" : "Settled prediction rows", formatNumber(settledPredictions.length), isTourScoped ? `${tourLabel} performance is the scoped cohort beside this total` : "outcome known; not automatically unique or GOLD"],
+      [isTourScoped ? `Selected ${tour === "atp" ? "ATP" : tour === "challenger" ? "Challenger" : "ITF"} cohort` : "Selected model cohort", selectedCohort, cohortDescription],
+      ["NN flat bets · Bovada", nnMetric ? formatNumber(nnMetric.n_bets_flat) : "—", `${tourLabel} counterfactual at logged sportsbook odds`],
+      ["NN flat bets · Kalshi", nnMetric ? formatNumber(nnMetric.n_bets_flat_kalshi) : "—", nnKalshiSince === null ? `awaiting ${tourLabel} matched settlements` : `${tourLabel} · vig-free asks since ${formatDate(nnKalshiSince)}`],
+      [isTourScoped ? "Placed bets · exact · all tours" : "Placed bets · exact", formatNumber(exactBets.length), "explicit metric_eligible attribution"],
+      [isTourScoped ? "Accounting only · all tours" : "Placed bets · accounting only", formatNumber(accountingOnly.length), "P&L retained; excluded from model metrics"],
+      [isTourScoped ? "Legacy unknown · all tours" : "Placed bets · legacy unknown", formatNumber(unknownAttribution), "eligibility was never asserted"],
     ];
     stages.forEach(([label, value, note]) => {
       const step = element("div", "funnel-step");
@@ -1425,6 +1438,88 @@
     clear(host);
     host.classList.remove("skeleton");
     host.appendChild(emptyState(message));
+  }
+
+  function renderMetricOverview(rows, tier, benchmarkRows = rows, tourLabel = "All tours") {
+    const host = byId("metric-overview");
+    clear(host);
+    const specs = [
+      { metric: "auc", label: "AUC", direction: "higher · 0.50 = random", min: 0.5, max: 1.0 },
+      { metric: "log_loss", label: "Log loss", direction: "lower is better", min: 0.35, max: 0.9 },
+      { metric: "brier", label: "Brier score", direction: "lower is better", min: 0.1, max: 0.35 },
+      { metric: "ece", label: "ECE", direction: "lower is better", min: 0.0, max: 0.25 },
+      { metric: "cal_slope", label: "Calibration slope", direction: "target = 1.0", min: 0.0, max: 2.0, target: 1.0 },
+      { metric: "accuracy", label: "Accuracy", direction: "higher is better", min: 0.4, max: 0.9 },
+    ];
+    const comparable = tier.includes("_intersection") || tier.endsWith("_market_timing");
+    const baseline = performanceBaseline(benchmarkRows, tier);
+    const available = specs.some((spec) => rows.some(
+      (row) => Logic.numberOrNull(row[spec.metric]) !== null,
+    ));
+    if (!available) {
+      host.appendChild(emptyState("No authoritative core-model quality metrics are available for this cohort."));
+      return;
+    }
+    specs.forEach((spec) => {
+      const card = element("section", "metric-overview-item");
+      const heading = element("div", "metric-overview-heading");
+      heading.append(
+        element("strong", null, spec.label),
+        element("span", null, spec.direction),
+      );
+      card.appendChild(heading);
+      const rowHost = element("div", "metric-overview-rows");
+      const baselineValue = baseline
+        ? Logic.numberOrNull(baseline[spec.metric])
+        : null;
+      rows.forEach((row) => {
+        const value = Logic.numberOrNull(row[spec.metric]);
+        if (value === null) return;
+        const presentation = Logic.modelPresentation(row.model);
+        const chartRow = element("div", "metric-overview-row");
+        const modelLabel = element("div", "metric-overview-model", presentation.label);
+        modelLabel.title = presentation.exact;
+        const track = element("div", "metric-overview-track");
+        if (spec.target !== undefined) {
+          const targetPosition = (spec.target - spec.min) / (spec.max - spec.min) * 100;
+          track.style.setProperty("--target-position", `${targetPosition}%`);
+        }
+        const signal = Logic.metricSignal(
+          spec.metric, value, baselineValue, comparable,
+        );
+        const dot = element("span", `metric-overview-dot ${signal}`);
+        const position = Math.max(
+          0,
+          Math.min(100, (value - spec.min) / (spec.max - spec.min) * 100),
+        );
+        dot.style.left = `${position}%`;
+        track.title = `${presentation.label}: ${metricDisplay(spec.metric, value)}. ${spec.direction}.`;
+        track.setAttribute("aria-label", track.title);
+        track.appendChild(dot);
+        chartRow.append(
+          modelLabel,
+          track,
+          element(
+            "div",
+            `metric-overview-value ${signal === "neutral" ? "" : `numeric-${signal}`}`,
+            metricDisplay(spec.metric, value),
+          ),
+        );
+        rowHost.appendChild(chartRow);
+      });
+      card.appendChild(rowHost);
+      const axis = element("div", "metric-overview-axis");
+      axis.append(
+        element("span", null, metricDisplay(spec.metric, spec.min)),
+        element("span", null, metricDisplay(spec.metric, spec.max)),
+      );
+      card.appendChild(axis);
+      host.appendChild(card);
+    });
+    setText(
+      "metric-overview-note",
+      `${tourLabel}. Core promoted models and the market benchmark use ${comparable ? "one common match cohort" : "their labeled authoritative coverage"}; dots are comparison markers, not uncertainty intervals.`,
+    );
   }
 
   function renderMetricExplorer(rows, tier, benchmarkRows = rows) {
@@ -1571,6 +1666,9 @@
 
   function renderPerformance() {
     const tier = byId("cohort-select").value;
+    const tour = byId("tour-select").value;
+    const tourLabel = TOUR_LABELS[tour] || tour;
+    const materializedTier = performanceTierForTour(tier, tour);
     const scope = byId("model-scope-select").value;
     const tierLabels = {
       gold_intersection: "GOLD · core common cohort",
@@ -1583,7 +1681,9 @@
       gold_market_timing: "GOLD · first observed vs last pre-start",
       complete_market_timing: "COMPLETE · first observed vs last pre-start",
     };
-    const selectedTierRows = store.metrics.filter((row) => Logic.clean(row.tier).toLowerCase() === tier);
+    const selectedTierRows = store.metrics.filter(
+      (row) => Logic.clean(row.tier).toLowerCase() === materializedTier,
+    );
     const sourceRows = performanceScopeRows(selectedTierRows, scope)
       .sort((a, b) => {
         const aScore = Logic.numberOrNull(a.log_loss);
@@ -1600,6 +1700,7 @@
     );
     const definition = byId("cohort-definition");
     clear(definition);
+    addCohortFact(definition, "Tour", tourLabel);
     addCohortFact(definition, "Cohort", tierLabels[tier] || tier);
     const comparison = tier.endsWith("_market_timing")
       ? "same matches with at least two pre-start observations"
@@ -1645,14 +1746,14 @@
     if (!sourceRows.length) {
       withholdPerformancePopulationMap("No authoritative population is available for this cohort and model scope.");
       state.className = "notice warning";
-      state.textContent = `The accepted ledger generation contains no ${scope.replaceAll("_", " ")} rows for ${tierLabels[tier] || tier}. Choose a compatible cohort; no browser-calculated fallback is shown.`;
+      state.textContent = `The accepted ledger generation contains no ${scope.replaceAll("_", " ")} rows for ${tourLabel} · ${tierLabels[tier] || tier}. Choose a compatible cohort; no browser-calculated fallback is shown.`;
       addCohortFact(definition, "Sync", manifestSyncId);
       addCohortFact(definition, "State", "no rows for selected cohort");
       clearPerformanceTable("No authoritative rows are available for this cohort.");
       return;
     }
 
-    renderPerformancePopulationMap(selectedTierRows, sourceRows, tier);
+    renderPerformancePopulationMap(selectedTierRows, sourceRows, tier, tour);
 
     const cohortSizes = sourceRows.map((row) => Logic.numberOrNull(row.n)).filter((value) => value !== null);
     const minN = cohortSizes.length ? Math.min(...cohortSizes) : null;
@@ -1669,11 +1770,15 @@
     const manifestStatus = Logic.clean(store.manifest.status).toLowerCase();
     state.className = `notice ${manifestStatus === "success" ? "success" : "warning"}`;
     state.textContent = manifestStatus === "success"
-      ? `Current dashboard authority: ledger metrics match accepted sync ${manifestSyncId}. Showing ${scope.replaceAll("_", " ")} rows; lower log loss ranks first. The dated Markdown report may lag this generation.`
+      ? `Current dashboard authority: ledger metrics match accepted sync ${manifestSyncId}. Showing ${tourLabel} · ${scope.replaceAll("_", " ")} rows; lower log loss ranks first. The dated Markdown report may lag this generation.`
       : `Metrics match a ${manifestStatus || "non-success"} dashboard generation. Review the System tab before interpreting them.`;
 
+    const overviewRows = scope === "market_timing"
+      ? sourceRows
+      : performanceScopeRows(selectedTierRows, "core");
+    renderMetricOverview(overviewRows, tier, selectedTierRows, tourLabel);
     renderMetricExplorer(sourceRows, tier, selectedTierRows);
-    renderCalibrationChart(sourceRows, tier);
+    renderCalibrationChart(sourceRows, materializedTier);
 
     const body = byId("performance-table").tBodies[0];
     clear(body);
@@ -1985,6 +2090,7 @@
 
   function installInteractions() {
     installTabs();
+    byId("tour-select").addEventListener("change", renderPerformance);
     byId("cohort-select").addEventListener("change", () => {
       const tier = byId("cohort-select").value;
       if (tier.endsWith("_market_timing")) byId("model-scope-select").value = "market_timing";
@@ -1997,7 +2103,7 @@
       const cohort = byId("cohort-select");
       if (scope === "market_timing") {
         const settledTimingAvailable = store.metrics.some(
-          (row) => Logic.clean(row.tier).toLowerCase() === "settled_market_timing",
+          (row) => Logic.clean(row.tier).toLowerCase() === performanceTierForTour("settled_market_timing"),
         );
         cohort.value = settledTimingAvailable
           ? "settled_market_timing"
@@ -2008,13 +2114,17 @@
         const desired = ["shadow", "all"].includes(scope)
           ? `${base}_all_model_intersection`
           : `${base}_intersection`;
-        const desiredRows = store.metrics.filter((row) => Logic.clean(row.tier).toLowerCase() === desired);
+        const desiredRows = store.metrics.filter(
+          (row) => Logic.clean(row.tier).toLowerCase() === performanceTierForTour(desired),
+        );
         cohort.value = performanceScopeRows(desiredRows, scope).length
           ? desired
           : ["shadow", "all"].includes(scope) ? base : `${base}_intersection`;
       } else if (["shadow", "all"].includes(scope) && ["gold_intersection", "complete_intersection"].includes(cohort.value)) {
         const desired = cohort.value.startsWith("complete") ? "complete_all_model_intersection" : "gold_all_model_intersection";
-        const desiredRows = store.metrics.filter((row) => Logic.clean(row.tier).toLowerCase() === desired);
+        const desiredRows = store.metrics.filter(
+          (row) => Logic.clean(row.tier).toLowerCase() === performanceTierForTour(desired),
+        );
         cohort.value = performanceScopeRows(desiredRows, scope).length
           ? desired
           : cohort.value.startsWith("complete") ? "complete" : "gold";

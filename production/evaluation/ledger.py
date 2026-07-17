@@ -28,6 +28,8 @@ CORE_MODELS = ["nn", "xgb", "rf", "market"]
 ACTIVE_SHADOW_MODELS = [
     f"shadow_{spec.model_version}" for spec in DEFAULT_SHADOW_MODEL_SPECS
 ]
+TOUR_SEGMENTS = cohorts.TOUR_SEGMENTS
+TOUR_TIER_SEPARATOR = "__"
 
 LIVE_COLUMNS = [
     "model", "tier", "n", "accuracy", "auc", "log_loss", "brier", "ece",
@@ -73,6 +75,21 @@ def _unrestricted_intersection_uids(scored: pd.DataFrame, models: list[str]) -> 
     return set(counts[counts == len(set(models))].index)
 
 
+def _tour_tier(base_tier: str, tour_segment: str | None) -> str:
+    return (
+        base_tier
+        if not tour_segment
+        else f"{base_tier}{TOUR_TIER_SEPARATOR}{tour_segment}"
+    )
+
+
+def _split_tour_tier(tier: str) -> tuple[str, str | None]:
+    base_tier, separator, tour_segment = str(tier).partition(
+        TOUR_TIER_SEPARATOR
+    )
+    return base_tier, tour_segment if separator else None
+
+
 def build_live_ledger(
     scored: pd.DataFrame,
     intersection_models: list[str] | None = None,
@@ -86,46 +103,83 @@ def build_live_ledger(
     )
     timing_models = ["market_open", "market_close"]
     rows = []
-    for tier_name, tier_col in [("gold", "is_gold"), ("complete", "is_complete")]:
-        tier_df = scored[scored[tier_col]]
-        generic_df = tier_df[~tier_df["model"].isin(timing_models)]
-        for model, g in generic_df.groupby("model"):
-            rows.append(_score_block(model, tier_name, g))
-        inter = cohorts.intersection_uids(scored, intersection_models, tier_col)
-        inter_df = tier_df[tier_df["match_uid"].isin(inter) & tier_df["model"].isin(intersection_models)]
-        for model, g in inter_df.groupby("model"):
-            rows.append(_score_block(model, f"{tier_name}_intersection", g))
-        observed_models = set(tier_df["model"].astype(str))
-        shadow_models = [
-            model for model in active_shadow_models if model in observed_models
-        ]
-        if shadow_models:
-            all_models = [*intersection_models, *shadow_models]
-            all_inter = cohorts.intersection_uids(scored, all_models, tier_col)
-            all_inter_df = tier_df[
-                tier_df["match_uid"].isin(all_inter)
-                & tier_df["model"].isin(all_models)
-            ]
-            for model, g in all_inter_df.groupby("model"):
+    scopes: list[tuple[str | None, pd.DataFrame]] = [(None, scored)]
+    if "tour_segment" in scored.columns:
+        scopes.extend(
+            (segment, scored[scored["tour_segment"].eq(segment)])
+            for segment in TOUR_SEGMENTS
+        )
+    for tour_segment, scoped in scopes:
+        if scoped.empty:
+            continue
+        for tier_name, tier_col in [("gold", "is_gold"), ("complete", "is_complete")]:
+            tier_df = scoped[scoped[tier_col]]
+            generic_df = tier_df[~tier_df["model"].isin(timing_models)]
+            for model, g in generic_df.groupby("model"):
                 rows.append(_score_block(
-                    model, f"{tier_name}_all_model_intersection", g
+                    model, _tour_tier(tier_name, tour_segment), g
                 ))
-        timing_inter = cohorts.intersection_uids(scored, timing_models, tier_col)
-        timing_df = tier_df[
-            tier_df["match_uid"].isin(timing_inter)
-            & tier_df["model"].isin(timing_models)
+            inter = cohorts.intersection_uids(
+                scoped, intersection_models, tier_col
+            )
+            inter_df = tier_df[
+                tier_df["match_uid"].isin(inter)
+                & tier_df["model"].isin(intersection_models)
+            ]
+            for model, g in inter_df.groupby("model"):
+                rows.append(_score_block(
+                    model,
+                    _tour_tier(f"{tier_name}_intersection", tour_segment),
+                    g,
+                ))
+            observed_models = set(tier_df["model"].astype(str))
+            shadow_models = [
+                model for model in active_shadow_models if model in observed_models
+            ]
+            if shadow_models:
+                all_models = [*intersection_models, *shadow_models]
+                all_inter = cohorts.intersection_uids(
+                    scoped, all_models, tier_col
+                )
+                all_inter_df = tier_df[
+                    tier_df["match_uid"].isin(all_inter)
+                    & tier_df["model"].isin(all_models)
+                ]
+                for model, g in all_inter_df.groupby("model"):
+                    rows.append(_score_block(
+                        model,
+                        _tour_tier(
+                            f"{tier_name}_all_model_intersection",
+                            tour_segment,
+                        ),
+                        g,
+                    ))
+            timing_inter = cohorts.intersection_uids(
+                scoped, timing_models, tier_col
+            )
+            timing_df = tier_df[
+                tier_df["match_uid"].isin(timing_inter)
+                & tier_df["model"].isin(timing_models)
+            ]
+            for model, g in timing_df.groupby("model"):
+                rows.append(_score_block(
+                    model,
+                    _tour_tier(f"{tier_name}_market_timing", tour_segment),
+                    g,
+                ))
+        settled_timing_uids = _unrestricted_intersection_uids(
+            scoped, timing_models
+        )
+        settled_timing = scoped[
+            scoped["match_uid"].isin(settled_timing_uids)
+            & scoped["model"].isin(timing_models)
         ]
-        for model, g in timing_df.groupby("model"):
+        for model, g in settled_timing.groupby("model"):
             rows.append(_score_block(
-                model, f"{tier_name}_market_timing", g
+                model,
+                _tour_tier("settled_market_timing", tour_segment),
+                g,
             ))
-    settled_timing_uids = _unrestricted_intersection_uids(scored, timing_models)
-    settled_timing = scored[
-        scored["match_uid"].isin(settled_timing_uids)
-        & scored["model"].isin(timing_models)
-    ]
-    for model, g in settled_timing.groupby("model"):
-        rows.append(_score_block(model, "settled_market_timing", g))
     result = pd.DataFrame(rows, columns=LIVE_COLUMNS)
     logging_start = str(scored.attrs.get("kalshi_logging_start") or "")
     if logging_start and not result.empty:
@@ -140,32 +194,42 @@ def build_calibration_ledger(scored: pd.DataFrame, live: pd.DataFrame) -> pd.Dat
     for _, aggregate in live.iterrows():
         model = str(aggregate["model"])
         tier = str(aggregate["tier"])
-        if tier == "gold":
-            block = scored[scored["is_gold"] & scored["model"].eq(model)]
-        elif tier == "complete":
-            block = scored[scored["is_complete"] & scored["model"].eq(model)]
-        elif tier == "settled_market_timing":
+        base_tier, tour_segment = _split_tour_tier(tier)
+        scoped = scored
+        if tour_segment:
+            if "tour_segment" not in scored.columns:
+                continue
+            scoped = scored[scored["tour_segment"].eq(tour_segment)]
+        if base_tier == "gold":
+            block = scoped[scoped["is_gold"] & scoped["model"].eq(model)]
+        elif base_tier == "complete":
+            block = scoped[
+                scoped["is_complete"] & scoped["model"].eq(model)
+            ]
+        elif base_tier == "settled_market_timing":
             common = _unrestricted_intersection_uids(
-                scored, ["market_open", "market_close"]
+                scoped, ["market_open", "market_close"]
             )
-            block = scored[
-                scored["model"].eq(model) & scored["match_uid"].isin(common)
+            block = scoped[
+                scoped["model"].eq(model) & scoped["match_uid"].isin(common)
             ]
         else:
-            base_tier = "is_gold" if tier.startswith("gold_") else "is_complete"
-            if tier.endswith("_all_model_intersection"):
+            tier_col = (
+                "is_gold" if base_tier.startswith("gold_") else "is_complete"
+            )
+            if base_tier.endswith("_all_model_intersection"):
                 models = sorted(
                     value for value in live.loc[live["tier"].eq(tier), "model"]
                 )
-            elif tier.endswith("_market_timing"):
+            elif base_tier.endswith("_market_timing"):
                 models = ["market_open", "market_close"]
             else:
                 models = CORE_MODELS
-            common = cohorts.intersection_uids(scored, models, base_tier)
-            block = scored[
-                scored[base_tier]
-                & scored["model"].eq(model)
-                & scored["match_uid"].isin(common)
+            common = cohorts.intersection_uids(scoped, models, tier_col)
+            block = scoped[
+                scoped[tier_col]
+                & scoped["model"].eq(model)
+                & scoped["match_uid"].isin(common)
             ]
         if block.empty:
             continue
@@ -304,6 +368,7 @@ def _report_md(live: pd.DataFrame, offline_df: pd.DataFrame, run_date: str) -> s
         "- **\\*_all_model_intersection** = restricted to match_uids shared by nn/xgb/rf/market and every scored variant in the current `DEFAULT_SHADOW_MODEL_SPECS`; retired historical variants do not shrink the active comparison.",
         "- **\\*_market_timing** = the same settled match_uids at first observed and last valid pre-start prices; requires at least two distinct pre-start captures and never treats first observed as the sportsbook's true opener.",
         "- **settled_market_timing** = every explicit valid winner with comparable market captures, independent of feature completeness; use this for the broad standalone market-open versus market-close diagnostic.",
+        "- **__atp / __challenger / __itf** suffixes are server-materialized copies of each live tier. ATP includes A/M/G level rows (ATP events, Masters, and Grand Slams); C/CH is Challenger; 15/25 and explicit ITF event labels are ITF. Explicit ITF text overrides the small legacy set mislabeled level A.",
         "- **Shadow variants** = one deterministic opening observation per `(match_uid, model_version)`, joined to the operational opening feature snapshot; hourly repeats do not increase n.",
         "",
         "## Verdict (live, settled)",
@@ -323,6 +388,18 @@ def _report_md(live: pd.DataFrame, offline_df: pd.DataFrame, run_date: str) -> s
         if block.empty:
             continue
         parts += [f"### {tier} (n={int(block['n'].max())})", "", _md_table(block, show), ""]
+
+    parts += ["## Tour-segment common cohorts", ""]
+    for segment in TOUR_SEGMENTS:
+        for base_tier in ["gold_intersection", "complete_intersection"]:
+            tier = _tour_tier(base_tier, segment)
+            block = live[live.tier == tier].sort_values("log_loss")
+            if block.empty:
+                continue
+            parts += [
+                f"### {tier} (n={int(block['n'].max())})", "",
+                _md_table(block, show), "",
+            ]
 
     parts += ["## Offline experiments (backtest, not live)", ""]
     if offline_df is None or offline_df.empty:

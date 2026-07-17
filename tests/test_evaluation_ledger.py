@@ -52,6 +52,33 @@ def test_live_ledger_discloses_source_start_before_first_kalshi_bet():
     assert set(live["kalshi_since"]) == {"2026-07-17T01:02:03+00:00"}
 
 
+def test_tour_segment_ledgers_preserve_overall_and_materialize_common_cohorts():
+    scored = _scored()
+    segment_by_uid = {
+        f"m{i}": "atp" if i < 30 else "challenger" if i < 55 else "itf"
+        for i in range(80)
+    }
+    scored["tour_segment"] = scored["match_uid"].map(segment_by_uid)
+
+    live = ledger.build_live_ledger(scored)
+
+    overall = live[live["tier"].eq("gold_intersection")]
+    assert set(overall["n"]) == {80}
+    for segment, expected_n in [("atp", 30), ("challenger", 25), ("itf", 25)]:
+        tier = f"gold_intersection__{segment}"
+        block = live[live["tier"].eq(tier)]
+        assert set(block["model"]) == {"nn", "xgb", "rf", "market"}
+        assert set(block["n"]) == {expected_n}
+
+    calibration = ledger.build_calibration_ledger(scored, live)
+    for segment, expected_n in [("atp", 30), ("challenger", 25), ("itf", 25)]:
+        bins = calibration[
+            calibration["tier"].eq(f"gold_intersection__{segment}")
+            & calibration["model"].eq("nn")
+        ]
+        assert int(bins["count"].sum()) == expected_n
+
+
 def test_write_outputs(tmp_path):
     live = ledger.build_live_ledger(_scored())
     offline_df = pd.DataFrame(columns=["source", "run_date", "experiment", "family",

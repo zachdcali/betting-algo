@@ -21,8 +21,9 @@ MODEL_PROB_COLS = {
 }
 IDENTITY_TERMINAL_STATUSES = {"identity_conflict", "superseded_identity"}
 SHADOW_FAMILIES = ["xgboost", "catboost", "lightgbm", "nn"]
+TOUR_SEGMENTS = ("atp", "challenger", "itf")
 SCORED_COLUMNS = [
-    "match_uid", "run_id", "model", "family", "p1_prob",
+    "match_uid", "run_id", "model", "family", "tour_segment", "p1_prob",
     "p1_odds_decimal", "p2_odds_decimal", "y1",
     "is_gold", "is_complete", "prediction_time",
     "kalshi_p1_ask", "kalshi_p2_ask", "kalshi_observation_at",
@@ -33,6 +34,24 @@ def _identity_text(value) -> str:
     if value is None or pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def classify_tour_segment(level, tournament) -> str:
+    """Map the operational level contract into a stable reporting segment.
+
+    Tournament text is allowed to override the legacy level code only for an
+    explicit ITF or Challenger label.  This repairs a small number of old ITF
+    rows written as level ``A`` without guessing from generic event names.
+    """
+    level_key = _identity_text(level).upper()
+    tournament_key = _identity_text(tournament).casefold()
+    if "itf" in tournament_key or level_key in {"15", "15.0", "25", "25.0", "M15", "M25"}:
+        return "itf"
+    if "challenger" in tournament_key or level_key in {"C", "CH", "CHALLENGER"}:
+        return "challenger"
+    if level_key in {"A", "M", "G", "ATP", "ATP250", "ATP500", "MASTERS", "GRAND_SLAM"}:
+        return "atp"
+    return "unclassified"
 
 
 def feature_identity_contract(
@@ -618,6 +637,7 @@ def _market_timing_rows(
     odds_history: pd.DataFrame | None,
     gt: pd.Series,
     tiers: pd.DataFrame,
+    tour_segments: pd.Series,
 ) -> list[dict]:
     """Build first-observed and last-pre-start market evidence.
 
@@ -678,6 +698,7 @@ def _market_timing_rows(
                 "run_id": _identity_text(observation.get("run_id")),
                 "model": model,
                 "family": "market",
+                "tour_segment": tour_segments.get(uid, "unclassified"),
                 "p1_prob": float(observation["_market_probability"]),
                 "p1_odds_decimal": _coerce_decimal_odds(
                     observation.get("p1_odds_decimal")
@@ -722,6 +743,12 @@ def build_scored_frame(
         settled.get("feature_snapshot_id", pd.Series("", index=settled.index))
         .fillna("").astype(str)
     )
+    tour_segments = settled.apply(
+        lambda row: classify_tour_segment(
+            row.get("level"), row.get("tournament")
+        ),
+        axis=1,
+    )
     rows = []
     for model, col in MODEL_PROB_COLS.items():
         if col not in settled.columns:
@@ -733,6 +760,7 @@ def build_scored_frame(
             rows.append({
                 "match_uid": uid, "run_id": _identity_text(r.get("run_id")),
                 "model": model, "family": model,
+                "tour_segment": tour_segments.get(uid, "unclassified"),
                 "p1_prob": probability,
                 "p1_odds_decimal": _coerce_decimal_odds(r.get("p1_odds_decimal")),
                 "p2_odds_decimal": _coerce_decimal_odds(r.get("p2_odds_decimal")),
@@ -742,7 +770,7 @@ def build_scored_frame(
                 "prediction_time": r.get("logged_at", r.get("odds_scraped_at")),
             })
 
-    rows.extend(_market_timing_rows(odds_history, gt, tiers))
+    rows.extend(_market_timing_rows(odds_history, gt, tiers, tour_segments))
 
     if shadow_log is not None and "model_family" in shadow_log.columns:
         sh = shadow_log[shadow_log["match_uid"].isin(gt.index)].copy()
@@ -777,6 +805,7 @@ def build_scored_frame(
                 "run_id": _identity_text(r.get("run_id")),
                 "model": f"shadow_{label}",
                 "family": r["model_family"],
+                "tour_segment": tour_segments.get(uid, "unclassified"),
                 "p1_prob": probability,
                 "p1_odds_decimal": _coerce_decimal_odds(r.get("p1_odds_decimal")),
                 "p2_odds_decimal": _coerce_decimal_odds(r.get("p2_odds_decimal")),
