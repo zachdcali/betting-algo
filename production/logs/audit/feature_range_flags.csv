@@ -13129,3 +13129,6 @@ logged_at,run_id,p1,p2,flag
 2026-07-17T07:28:09+00:00,run_20260717T070636Z,flynn thomas,lambert ruland,P1_Country_SUI=1 (z=8.2)
 2026-07-17T07:28:14+00:00,run_20260717T070636Z,luca staeheli,vladyslav orlov,P1_Country_SUI=1 (z=8.2)
 2026-07-17T07:29:00+00:00,run_20260717T070636Z,aleksa ciric,millen hurrion,P1_Country_SRB=1 (z=8.3)
+2026-07-17T08:31:26+00:00,run_20260717T081119Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
+2026-07-17T08:32:35+00:00,run_20260717T081119Z,aleksa ciric,millen hurrion,P1_Country_SRB=1 (z=8.3)
+2026-07-17T08:32:55+00:00,run_20260717T081119Z,luca staeheli,vladyslav orlov,P1_Country_SUI=1 (z=8.2)
