@@ -949,16 +949,16 @@
   },
   "goncalo marques": {
     "canonical_player_id": 149128,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T03:01:08+00:00",
-    "observed_values": {},
-    "source_content_sha256": "ac53ee90d3a488b60f3748f31e4bf1c6757f4a8dd1bd145be1548bc021ae3ea7",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T00:42:37+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "9ba25bb4a912a6a85d5e2806d31da6da1eb1026bffd55efdb2aa315ce21ecda2",
     "source_uri": "https://www.atptour.com/en/players/goncalo-marques/m0vl/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "guglielmo verdese": {
     "identity_binding": "",
@@ -1462,6 +1462,19 @@
     "source_content_sha256": "214d17a70ff6a2ebacbd91c3dee4d808f4be9ea1eacd12cf763f9b0e18ce3176",
     "source_uri": "https://www.atptour.com/en/players/kriish-tyagi/t0il/overview",
     "status": "fetch_error"
+  },
+  "lambert ruland": {
+    "canonical_player_id": 210293,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-17T00:35:11+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/lambert%20ruland",
+    "status": "no_url"
   },
   "lautaro midon": {
     "canonical_player_id": 210510,
@@ -2376,16 +2389,16 @@
   },
   "pablo perez ramos": {
     "canonical_player_id": 214558,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T06:58:57+00:00",
+    "observed_at": "2026-07-17T00:35:18+00:00",
     "observed_values": {},
-    "source_content_sha256": "c6a9513dfef6935f787d9bc40418bf6fa2e2289ecf780140ee825e33a58436c7",
+    "source_content_sha256": "da16a617697236bc4abfbda3d81899e055ff7a111e215f1e6be3f55970d20546",
     "source_uri": "https://www.atptour.com/en/players/pablo-perez-ramos/p0rk/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "paul barbier gazeu": {
     "identity_binding": "",
