@@ -153,6 +153,7 @@ test("performance UI consumes ledger rows without client metric math", () => {
   assert.match(client, /performanceTierForTour\(tier, tour\)/);
   assert.match(client, /materializedTier/);
   assert.match(client, /renderMetricOverview\(/);
+  assert.match(client, /renderRocChart\(/);
   assert.match(client, /startsWith\("shadow_"\)/);
   for (const tier of ["gold_intersection", "complete_intersection", "gold", "complete"]) {
     assert.match(html, new RegExp(`<option value="${tier}"`));
@@ -237,6 +238,20 @@ test("calibration and market-timing views consume manifest-pinned authoritative 
   assert.match(html, /Reliability diagram/);
   assert.match(html, /GOLD · first vs last market/);
   assert.doesNotMatch(client, /Math\.log|expectedCalibrationError|reliabilityTable|reliability_table|scoreDiagnosticCohort|buildCommonCohort/);
+});
+
+test("ROC is an authoritative threshold curve rather than a browser-computed AUC bar", () => {
+  assert.match(client, /fetchAll\("dash_model_roc", ROC_COLUMNS, "tier\.asc,model\.asc,point_index\.asc", generationFilter\)/);
+  assert.match(client, /actual\.dash_model_roc = arrayCount\("roc"\)/);
+  assert.match(client, /store\.roc\s*\.filter\(\(row\) => Logic\.clean\(row\.tier\)/);
+  assert.match(client, /False-positive rate/);
+  assert.match(client, /True-positive rate/);
+  assert.match(client, /Accessible ROC threshold table/);
+  assert.match(html, /Discrimination across every threshold/);
+  assert.match(html, /id="roc-chart"/);
+  assert.match(html, /AUC summarizes the area under this curve/);
+  assert.match(html, /Scalar comparison—not a diagnostic curve/);
+  assert.doesNotMatch(client, /rocCurve|roc_curve|sort.*p1_prob/);
 });
 
 test("odds movement is an exact-match lazy projection and delegates strict timing to shared logic", () => {

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 _EPS = 1e-15
 
@@ -39,6 +39,36 @@ def auc_score(y_true, p) -> float:
     if len(np.unique(y_true)) < 2:
         return float("nan")
     return float(roc_auc_score(y_true, np.asarray(p, dtype=float)))
+
+
+def roc_table(y_true, p) -> pd.DataFrame:
+    """Return the exact ROC threshold sweep used by the scalar AUC.
+
+    ``sklearn`` drops only collinear intermediate thresholds by default.  The
+    resulting curve retains its endpoints and area while avoiding redundant
+    public dashboard rows.  A one-class cohort has no defined ROC curve and
+    therefore returns an empty, schema-stable frame.
+    """
+    y_true = np.asarray(y_true, dtype=int)
+    columns = [
+        "point_index", "threshold", "false_positive_rate", "true_positive_rate",
+    ]
+    if len(np.unique(y_true)) < 2:
+        return pd.DataFrame(columns=columns)
+    false_positive_rate, true_positive_rate, thresholds = roc_curve(
+        y_true, np.asarray(p, dtype=float), drop_intermediate=True,
+    )
+    rows = []
+    for point_index, (fpr, tpr, threshold) in enumerate(
+        zip(false_positive_rate, true_positive_rate, thresholds)
+    ):
+        rows.append({
+            "point_index": point_index,
+            "threshold": float(threshold) if np.isfinite(threshold) else np.nan,
+            "false_positive_rate": float(fpr),
+            "true_positive_rate": float(tpr),
+        })
+    return pd.DataFrame(rows, columns=columns)
 
 
 def ece(y_true, p, n_bins: int = 10) -> float:

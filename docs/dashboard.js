@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-17.1";
+  const BUILD_ID = "2026-07-17.2";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -100,6 +100,12 @@
     "frac_pos", "count", "generated_at", "calibration_row_key", "sync_id",
   ].join(",");
 
+  const ROC_COLUMNS = [
+    "model", "tier", "point_index", "threshold", "false_positive_rate",
+    "true_positive_rate", "positive_count", "negative_count", "generated_at",
+    "roc_row_key", "sync_id",
+  ].join(",");
+
   const store = {
     predictions: [],
     snapshots: [],
@@ -110,6 +116,7 @@
     bankroll: [],
     metrics: [],
     calibration: [],
+    roc: [],
     meta: {
       odds: null,
       kalshi: null,
@@ -357,6 +364,9 @@
     const calibrationPublished = Object.prototype.hasOwnProperty.call(
       publishedCounts, "dash_model_calibration",
     );
+    const rocPublished = Object.prototype.hasOwnProperty.call(
+      publishedCounts, "dash_model_roc",
+    );
     const kalshiPublished = Object.prototype.hasOwnProperty.call(
       publishedCounts, "dash_kalshi_odds_history",
     );
@@ -400,6 +410,9 @@
       )),
       refreshResource("calibration", () => calibrationPublished
         ? fetchAll("dash_model_calibration", CALIBRATION_COLUMNS, "tier.asc,model.asc,bin_index.asc", generationFilter)
+        : Promise.resolve([])),
+      refreshResource("roc", () => rocPublished
+        ? fetchAll("dash_model_roc", ROC_COLUMNS, "tier.asc,model.asc,point_index.asc", generationFilter)
         : Promise.resolve([])),
       refreshMeta("odds", () => fetchTableMeta("dash_odds_history", "logged_at,odds_scraped_at,run_id,match_uid", "logged_at.desc.nullslast", generationFilter)),
       refreshMeta("kalshi", () => kalshiPublished
@@ -567,6 +580,9 @@
     };
     if (Object.prototype.hasOwnProperty.call(expected, "dash_model_calibration")) {
       actual.dash_model_calibration = arrayCount("calibration");
+    }
+    if (Object.prototype.hasOwnProperty.call(expected, "dash_model_roc")) {
+      actual.dash_model_roc = arrayCount("roc");
     }
     if (Object.prototype.hasOwnProperty.call(expected, "dash_kalshi_odds_history")) {
       Object.assign(actual, { dash_kalshi_odds_history: metaCount("kalshi") });
@@ -1339,6 +1355,7 @@
     body.appendChild(row);
     clear(byId("metric-overview"));
     clear(byId("metric-chart"));
+    clear(byId("roc-chart"));
     clear(byId("calibration-chart"));
   }
 
@@ -1573,6 +1590,126 @@
       : `${metricLabels[metric] || metric} is shown on each model's own coverage. n can differ, so color only marks absolute ROI/calibration signals—not a direct model ranking.`);
   }
 
+  function renderRocChart(rows, tier) {
+    const select = byId("roc-model-select");
+    const previous = select.value;
+    clear(select);
+    rows.forEach((row) => {
+      const presentation = Logic.modelPresentation(row.model);
+      const option = element("option", null, presentation.label);
+      option.value = Logic.clean(row.model);
+      select.appendChild(option);
+    });
+    if (rows.some((row) => Logic.clean(row.model) === previous)) {
+      select.value = previous;
+    } else if (rows.some((row) => Logic.clean(row.model) === "nn")) {
+      select.value = "nn";
+    }
+    const model = select.value;
+    const host = byId("roc-chart");
+    clear(host);
+    const points = store.roc
+      .filter((row) => Logic.clean(row.tier).toLowerCase() === tier && Logic.clean(row.model) === model)
+      .map((row) => ({
+        index: Logic.numberOrNull(row.point_index),
+        threshold: Logic.numberOrNull(row.threshold),
+        fpr: Logic.numberOrNull(row.false_positive_rate),
+        tpr: Logic.numberOrNull(row.true_positive_rate),
+        positives: Logic.numberOrNull(row.positive_count),
+        negatives: Logic.numberOrNull(row.negative_count),
+      }))
+      .filter((row) => row.index !== null && row.fpr !== null && row.tpr !== null)
+      .sort((a, b) => a.index - b.index);
+    if (!points.length) {
+      host.appendChild(element("div", "chart-empty", store.roc.length
+        ? "No defined ROC curve is available for this model and cohort. Both outcome classes are required."
+        : "ROC curves will appear after the first dashboard generation published by this build."));
+      return;
+    }
+
+    const width = 430;
+    const height = 330;
+    const pad = 42;
+    const x = (value) => pad + value * (width - pad * 2);
+    const y = (value) => height - pad - value * (height - pad * 2);
+    const presentation = Logic.modelPresentation(model);
+    const metric = rows.find((row) => Logic.clean(row.model) === model);
+    const auc = metric ? Logic.numberOrNull(metric.auc) : null;
+    const svg = svgNode("svg", {
+      viewBox: `0 0 ${width} ${height}`,
+      role: "img",
+      "aria-label": `ROC curve for ${presentation.label}${auc === null ? "" : `, AUC ${formatPercent(auc)}`}`,
+    });
+    [0, 0.25, 0.5, 0.75, 1].forEach((value) => {
+      svg.append(
+        svgNode("line", { x1: x(value), x2: x(value), y1: y(0), y2: y(1), class: "chart-grid" }),
+        svgNode("line", { x1: x(0), x2: x(1), y1: y(value), y2: y(value), class: "chart-grid" }),
+      );
+      const xLabel = svgNode("text", { x: x(value), y: height - 15, "text-anchor": "middle", class: "chart-label" });
+      xLabel.textContent = `${Math.round(value * 100)}%`;
+      const yLabel = svgNode("text", { x: 33, y: y(value) + 3, "text-anchor": "end", class: "chart-label" });
+      yLabel.textContent = `${Math.round(value * 100)}%`;
+      svg.append(xLabel, yLabel);
+    });
+    svg.append(
+      svgNode("line", { x1: x(0), x2: x(1), y1: y(0), y2: y(1), class: "chart-perfect" }),
+      svgNode("polyline", {
+        points: points.map((point) => `${x(point.fpr)},${y(point.tpr)}`).join(" "),
+        class: "chart-roc-line",
+      }),
+    );
+    points.forEach((point) => {
+      const circle = svgNode("circle", {
+        cx: x(point.fpr), cy: y(point.tpr), r: 3.2,
+        class: "chart-roc-point", tabindex: 0,
+      });
+      addSvgTitle(
+        circle,
+        `Threshold ${point.threshold === null ? "above maximum" : formatPercent(point.threshold)} · FPR ${formatPercent(point.fpr)} · TPR ${formatPercent(point.tpr)}`,
+      );
+      svg.appendChild(circle);
+    });
+    const xTitle = svgNode("text", { x: width / 2, y: height - 2, "text-anchor": "middle", class: "chart-label" });
+    xTitle.textContent = "False-positive rate";
+    const yTitle = svgNode("text", { x: 11, y: height / 2, transform: `rotate(-90 11 ${height / 2})`, "text-anchor": "middle", class: "chart-label" });
+    yTitle.textContent = "True-positive rate";
+    svg.append(xTitle, yTitle);
+    host.appendChild(svg);
+
+    const summary = element("div", "curve-summary");
+    summary.append(
+      element("strong", null, auc === null ? "AUC —" : `AUC ${formatPercent(auc)}`),
+      element("span", null, `positive outcomes ${formatNumber(points[0].positives)} · negative outcomes ${formatNumber(points[0].negatives)}`),
+    );
+    host.appendChild(summary);
+
+    const accessible = element("details", "research-disclosure curve-points");
+    accessible.appendChild(element("summary", null, "Accessible ROC threshold table"));
+    const shell = element("div", "table-shell");
+    const table = element("table");
+    table.appendChild(element("caption", null, `ROC thresholds for ${presentation.label}`));
+    const head = element("thead");
+    const headRow = element("tr");
+    ["Threshold", "False-positive rate", "True-positive rate"].forEach((label) => {
+      const th = element("th", null, label); th.scope = "col"; headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    const body = element("tbody");
+    points.forEach((point) => {
+      const row = element("tr");
+      [
+        point.threshold === null ? "above maximum" : formatPercent(point.threshold),
+        formatPercent(point.fpr),
+        formatPercent(point.tpr),
+      ].forEach((value) => row.appendChild(element("td", null, value)));
+      body.appendChild(row);
+    });
+    table.append(head, body);
+    shell.appendChild(table);
+    accessible.appendChild(shell);
+    host.appendChild(accessible);
+  }
+
   function renderCalibrationChart(rows, tier) {
     const select = byId("calibration-model-select");
     const previous = select.value;
@@ -1778,6 +1915,7 @@
       : performanceScopeRows(selectedTierRows, "core");
     renderMetricOverview(overviewRows, tier, selectedTierRows, tourLabel);
     renderMetricExplorer(sourceRows, tier, selectedTierRows);
+    renderRocChart(sourceRows, materializedTier);
     renderCalibrationChart(sourceRows, materializedTier);
 
     const body = byId("performance-table").tBodies[0];
@@ -2026,6 +2164,7 @@
       ["Shadow observations", store.meta.shadows && store.meta.shadows.count, "secondary; loaded per match"],
       ["Model metric rows", store.metrics.length, `${new Set(store.metrics.map((row) => Logic.clean(row.model))).size} promoted, benchmark, and shadow identities`],
       ["Calibration bins", store.calibration.length, store.calibration.length ? "authoritative ledger reliability projection" : "awaiting first compatible generation"],
+      ["ROC points", store.roc.length, store.roc.length ? "authoritative ledger threshold projection" : "awaiting first compatible generation"],
       ["Feature vectors", store.meta.features && store.meta.features.count, "exact ID lookup only"],
       ["Accepted feature references", store.acceptedFeatures.ids.length, store.errors.acceptedFeatures ? `unverified: ${store.errors.acceptedFeatures}` : `${store.acceptedFeatures.seenIds.length} IDs present · verified status + complete + schema/vector hashes + 141 features · ${Logic.clean(store.acceptedFeatures.runId) || "no accepted run"}`],
       ["Settlement audit", store.meta.settlement && store.meta.settlement.count, "full generation count verified"],
@@ -2132,6 +2271,7 @@
       renderPerformance();
     });
     byId("metric-chart-select").addEventListener("change", renderPerformance);
+    byId("roc-model-select").addEventListener("change", renderPerformance);
     byId("calibration-model-select").addEventListener("change", renderPerformance);
     byId("results-search").addEventListener("input", () => { resultsLimit = 100; renderResults(); });
     byId("results-more").addEventListener("click", () => { resultsLimit += 100; renderResults(); });

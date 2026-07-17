@@ -285,7 +285,10 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   the local Streamlit dashboard reads production CSVs for deeper inspection.
   Neither dashboard may invent model metrics or a shadow dataset. Browser model
   metrics come from `dash_model_metrics`, materialized through the evaluation
-  ledger's metric code.
+  ledger's metric code. Reliability bins in `dash_model_calibration` and ROC
+  threshold points in `dash_model_roc` must be generated from the exact same
+  authoritative scored cohort and published in that manifest generation; the
+  browser renders those points and never reconstructs either curve locally.
 - Pending identity remediation is registry-only until separately reviewed
   operational materialization. A UID candidate from names/dates, odds, or
   feature lineage is never authority. Approved decisions require retained

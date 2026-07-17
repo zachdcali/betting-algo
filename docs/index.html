@@ -7,9 +7,9 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://nwcayyusigznreygjlxl.supabase.co; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>The Ledger — Tennis Pipeline Operations</title>
-  <link rel="stylesheet" href="dashboard.css?v=2026-07-17.1">
-  <script src="dashboard_logic.js?v=2026-07-17.1" defer></script>
-  <script src="dashboard.js?v=2026-07-17.1" defer></script>
+  <link rel="stylesheet" href="dashboard.css?v=2026-07-17.2">
+  <script src="dashboard_logic.js?v=2026-07-17.2" defer></script>
+  <script src="dashboard.js?v=2026-07-17.2" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -173,31 +173,22 @@
         <p><a class="secondary-button" href="modeling/MODEL_LEDGER.md">Open dated full ledger snapshot</a> <span class="section-note">This report may lag the accepted sync shown above.</span></p>
         <article class="panel-card metric-overview-card">
           <div class="card-heading">
-            <div><p class="eyebrow">Core models + market</p><h3>Quality metrics at a glance</h3></div>
+            <div><p class="eyebrow">Scalar summaries</p><h3>Quality scores at a glance</h3></div>
             <span class="status-chip neutral">Same selected cohort</span>
           </div>
-          <p id="metric-overview-note" class="section-note">AUC, probabilistic error, calibration, and accuracy shown together.</p>
+          <p id="metric-overview-note" class="section-note">These are scorecards, not diagnostic curves. Use ROC and calibration below to inspect model behavior.</p>
           <div id="metric-overview" class="metric-overview-grid" aria-live="polite"></div>
         </article>
         <div class="analytics-grid">
           <article class="analytics-card">
             <div class="card-heading">
-              <div><p class="eyebrow">Compare every visible model</p><h3>Metric explorer</h3></div>
-              <label class="field-label">Metric
-                <select id="metric-chart-select">
-                  <option value="log_loss">Log loss · lower is better</option>
-                  <option value="brier">Brier score · lower is better</option>
-                  <option value="ece">ECE · lower is better</option>
-                  <option value="cal_slope">Calibration slope · target 1.0</option>
-                  <option value="accuracy">Accuracy · higher is better</option>
-                  <option value="auc">AUC · higher is better</option>
-                  <option value="roi_flat">Flat ROI · zero is break-even</option>
-                  <option value="roi_flat_kalshi">Flat ROI · Kalshi vig-free asks</option>
-                </select>
+              <div><p class="eyebrow">Discrimination across every threshold</p><h3>ROC curve</h3></div>
+              <label class="field-label">Model
+                <select id="roc-model-select"></select>
               </label>
             </div>
-            <p id="metric-chart-note" class="section-note"></p>
-            <div id="metric-chart" class="metric-chart" aria-live="polite"></div>
+            <p class="section-note">True-positive rate versus false-positive rate as the decision threshold moves. The diagonal is random ranking; AUC summarizes the area under this curve.</p>
+            <div id="roc-chart" class="roc-chart" aria-live="polite"></div>
           </article>
           <article class="analytics-card">
             <div class="card-heading">
@@ -210,6 +201,25 @@
             <div id="calibration-chart" class="calibration-chart" aria-live="polite"></div>
           </article>
         </div>
+        <article class="analytics-card scalar-explorer-card">
+          <div class="card-heading">
+            <div><p class="eyebrow">Scalar comparison—not a diagnostic curve</p><h3>Metric explorer</h3></div>
+            <label class="field-label">Metric
+              <select id="metric-chart-select">
+                <option value="log_loss">Log loss · lower is better</option>
+                <option value="brier">Brier score · lower is better</option>
+                <option value="ece">ECE · lower is better</option>
+                <option value="cal_slope">Calibration slope · target 1.0</option>
+                <option value="accuracy">Accuracy · higher is better</option>
+                <option value="auc">AUC · higher is better</option>
+                <option value="roi_flat">Flat ROI · zero is break-even</option>
+                <option value="roi_flat_kalshi">Flat ROI · Kalshi vig-free asks</option>
+              </select>
+            </label>
+          </div>
+          <p id="metric-chart-note" class="section-note"></p>
+          <div id="metric-chart" class="metric-chart" aria-live="polite"></div>
+        </article>
         <div class="table-shell"><table id="performance-table"><caption>Current manifest-pinned model metrics for the selected accepted dashboard generation</caption><thead><tr><th scope="col">Model</th><th scope="col">n</th><th scope="col">Log loss ↓</th><th scope="col">Brier ↓</th><th scope="col">ECE ↓</th><th scope="col">Cal slope</th><th scope="col">Accuracy</th><th scope="col">AUC</th><th scope="col">Flat ROI (Bovada)</th><th scope="col">Bovada flat bets</th><th scope="col">Flat ROI (Kalshi, vig-free)</th><th scope="col">Kalshi bets since</th></tr></thead><tbody></tbody></table></div>
         <details class="research-disclosure">
           <summary>How to read shadows and ROI</summary>
