@@ -13122,3 +13122,6 @@ logged_at,run_id,p1,p2,flag
 2026-07-17T00:41:41+00:00,run_20260717T001628Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
 2026-07-17T00:42:23+00:00,run_20260717T001628Z,flynn thomas,lambert ruland,P1_Country_SUI=1 (z=8.2)
 2026-07-17T00:42:25+00:00,run_20260717T001628Z,luca staeheli,vladyslav orlov,P1_Country_SUI=1 (z=8.2)
+2026-07-17T04:00:49+00:00,run_20260717T034157Z,alexander shevchenko,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
+2026-07-17T04:05:34+00:00,run_20260717T034157Z,flynn thomas,lambert ruland,P1_Country_SUI=1 (z=8.2)
+2026-07-17T04:05:38+00:00,run_20260717T034157Z,luca staeheli,vladyslav orlov,P1_Country_SUI=1 (z=8.2)

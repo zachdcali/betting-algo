@@ -520,16 +520,16 @@
   },
   "daniel jade": {
     "canonical_player_id": 212711,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T07:00:41+00:00",
-    "observed_values": {},
-    "source_content_sha256": "cad4a88d5477e9a247b709baf9c9204b4f6172accc6198dd8e4d383202318841",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T04:05:57+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 178
+    },
+    "source_content_sha256": "86fdcff1bcb19ce49d5cb757dbf8cb82705dbf00727c6a0d155ca8a202790621",
     "source_uri": "https://www.atptour.com/en/players/daniel-jade/j0em/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "daniel milavsky": {
     "canonical_player_id": 212251,
@@ -2337,16 +2337,16 @@
   },
   "ofek shimanov": {
     "canonical_player_id": 210645,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T06:58:52+00:00",
-    "observed_values": {},
-    "source_content_sha256": "eedbe0a54c35d9d02f15446e077186e9186c7f5bb4a7a79cce3106370f5b4ed7",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T04:05:30+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 178
+    },
+    "source_content_sha256": "fcbe9c6d11135aa50cf3216bcb664778850b7d4327ffa6ac23dff31bffeabf95",
     "source_uri": "https://www.atptour.com/en/players/ofek-shimanov/s0v8/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "oliver bonding": {
     "canonical_player_id": 212839,
@@ -2816,16 +2816,17 @@
     "status": "resolved"
   },
   "stefano dagostino": {
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T09:48:23+00:00",
-    "observed_values": {},
-    "source_content_sha256": "721699cdb2629e61964f24c0f256c99b215da39438db80589b51310863980724",
+    "canonical_player_id": 208806,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T03:57:25+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "45beaa98779adfd24ee4b712aed16cb82411fa652edcc025b4b3779e57b70b0b",
     "source_uri": "https://www.atptour.com/en/players/stefano-d'agostino/d0d9/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "sulaiman syed": {
     "identity_binding": "",
@@ -3143,16 +3144,16 @@
   },
   "yanis ghazouani durand": {
     "canonical_player_id": 211901,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-16T00:35:19+00:00",
-    "observed_values": {},
-    "source_content_sha256": "1712c3515edbce66df9864290f6269dd0be328f1e74e2f2d6479ab950cd407dc",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-17T04:05:49+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "581912d286113f04abe7bb2d1e24426661387d0a5373049ce31fafd09eedd7c5",
     "source_uri": "https://www.atptour.com/en/players/yanis-ghazouani-durand/g0lg/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "yannic nittmann": {
     "identity_binding": "",
