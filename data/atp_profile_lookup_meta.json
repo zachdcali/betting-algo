@@ -2041,9 +2041,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-18T11:05:37+00:00",
+    "observed_at": "2026-07-18T12:27:45+00:00",
     "observed_values": {},
-    "source_content_sha256": "34ce90dc03404fc9710d1f6f67d194252b3e8b7f5b433c5ad3a8672874b3dda7",
+    "source_content_sha256": "7cf97dee6fc1e63d5218d4220281a3e955a961dc3dcd38c29425718e50a5761c",
     "source_uri": "https://www.atptour.com/en/players/michele-ribecai/r0jw/overview",
     "status": "fetch_error"
   },
