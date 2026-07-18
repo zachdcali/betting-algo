@@ -2036,16 +2036,16 @@
   },
   "michele ribecai": {
     "canonical_player_id": 212020,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-18T12:27:45+00:00",
-    "observed_values": {},
-    "source_content_sha256": "7cf97dee6fc1e63d5218d4220281a3e955a961dc3dcd38c29425718e50a5761c",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-18T14:13:21+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 173
+    },
+    "source_content_sha256": "70c47a0205a3f7a295617545a417c419d2cb526dedbfa2d15aad4a8361211d4e",
     "source_uri": "https://www.atptour.com/en/players/michele-ribecai/r0jw/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "mircea mortasifu": {
     "identity_binding": "",
