@@ -88,7 +88,29 @@ def prefetch_event_pages(session_cache: dict, ref_date=None) -> dict:
 
     todo = [ev for ev in events if ev["url"] not in results_cache
             or ev["url"] not in draws_cache or ev["url"] not in sched_cache]
-    stats = {"atp_events": len(todo), "itf_events": 0, "errors": 0}
+    discovery = session_cache.get("atp_event_discovery") or {}
+    discovery_status = discovery.get(
+        "status", "success" if events else "error",
+    )
+    stats = {
+        "atp_events": len(todo),
+        "atp_events_discovered": len(events),
+        "event_discovery_status": discovery_status,
+        "event_discovery_error": (
+            "zero_official_atp_events"
+            if not events
+            else "dynamic_discovery_empty_static_fallback"
+            if discovery_status == "degraded_static_fallback"
+            else ""
+        ),
+        "itf_events": 0,
+        "errors": 0,
+    }
+    if discovery_status != "success":
+        print(
+            "  🚨 official ATP event discovery degraded: "
+            f"{stats['event_discovery_error']}"
+        )
     if todo:
         with ThreadPoolExecutor(max_workers=ATP_WORKERS, thread_name_prefix="atp-prefetch") as pool:
             futures = {pool.submit(_fetch_atp_bundle, ev): ev for ev in todo}
@@ -143,6 +165,7 @@ def prefetch_event_pages(session_cache: dict, ref_date=None) -> dict:
                         print(f"      ⚠️ ITF prefetch failed for {k} (non-fatal): {str(exc)[:60]}")
                         stats["errors"] += 1
     stats["seconds"] = round(time.time() - t0, 1)
-    print(f"  ⚡ prefetch: {stats['atp_events']} ATP + {stats['itf_events']} ITF events "
+    print(f"  ⚡ prefetch: {stats['atp_events']} of {stats['atp_events_discovered']} ATP + "
+          f"{stats['itf_events']} ITF events "
           f"warmed in {stats['seconds']}s ({stats['errors']} errors)")
     return stats

@@ -1,6 +1,7 @@
 import gzip
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_DIR = REPO_ROOT / "production"
@@ -141,3 +142,77 @@ def test_parse_challenger_calendar_fixture():
     assert df["url"].str.endswith("/results").all()
     week = df[(df.start_date >= "2026-07-06") & (df.start_date <= "2026-07-13")]
     assert {"iasi", "bogota", "braunschweig"} <= set(week["slug"])
+
+
+def test_parse_tour_calendar_modern_event_card_keeps_surface_and_date():
+    from scraping.atp_results_scraper import parse_tour_calendar
+
+    html = """
+    <ul class="events show">
+      <li>
+        <div>
+          <a href="/en/tournaments/estoril/7290/overview">
+            <div class="list-wrapper">
+              Estoril, Portugal Millennium Estoril Open | 20 - 26 July, 2026
+            </div>
+          </a>
+          <span>sgl 28 dbl 16 Clay Outdoor</span>
+          <a href="/en/scores/current/estoril/7290/draws">Draws</a>
+        </div>
+      </li>
+    </ul>
+    """
+
+    df = parse_tour_calendar(html)
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["event"] == "Estoril"
+    assert row["start_date"] == "2026-07-20"
+    assert row["surface"] == "Clay"
+    assert row["url"].endswith("/en/scores/current/estoril/7290/results")
+
+
+def test_rendered_fetch_does_not_accept_large_navigation_shell(monkeypatch):
+    from scraping import atp_results_scraper
+
+    class FakePage:
+        def __init__(self):
+            self.attempt = 0
+            self.closed = False
+
+        def goto(self, *_args, **_kwargs):
+            self.attempt = 1
+
+        def reload(self, *_args, **_kwargs):
+            self.attempt = 2
+
+        def wait_for_selector(self, *_args, **_kwargs):
+            if self.attempt == 1:
+                raise RuntimeError("event cards not injected yet")
+
+        def content(self):
+            if self.attempt == 1:
+                return "navigation" + ("x" * 60_000)
+            return "<a href='/en/tournaments/estoril/7290/overview'>Estoril</a>"
+
+        def close(self):
+            self.closed = True
+
+    page = FakePage()
+    monkeypatch.setitem(
+        sys.modules,
+        "browser_session",
+        SimpleNamespace(new_page=lambda: page),
+    )
+    monkeypatch.setattr(atp_results_scraper.time, "sleep", lambda _seconds: None)
+
+    html = atp_results_scraper._fetch_rendered(
+        "https://www.atptour.com/en/tournaments",
+        "a[href$='/overview']",
+        require_selector=True,
+    )
+
+    assert "Estoril" in html
+    assert page.attempt == 2
+    assert page.closed is True

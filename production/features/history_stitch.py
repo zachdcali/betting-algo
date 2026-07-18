@@ -44,6 +44,44 @@ CURRENT_EVENT_REGISTRY = [
         "level": "G",
         "window": ("2026-06-29", "2026-07-13"),
     },
+    # Verified ATP calendar instances kept as a bounded break-glass path for
+    # the 2026-07-18 week. ATP's client-rendered calendar can expose only its
+    # navigation shell on a cloud runner; these entries ensure that a transient
+    # discovery miss cannot erase official round/surface evidence already
+    # published at the stable event URLs below.
+    {
+        "event": "Kitzbuhel",
+        "url": "https://www.atptour.com/en/scores/current/kitzbuhel/319/results",
+        "start_date": "2026-07-20",
+        "date_verified": True,
+        "date_source": "official_atp_calendar",
+        "date_evidence_url": "https://www.atptour.com/en/tournaments/kitzbuhel/319/overview",
+        "surface": "Clay",
+        "level": "A",
+        "window": ("2026-07-18", "2026-07-27"),
+    },
+    {
+        "event": "Estoril",
+        "url": "https://www.atptour.com/en/scores/current/estoril/7290/results",
+        "start_date": "2026-07-20",
+        "date_verified": True,
+        "date_source": "official_atp_calendar",
+        "date_evidence_url": "https://www.atptour.com/en/tournaments/estoril/7290/overview",
+        "surface": "Clay",
+        "level": "A",
+        "window": ("2026-07-18", "2026-07-28"),
+    },
+    {
+        "event": "Tampere",
+        "url": "https://www.atptour.com/en/scores/current-challenger/tampere/221/results",
+        "start_date": "2026-07-20",
+        "date_verified": True,
+        "date_source": "official_atp_calendar",
+        "date_evidence_url": "https://www.atptour.com/en/tournaments/tampere/221/overview",
+        "surface": "Clay",
+        "level": "C",
+        "window": ("2026-07-18", "2026-07-28"),
+    },
 ]
 
 # Stitch only when TA's newest row is at least this many days older than the
@@ -408,7 +446,9 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
         cal_cache = cache.setdefault("atp_calendar", {})
         if "df" not in cal_cache:
             html = _fetch_rendered("https://www.atptour.com/en/atp-challenger-tour/calendar",
-                                   "a[href*='/en/scores/']")
+                                   "a[href*='/en/scores/archive/'][href$='/results'], "
+                                   "a[href*='/en/scores/current-challenger/'][href$='/results']",
+                                   require_selector=True)
             cal_cache["df"] = parse_challenger_calendar(html)
         cal = cal_cache["df"]
     except Exception as exc:
@@ -465,33 +505,36 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
         tcal_cache = cache.setdefault("atp_tour_calendar", {})
         if "df" not in tcal_cache:
             html = _fetch_rendered("https://www.atptour.com/en/tournaments",
-                                   "a[href*='/en/tournaments/']")
+                                   "a[href^='/en/tournaments/'][href$='/overview']",
+                                   require_selector=True)
             tcal_cache["df"] = parse_tour_calendar(html)
         tcal = tcal_cache["df"]
-        if tcal is not None and not tcal.empty:
-            seen_ids = {e.get("id") for e in events}
-            win = tcal[(pd.to_datetime(tcal["start_date"]) <= ref + pd.Timedelta(days=5))
-                       & (pd.to_datetime(tcal["start_date"]) >= ref - pd.Timedelta(days=8))]
-            for _, r in win.iterrows():
-                ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
-                      "url": r["url"], "level": "A", "surface": r.get("surface", ""),
-                      }
-                _set_event_date(ev, r["start_date"], source="tour_calendar", verified=True)
-                if "davis cup" in str(r["event"]).lower():
-                    ev["level"] = "D"
-                if r["id"] in seen_ids:
-                    # Hub discovery happens before the tour calendar. Upgrade a
-                    # Monday guess in place once the official calendar supplies
-                    # the date instead of skipping the authoritative metadata.
-                    for existing in events:
-                        if existing.get("id") == r["id"] and not event_date_is_verified(existing):
-                            existing.update(ev)
-                            break
-                    continue
-                events.append(ev)
+        if tcal is None or tcal.empty:
+            raise RuntimeError("tour calendar parse returned no events")
+        seen_ids = {e.get("id") for e in events}
+        win = tcal[(pd.to_datetime(tcal["start_date"]) <= ref + pd.Timedelta(days=5))
+                   & (pd.to_datetime(tcal["start_date"]) >= ref - pd.Timedelta(days=8))]
+        for _, r in win.iterrows():
+            ev = {"event": r["event"], "slug": r["slug"], "id": r["id"],
+                  "url": r["url"], "level": "A", "surface": r.get("surface", ""),
+                  }
+            _set_event_date(ev, r["start_date"], source="tour_calendar", verified=True)
+            if "davis cup" in str(r["event"]).lower():
+                ev["level"] = "D"
+            if r["id"] in seen_ids:
+                # Hub discovery happens before the tour calendar. Upgrade a
+                # Monday guess in place once the official calendar supplies
+                # the date instead of skipping the authoritative metadata.
+                for existing in events:
+                    if existing.get("id") == r["id"] and not event_date_is_verified(existing):
+                        existing.update(ev)
+                        break
+                continue
+            events.append(ev)
     except Exception as exc:
         cache.setdefault("atp_tour_calendar", {})["df"] = pd.DataFrame()
         print(f"      ⚠️ tour calendar discovery unavailable ({exc})")
+    dynamic_event_count = len(events)
     static_slugs = set()
     for sev in CURRENT_EVENT_REGISTRY:
         lo, hi = pd.Timestamp(sev["window"][0]), pd.Timestamp(sev["window"][1])
@@ -503,11 +546,74 @@ def get_active_events(ref_date, session_cache: Optional[dict] = None) -> list[di
             registry_event.setdefault("date_verified", True)
             registry_event.setdefault("date_source", "static_registry")
             events.append(registry_event)
+    tcal_frame = (cache.get("atp_tour_calendar") or {}).get("df")
+    source_counts = {
+        "hub": len(cache.get("atp_hub_events") or []),
+        "challenger_calendar": int(len(cal)) if cal is not None else 0,
+        "tour_calendar": int(len(tcal_frame)) if tcal_frame is not None else 0,
+        "active_window": len(events),
+    }
+    discovery_status = (
+        "success"
+        if dynamic_event_count
+        else "degraded_static_fallback"
+        if events
+        else "error"
+    )
+    cache["atp_event_discovery"] = {
+        "status": discovery_status,
+        "ref_date": ref_key,
+        "dynamic_active_window": dynamic_event_count,
+        **source_counts,
+    }
+    if not dynamic_event_count:
+        print(
+            "      🚨 dynamic ATP event discovery returned zero official events "
+            f"for {ref_key}; status={discovery_status}; sources={source_counts}"
+        )
     events_by_ref_date[ref_key] = events
     return events
 
 
-def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] = None) -> Optional[str]:
+_EVENT_TITLE_STOPWORDS = {
+    "atp", "challenger", "itf", "men", "mens", "singles", "open", "tour",
+    "qualifying", "main", "draw", "m15", "m25",
+}
+
+
+def _event_title_tokens(value: str) -> set[str]:
+    normalized = re.sub(r"\(\d+\)\s*$", "", str(value or "").lower())
+    return {
+        token for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) >= 3 and token not in _EVENT_TITLE_STOPWORDS
+    }
+
+
+def _events_for_title(events: list[dict], event_title: str) -> list[dict]:
+    """Prefer the official event named by the sportsbook bucket.
+
+    A title filter is applied only when it identifies at least one event;
+    sponsor-mangled or generic labels retain the conservative all-events
+    fallback.
+    """
+    expected = _event_title_tokens(event_title)
+    if not expected:
+        return events
+    matched = [
+        event for event in events
+        if expected & _event_title_tokens(event.get("event", ""))
+        or expected & _event_title_tokens(event.get("slug", ""))
+    ]
+    return matched or events
+
+
+def round_from_draws(
+    p1: str,
+    p2: str,
+    ref_date,
+    session_cache: Optional[dict] = None,
+    expected_event_title: str = "",
+) -> Optional[str]:
     """Resolve an upcoming match's round from active events' DRAW pages.
 
     Covers what result-based inference can't: first-round matches at a
@@ -520,7 +626,10 @@ def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] =
         from atp_results_scraper import fetch_event_draw
     except ImportError:
         from scraping.atp_results_scraper import fetch_event_draw
-    for ev in get_active_events(ref_date, cache):
+    events = _events_for_title(
+        get_active_events(ref_date, cache), expected_event_title,
+    )
+    for ev in events:
         url = ev["url"]
         if url not in draws_cache:
             try:
@@ -544,7 +653,7 @@ def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] =
     except ImportError:
         from scraping.atp_results_scraper import fetch_daily_schedule
     sched_cache = cache.setdefault("atp_event_schedules", {})
-    for ev in get_active_events(ref_date, cache):
+    for ev in events:
         url = ev["url"]
         if url not in sched_cache:
             try:
@@ -568,10 +677,18 @@ def round_from_draws(p1: str, p2: str, ref_date, session_cache: Optional[dict] =
 _NEXT_ROUND_ANY_WINDOW_DAYS = 16
 
 
-def infer_next_round_any(matches1: pd.DataFrame, matches2: pd.DataFrame, ref_date) -> Optional[str]:
+def infer_next_round_any(
+    matches1: pd.DataFrame,
+    matches2: pd.DataFrame,
+    ref_date,
+    expected_event_title: str = "",
+) -> Optional[str]:
     """Registry-free round inference: if BOTH players' newest rows are the same
     event's same round, played within the last ~two weeks of ref_date, the
-    upcoming match is the next round. Any mismatch -> None (stays unresolved)."""
+    upcoming match is the next round. When the sportsbook supplies an event
+    title, that completed event must also match it; otherwise two players who
+    happened to exit a prior tournament in the same round can fabricate a
+    semifinal/final for a new tournament. Any mismatch -> None."""
     tops = []
     for m in (matches1, matches2):
         if m is None or m.empty:
@@ -583,6 +700,10 @@ def infer_next_round_any(matches1: pd.DataFrame, matches2: pd.DataFrame, ref_dat
         tops.append((str(top.get("event", "")).strip().lower(),
                      str(top.get("round", "")).strip().upper()))
     if tops[0][0] != tops[1][0] or not tops[0][0]:
+        return None
+    expected_tokens = _event_title_tokens(expected_event_title)
+    completed_tokens = _event_title_tokens(tops[0][0])
+    if expected_tokens and not (expected_tokens & completed_tokens):
         return None
     if tops[0][1] != tops[1][1]:
         return None
