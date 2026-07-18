@@ -49,6 +49,19 @@
     "source_uri": "https://www.atptour.com/en/players/alaa-trifi/t0jo/overview",
     "status": "not_found"
   },
+  "alan wazny": {
+    "canonical_player_id": 213048,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T22:33:49+00:00",
+    "observed_values": {},
+    "source_content_sha256": "1e8893a89436a08a8bcf896b523ca3b273a8ca18b67c7bda833e3c395d79c1ae",
+    "source_uri": "https://www.atptour.com/en/players/alan-wazny/w0f8/overview",
+    "status": "fetch_error"
+  },
   "albert pedrico kravtsov": {
     "canonical_player_id": 212285,
     "identity_binding": "",
@@ -1035,6 +1048,19 @@
     "source_uri": "atp-rankings://unmapped/ignacio%20parisca",
     "status": "no_url"
   },
+  "igor ribeiro marcondes": {
+    "canonical_player_id": 127108,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T22:33:34+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/igor%20ribeiro%20marcondes",
+    "status": "no_url"
+  },
   "iker urribarrens ramirez": {
     "identity_binding": "",
     "missing_fields": [
@@ -1703,6 +1729,19 @@
     "source_content_sha256": "fc94af59ea18b0040772cca3f95f4e52888d82640cf1d99ba86c1578e4c9756a",
     "source_uri": "https://www.atptour.com/en/players/manuel-plunger/p0ln/overview",
     "status": "identity_mismatch"
+  },
+  "marcel zielinski": {
+    "canonical_player_id": 210505,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T22:33:39+00:00",
+    "observed_values": {},
+    "source_content_sha256": "c91381c9a42ad4f77e77aafd02d11d15106fae9f5f19250a2ae576e4b667f4fc",
+    "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
+    "status": "fetch_error"
   },
   "marcos castro fabra": {
     "identity_binding": "",
@@ -2386,6 +2425,19 @@
     "source_content_sha256": "fb31aa8a5d87eb270f70e8557df0e4f56b89883100e3e8c8a5e265d1efa400cb",
     "source_uri": "https://www.atptour.com/en/players/oliver-bonding/b0vf/overview",
     "status": "resolved"
+  },
+  "oskar brostrom poulsen": {
+    "canonical_player_id": 211355,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T22:33:44+00:00",
+    "observed_values": {},
+    "source_content_sha256": "124baf588ef6bc71352a0d6ac740ed478d1afd7a4c9d2578be5649918f324d87",
+    "source_uri": "https://www.atptour.com/en/players/oskar-brostrom-poulsen/p0in/overview",
+    "status": "fetch_error"
   },
   "oskari paldanius": {
     "canonical_player_id": 213619,
