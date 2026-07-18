@@ -254,6 +254,60 @@ def test_active_event_discovery_caches_raw_sources_but_keys_date_windows(monkeyp
     assert set(cache["atp_active_events_by_ref_date"]) == {"2026-07-14", "2026-07-15"}
 
 
+def test_verified_current_week_registry_survives_empty_dynamic_discovery(monkeypatch):
+    import importlib
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    monkeypatch.setattr(atp_results_scraper, "discover_active_events", lambda: [])
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame()},
+    }
+
+    events = get_active_events("2026-07-18", cache)
+    current = {event["event"]: event for event in events}
+
+    assert {"Kitzbuhel", "Estoril", "Tampere"} <= set(current)
+    assert current["Estoril"]["surface"] == "Clay"
+    assert current["Tampere"]["level"] == "C"
+    assert all(current[name]["date_verified"] for name in current)
+    assert cache["atp_event_discovery"]["status"] == "degraded_static_fallback"
+    assert cache["atp_event_discovery"]["active_window"] == 3
+
+
+def test_round_resolution_uses_expected_event_and_official_schedule(monkeypatch):
+    import importlib
+    from features.history_stitch import round_from_draws
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    monkeypatch.setattr(atp_results_scraper, "discover_active_events", lambda: [])
+    kitz_url = "https://www.atptour.com/en/scores/current/kitzbuhel/319/results"
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame()},
+        "atp_event_draws": {kitz_url: pd.DataFrame()},
+        "atp_event_schedules": {kitz_url: pd.DataFrame([{
+            "round": "Q2", "p1": "F. Cina", "p2": "L. Giustino",
+        }])},
+    }
+
+    resolved = round_from_draws(
+        "Federico Cina",
+        "Lorenzo Giustino",
+        "2026-07-18",
+        cache,
+        expected_event_title="ATP - Kitzbuhel (11)",
+    )
+
+    assert resolved == "Q2"
+
+
 def test_infer_next_round():
     from features.history_stitch import infer_next_round
     m1 = pd.DataFrame([{"event": "Wimbledon", "round": "R32", "date": pd.Timestamp("2026-06-29")}])
@@ -298,6 +352,13 @@ def test_infer_next_round_any_registry_free():
     # different events on top -> None
     m3 = pd.DataFrame([{"event": "Trieste", "round": "R32", "date": pd.Timestamp("2026-07-06")}])
     assert infer_next_round_any(m1, m3, ref) is None
+    # Same prior event/round is not evidence for a different upcoming event.
+    assert infer_next_round_any(
+        m1, m2, ref, expected_event_title="ATP - Estoril (10)"
+    ) is None
+    assert infer_next_round_any(
+        m1, m2, ref, expected_event_title="Challenger - Concord Iasi Open"
+    ) == "R16"
     # stale top rows (>16d old) -> None
     old = pd.DataFrame([{"event": "Concord Iasi Open", "round": "R32", "date": pd.Timestamp("2026-06-01")}])
     assert infer_next_round_any(old, old, ref) is None

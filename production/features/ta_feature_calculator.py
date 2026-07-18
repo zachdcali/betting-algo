@@ -1944,7 +1944,12 @@ class TAFeatureCalculator:
         # players' ATP-stitched completed rows (real data: both just finished
         # round R at the same event -> this match is the next round).
         if not round_code:
-            _inferred_rc = infer_next_round_any(matches1, matches2, when)
+            _inferred_rc = infer_next_round_any(
+                matches1,
+                matches2,
+                when,
+                expected_event_title=expected_event_title,
+            )
             if _inferred_rc:
                 round_code = _inferred_rc
                 print(f"      📋 Round inferred from stitched event history: {round_code}")
@@ -1955,7 +1960,13 @@ class TAFeatureCalculator:
                 print(f"      📋 Round from ITF order of play: {round_code}")
         if not round_code:
             # first-round matches can't infer from results — read the bracket
-            _draw_rc = round_from_draws(p1_display, p2_display, when, session_cache)
+            _draw_rc = round_from_draws(
+                p1_display,
+                p2_display,
+                when,
+                session_cache,
+                expected_event_title=expected_event_title,
+            )
             if _draw_rc:
                 round_code = _draw_rc
                 print(f"      📋 Round from event draw page: {round_code}")

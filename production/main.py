@@ -147,18 +147,45 @@ def exclude_identity_conflicts(
 
 
 def _atp_live_surface(event_label: str, session_cache: dict):
-    """Surface from the live ATP challenger calendar (official, current season)."""
+    """Surface from the official ATP Tour or Challenger calendar.
+
+    The old implementation inspected only the Challenger frame, so an
+    unmatched tour event such as Estoril fell through to the default Hard
+    surface even while the official Tour calendar said Clay.
+    """
     try:
-        cal = (session_cache.get("atp_calendar") or {}).get("df")
-        if cal is None or cal.empty or "surface" not in cal.columns:
-            return None
         city = str(event_label).split(",")[0].split("(")[0].strip().lower()
         city = " ".join(w for w in city.split()
                         if w.isalpha() and w not in ("atp", "challenger", "itf", "men", "mens", "wta"))
         if len(city) < 4:
             return None
-        hits = cal[cal["event"].astype(str).str.lower().str.contains(city, regex=False) & cal["surface"].notna()]
-        return hits.iloc[0]["surface"] if len(hits) == 1 else None
+        surfaces = set()
+        for cache_key in ("atp_calendar", "atp_tour_calendar"):
+            cal = (session_cache.get(cache_key) or {}).get("df")
+            if cal is None or cal.empty or "surface" not in cal.columns:
+                continue
+            hits = cal[
+                cal["event"].astype(str).str.lower().str.contains(city, regex=False)
+                & cal["surface"].notna()
+            ]
+            for value in hits["surface"].astype(str):
+                normalized = value.strip().title()
+                if normalized in {"Hard", "Clay", "Grass", "Carpet"}:
+                    surfaces.add(normalized)
+        # The bounded, source-verified registry is merged into the active-event
+        # cache by get_active_events. Read it too so a cloud calendar miss still
+        # carries the verified event surface into feature construction.
+        for events in (session_cache.get("atp_active_events_by_ref_date") or {}).values():
+            for event in events or []:
+                event_text = " ".join(
+                    [str(event.get("event", "")), str(event.get("slug", ""))]
+                ).lower()
+                if city not in event_text:
+                    continue
+                normalized = str(event.get("surface", "")).strip().title()
+                if normalized in {"Hard", "Clay", "Grass", "Carpet"}:
+                    surfaces.add(normalized)
+        return next(iter(surfaces)) if len(surfaces) == 1 else None
     except Exception:
         return None
 
@@ -237,6 +264,10 @@ class LiveBettingOrchestrator:
             'rankings_refresh_enabled': '',
             'odds_rows_fetched': 0,
             'odds_rows_candidate': 0,
+            'event_discovery_status': 'not_started',
+            'atp_events_discovered': 0,
+            'atp_events_prefetched': 0,
+            'event_discovery_error': '',
             'kalshi_fetch_status': 'not_started',
             'kalshi_market_rows_fetched': 0,
             'kalshi_two_sided_events': 0,
@@ -1691,6 +1722,7 @@ class LiveBettingOrchestrator:
             self.run_metrics.get('auto_settle_status'),
             self.run_metrics.get('canonical_ingest_status'),
             self.run_metrics.get('reconcile_status'),
+            self.run_metrics.get('event_discovery_status'),
         )
         if 'error' in error_fields:
             return 'partial'
@@ -1812,8 +1844,22 @@ class LiveBettingOrchestrator:
             # sequential first-touch fetches were the 40-minute Sundays
             try:
                 from prefetch import prefetch_event_pages
-                prefetch_event_pages(self._session_cache)
+                prefetch_stats = prefetch_event_pages(self._session_cache)
+                self.run_metrics['event_discovery_status'] = prefetch_stats.get(
+                    'event_discovery_status', 'unknown'
+                )
+                self.run_metrics['atp_events_discovered'] = prefetch_stats.get(
+                    'atp_events_discovered', 0
+                )
+                self.run_metrics['atp_events_prefetched'] = prefetch_stats.get(
+                    'atp_events', 0
+                )
+                self.run_metrics['event_discovery_error'] = prefetch_stats.get(
+                    'event_discovery_error', ''
+                )
             except Exception as _pf_exc:
+                self.run_metrics['event_discovery_status'] = 'error'
+                self.run_metrics['event_discovery_error'] = str(_pf_exc)[:300]
                 print(f"  ⚠️ prefetch skipped (non-fatal): {_pf_exc}")
 
             # Step 2: Extract features

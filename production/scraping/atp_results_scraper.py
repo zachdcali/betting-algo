@@ -226,7 +226,12 @@ def parse_player_activity(html: str) -> pd.DataFrame:
 # Fetchers (Playwright; same wait-for-render + retry pattern as rankings scraper)
 # ---------------------------------------------------------------------------
 
-def _fetch_rendered(url: str, ready_selector: str, timeout_ms: int = 60000) -> str:
+def _fetch_rendered(
+    url: str,
+    ready_selector: str,
+    timeout_ms: int = 60000,
+    require_selector: bool = False,
+) -> str:
     from browser_session import new_page
 
     page = new_page()
@@ -237,12 +242,21 @@ def _fetch_rendered(url: str, ready_selector: str, timeout_ms: int = 60000) -> s
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             else:
                 page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+            selector_ready = False
             try:
                 page.wait_for_selector(ready_selector, timeout=20000)
+                selector_ready = True
             except Exception:
                 time.sleep(6)
             html = page.content()
-            if len(html) > 50_000:
+            # ATP's navigation shell is already >50 kB and contains broad
+            # score/tournament links before the calendar or score cards are
+            # injected. Returning merely because the shell is large caused
+            # cloud runs to parse zero events while the official page became
+            # ready a few seconds later. Discovery callers opt into strict
+            # readiness; ordinary result pages retain the bounded large-body
+            # fallback because a legitimate no-match page has no match card.
+            if selector_ready or (not require_selector and len(html) > 50_000):
                 break
     finally:
         page.close()
@@ -302,11 +316,23 @@ def discover_active_events() -> list[dict]:
     events: list[dict] = []
     # tour hub defaults to 'A' (Sackmann tour-level code); slams are corrected
     # by the registry override downstream, Davis Cup by name here
-    for url, level in [("https://www.atptour.com/en/scores/current", "A"),
-                       ("https://www.atptour.com/en/scores/current-challenger", "C")]:
+    for url, level, ready_selector in [
+        (
+            "https://www.atptour.com/en/scores/current",
+            "A",
+            "a[href^='/en/scores/current/'][href*='/draws']",
+        ),
+        (
+            "https://www.atptour.com/en/scores/current-challenger",
+            "C",
+            "a[href^='/en/scores/current-challenger/'][href*='/draws']",
+        ),
+    ]:
         try:
-            html = _fetch_rendered(url, "a[href*='/en/scores/current']")
+            html = _fetch_rendered(url, ready_selector, require_selector=True)
             found = parse_active_events(html, level)
+            if not found:
+                raise RuntimeError("rendered page contained no event cards")
             for ev in found:
                 if "davis cup" in str(ev.get("event", "")).lower():
                     ev["level"] = "D"

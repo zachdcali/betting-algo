@@ -1808,6 +1808,31 @@ def test_ta_upcoming_surface_overrides_fallback_metadata_only():
     assert reconcile_upcoming_surface("Hard", "Clay", "resolved") == ("Hard", False)
 
 
+def test_atp_live_surface_reads_tour_and_challenger_calendars():
+    from main import _atp_live_surface
+
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame([{
+            "event": "Tampere, Finland Tampere Open", "surface": "Clay",
+        }])},
+        "atp_tour_calendar": {"df": pd.DataFrame([{
+            "event": "Estoril", "surface": "Clay",
+        }])},
+    }
+
+    assert _atp_live_surface("ATP - Estoril (10)", cache) == "Clay"
+    assert _atp_live_surface("Challenger - Tampere (2)", cache) == "Clay"
+
+    static_only = {
+        "atp_active_events_by_ref_date": {
+            "2026-07-18": [{
+                "event": "Estoril", "slug": "estoril", "surface": "Clay",
+            }],
+        },
+    }
+    assert _atp_live_surface("ATP - Estoril (10)", static_only) == "Clay"
+
+
 def test_betting_edges_preserve_event_for_bet_slips():
     from models.inference import calculate_betting_edges
     from utils.stake_calculator import KellyStakeCalculator
