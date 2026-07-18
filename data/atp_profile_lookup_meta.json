@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-18T22:33:49+00:00",
+    "observed_at": "2026-07-18T23:34:53+00:00",
     "observed_values": {},
-    "source_content_sha256": "1e8893a89436a08a8bcf896b523ca3b273a8ca18b67c7bda833e3c395d79c1ae",
+    "source_content_sha256": "4bcf131047952d92d24138b133c14175c2680fb0740bafc540127ed8420cb12a",
     "source_uri": "https://www.atptour.com/en/players/alan-wazny/w0f8/overview",
     "status": "fetch_error"
   },
@@ -457,6 +457,19 @@
     "source_uri": "https://www.atptour.com/en/players/chirag-duhan/d0hi/overview",
     "status": "resolved"
   },
+  "christopher papa": {
+    "canonical_player_id": 208855,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:27+00:00",
+    "observed_values": {},
+    "source_content_sha256": "59ff390ea489091c8c9719e34ab69a667220facebc2948fa164a1473877d2401",
+    "source_uri": "https://www.atptour.com/en/players/christopher-papa/p0f0/overview",
+    "status": "fetch_error"
+  },
   "christopher thies": {
     "identity_binding": "",
     "missing_fields": [
@@ -847,6 +860,19 @@
     "source_uri": "atp-rankings://unmapped/felipe%20pagnacco",
     "status": "no_url"
   },
+  "felix alopaeus": {
+    "canonical_player_id": 214053,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:22+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/felix%20alopaeus",
+    "status": "no_url"
+  },
   "filiberto fumagalli": {
     "identity_binding": "",
     "missing_fields": [
@@ -1210,6 +1236,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jeffrey%20strydom",
+    "status": "no_url"
+  },
+  "jeri lassila": {
+    "canonical_player_id": 213127,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:22+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/jeri%20lassila",
     "status": "no_url"
   },
   "jerrid gaines": {
@@ -1737,9 +1776,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-18T22:33:39+00:00",
+    "observed_at": "2026-07-18T23:34:38+00:00",
     "observed_values": {},
-    "source_content_sha256": "c91381c9a42ad4f77e77aafd02d11d15106fae9f5f19250a2ae576e4b667f4fc",
+    "source_content_sha256": "4631856613c6173aed54a5302dbc9c714a8a2dd9211e76b4ed5bd0ca38fcd4bd",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2085,6 +2124,19 @@
     "source_content_sha256": "70c47a0205a3f7a295617545a417c419d2cb526dedbfa2d15aad4a8361211d4e",
     "source_uri": "https://www.atptour.com/en/players/michele-ribecai/r0jw/overview",
     "status": "resolved"
+  },
+  "mika petkovic": {
+    "canonical_player_id": 213001,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:48+00:00",
+    "observed_values": {},
+    "source_content_sha256": "8ea82a6a5eaa97607558a4ad8a7ebfc8247911d30ab0d1c168d875d19024ad93",
+    "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
+    "status": "fetch_error"
   },
   "mircea mortasifu": {
     "identity_binding": "",
@@ -2433,9 +2485,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-18T22:33:44+00:00",
+    "observed_at": "2026-07-18T23:34:43+00:00",
     "observed_values": {},
-    "source_content_sha256": "124baf588ef6bc71352a0d6ac740ed478d1afd7a4c9d2578be5649918f324d87",
+    "source_content_sha256": "1154df809e5ff274d474a6aea673610477e6745e24218aa45f2f0a086e5d24d6",
     "source_uri": "https://www.atptour.com/en/players/oskar-brostrom-poulsen/p0in/overview",
     "status": "fetch_error"
   },
@@ -3133,6 +3185,19 @@
     "source_uri": "atp-rankings://unmapped/vasco%20leote%20prata",
     "status": "no_url"
   },
+  "vesa ahti": {
+    "canonical_player_id": 209267,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:22+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/vesa%20ahti",
+    "status": "no_url"
+  },
   "vignesh gogineni": {
     "canonical_player_id": 213987,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -3208,6 +3273,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/william%20mirarchi",
     "status": "no_url"
+  },
+  "william rejchtman vinciguerra": {
+    "canonical_player_id": 212478,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T23:34:33+00:00",
+    "observed_values": {},
+    "source_content_sha256": "a8795672d8b689bc2a45c85c5ac9df70de06f27fb211807ca974387cad0e43cb",
+    "source_uri": "https://www.atptour.com/en/players/william-rejchtman-vinciguerra/r0iu/overview",
+    "status": "fetch_error"
   },
   "xirui han": {
     "identity_binding": "",
