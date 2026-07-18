@@ -2034,6 +2034,19 @@
     "source_uri": "https://www.atptour.com/en/players/michele-mecarelli/m0xl/overview",
     "status": "identity_mismatch"
   },
+  "michele ribecai": {
+    "canonical_player_id": 212020,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T09:21:11+00:00",
+    "observed_values": {},
+    "source_content_sha256": "bd600c21811f2c92fc7c07b6bc9b7b11e7ff4791b9c4aa4d079ea4249ab1c1ca",
+    "source_uri": "https://www.atptour.com/en/players/michele-ribecai/r0jw/overview",
+    "status": "fetch_error"
+  },
   "mircea mortasifu": {
     "identity_binding": "",
     "missing_fields": [
@@ -2122,6 +2135,19 @@
     "source_content_sha256": "b608fd99feafa03745a81bbe1e01364af65a3ec75214e93880910b414993bce2",
     "source_uri": "https://www.atptour.com/en/players/neo-niedner/n0da/overview",
     "status": "not_found"
+  },
+  "nico hipfl": {
+    "canonical_player_id": 211503,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-18T09:21:24+00:00",
+    "observed_values": {},
+    "source_content_sha256": "c2679c890915e8295f0fa42b2d90be5796676de17fcd4af3f660a825602d04a4",
+    "source_uri": "https://www.atptour.com/en/players/nico-hipfl/h0i7/overview",
+    "status": "fetch_error"
   },
   "nicola senn": {
     "identity_binding": "",
