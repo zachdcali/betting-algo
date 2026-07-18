@@ -2943,6 +2943,19 @@
     "source_uri": "https://www.atptour.com/en/players/tiago-pereira/p0k4/overview",
     "status": "partial"
   },
+  "tiago torres": {
+    "canonical_player_id": 208426,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-18T21:23:16+00:00",
+    "observed_values": {
+      "hand": "L",
+      "height_cm": 175
+    },
+    "source_content_sha256": "ded20a9ace8cde5e726491510f133bbb7b265a017a3d89f467679c16135605df",
+    "source_uri": "https://www.atptour.com/en/players/tiago-torres/t0cn/overview",
+    "status": "resolved"
+  },
   "timofei derepasko": {
     "canonical_player_id": 212157,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
