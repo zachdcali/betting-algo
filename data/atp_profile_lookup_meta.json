@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:33+00:00",
+    "observed_at": "2026-07-19T07:11:39+00:00",
     "observed_values": {},
-    "source_content_sha256": "54a9b939356d45ca345c5437ca8bd3aaf922b6a756cae5825515caf511e6dc54",
+    "source_content_sha256": "7ca709469d32a87942606960044732b64cad8509bae1448f552920fd98e40ab8",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
     "status": "fetch_error"
   },
@@ -69,9 +69,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:38+00:00",
+    "observed_at": "2026-07-19T10:15:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "53e6ff4b03fe3effec3aadd57e1f9508659ec95f203883b591f282239e9fcbf2",
+    "source_content_sha256": "b82d7fa3b6376040a3b0e6a4ca4205a1e19ebb904256d838680547724629564f",
     "source_uri": "https://www.atptour.com/en/players/alan-wazny/w0f8/overview",
     "status": "fetch_error"
   },
@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:31+00:00",
+    "observed_at": "2026-07-19T10:15:01+00:00",
     "observed_values": {},
-    "source_content_sha256": "fbf65e3f96229d7321e79b915c19340a1735c6c20dc474edd96f8a62824ace84",
+    "source_content_sha256": "041ae02536ced725906c90e39bfe757843581c4fb575c79ef9d01790360f5ab9",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -399,9 +399,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:36+00:00",
+    "observed_at": "2026-07-19T10:15:07+00:00",
     "observed_values": {},
-    "source_content_sha256": "c2065afece6dcf7795e4566132adbe4b2b2f408801d92454e82b48382a31f9b5",
+    "source_content_sha256": "d71777bfee5842ea259c906e247ef354bf012f6a38ed2b7f7f93b07e2e371042",
     "source_uri": "https://www.atptour.com/en/players/bernardo-munk-mesa/m0pf/overview",
     "status": "fetch_error"
   },
@@ -503,9 +503,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:41+00:00",
+    "observed_at": "2026-07-19T10:15:12+00:00",
     "observed_values": {},
-    "source_content_sha256": "19820cecee8b9c8824e6df534b3e3fdbd12724efe7961a237c97ed52662a489a",
+    "source_content_sha256": "01e760a53610a76cf0725bf8f8ac2cbc01afdd00e220b66f36885ed142e742c5",
     "source_uri": "https://www.atptour.com/en/players/christopher-papa/p0f0/overview",
     "status": "fetch_error"
   },
@@ -996,9 +996,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:47+00:00",
+    "observed_at": "2026-07-19T10:15:17+00:00",
     "observed_values": {},
-    "source_content_sha256": "27d6b56998e263ecfed5b1e918b2b308f7d89aa2aea6e7c058d2fc4f12178cc4",
+    "source_content_sha256": "ac7c1cba585496019d9e29f74be09b9ac32ba8b9d0679359d3cece3d75ff86df",
     "source_uri": "https://www.atptour.com/en/players/gavin-young/y0bf/overview",
     "status": "fetch_error"
   },
@@ -1841,9 +1841,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:52+00:00",
+    "observed_at": "2026-07-19T10:15:22+00:00",
     "observed_values": {},
-    "source_content_sha256": "9fbd5e7018d7c8076d72781ed314091019ec5224913115d3c8f1b075a9b71428",
+    "source_content_sha256": "513dbf8077f5e9f59f48cbbd5fb93f710ec81568e5a03865873db66786b4b748",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2197,9 +2197,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:43+00:00",
+    "observed_at": "2026-07-19T10:16:04+00:00",
     "observed_values": {},
-    "source_content_sha256": "4c860ec172a19f836726de7fb3dfe5c4cfdaa81662d6eb14de8097740c997a4e",
+    "source_content_sha256": "cc8c1648c5df255607b353dd7dd2d635503608e73d5d351f14ac03335734b072",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -2412,9 +2412,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:07:57+00:00",
+    "observed_at": "2026-07-19T10:15:27+00:00",
     "observed_values": {},
-    "source_content_sha256": "e45f60008791714a0cf22438d7f848ae219bd737d86470dd25dd1991fb83c48d",
+    "source_content_sha256": "b4c1a6ae9dcc045f7a1dab76ffb153743d6cb766d5fe4b7e6ed22a12cdbf4782",
     "source_uri": "https://www.atptour.com/en/players/nikola-djosic/d0jh/overview",
     "status": "fetch_error"
   },
@@ -2499,9 +2499,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:02+00:00",
+    "observed_at": "2026-07-19T10:15:32+00:00",
     "observed_values": {},
-    "source_content_sha256": "d4e26bd4603c009f2e150dbdc2b2239c172cbea99aa116ba11bf5e0880c4836d",
+    "source_content_sha256": "1819e28cb3958ba6c3ee4372df277b363ac8b5188223a962832b15b5881c6830",
     "source_uri": "https://www.atptour.com/en/players/noah-zamora/z0ce/overview",
     "status": "fetch_error"
   },
@@ -2576,9 +2576,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:07+00:00",
+    "observed_at": "2026-07-19T07:11:29+00:00",
     "observed_values": {},
-    "source_content_sha256": "e0d55240f66b62708ad854e59fc4767733b80937295ac2bdcf98a0e0f28df775",
+    "source_content_sha256": "967eb8246eebe3afa567f599dc50e05ec65a3abb16e5fe7eecd117e3d83c3bc1",
     "source_uri": "https://www.atptour.com/en/players/oskar-brostrom-poulsen/p0in/overview",
     "status": "fetch_error"
   },
@@ -2665,9 +2665,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:48+00:00",
+    "observed_at": "2026-07-19T10:16:09+00:00",
     "observed_values": {},
-    "source_content_sha256": "9f3c8c7a4525a9a58716adb49edbabe38267518a16873af5d27374bbe74f67b6",
+    "source_content_sha256": "d1cb6a5110f2872d37e46a514b6a64513b386d8c27c596c2ec98718e05efb3f6",
     "source_uri": "https://www.atptour.com/en/players/petr-nesterov/n0cj/overview",
     "status": "fetch_error"
   },
@@ -2855,9 +2855,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:12+00:00",
+    "observed_at": "2026-07-19T10:15:38+00:00",
     "observed_values": {},
-    "source_content_sha256": "130ac7dc72554cd0659db6dbb46b18d838e5d9663373bd46cd4bd290af5e8158",
+    "source_content_sha256": "b0e4e9817a9dcc5599f0f209179e02ef86b23e0e4e2ce83e4b3868840ae08092",
     "source_uri": "https://www.atptour.com/en/players/roger-pascual-ferra/p0k3/overview",
     "status": "fetch_error"
   },
@@ -2917,9 +2917,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:17+00:00",
+    "observed_at": "2026-07-19T10:15:43+00:00",
     "observed_values": {},
-    "source_content_sha256": "e57b8ca5fee20425e962ee84c207217189a82b65b3e17715c80bb5876ed59a6c",
+    "source_content_sha256": "013b11a97937867c109144d7f50ff36ac863003804d1fff253491aed78046241",
     "source_uri": "https://www.atptour.com/en/players/samir-banerjee/b0i6/overview",
     "status": "fetch_error"
   },
@@ -2956,9 +2956,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:53+00:00",
+    "observed_at": "2026-07-19T10:16:14+00:00",
     "observed_values": {},
-    "source_content_sha256": "ae0fb0f5927d32d0b449e4589d8e9379c843069eb5d9da47e943d3e379b8c376",
+    "source_content_sha256": "1fd741c14e1f8432ca3358e78efbfa078f58021dc20f75de64ecf57352e61369",
     "source_uri": "https://www.atptour.com/en/players/samuele-pieri/p0hy/overview",
     "status": "fetch_error"
   },
@@ -2990,16 +2990,16 @@
   },
   "sebastian gorzny": {
     "canonical_player_id": 210478,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T09:08:23+00:00",
-    "observed_values": {},
-    "source_content_sha256": "0141e137a8c9885878cd1fa304663bb00f4c92f4e5145825acd4b1235403cab1",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T10:15:49+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 193
+    },
+    "source_content_sha256": "afee63bd97646417608b854e9d9375e0517b1ab5f410ce0513f5e3f495a1316e",
     "source_uri": "https://www.atptour.com/en/players/sebastian-gorzny/g0jj/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "sebastiano cocola": {
     "identity_binding": "",
@@ -3463,9 +3463,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T09:08:28+00:00",
+    "observed_at": "2026-07-19T10:15:54+00:00",
     "observed_values": {},
-    "source_content_sha256": "d06a17c25a571f10d1ad86a0bdf6fe08695c3d0912af75a34a76f49c2229a28c",
+    "source_content_sha256": "48d890ea22623f230de6c11be75e919e2fa6fb52e9e1b43504ab150a41804589",
     "source_uri": "https://www.atptour.com/en/players/william-rejchtman-vinciguerra/r0iu/overview",
     "status": "fetch_error"
   },
