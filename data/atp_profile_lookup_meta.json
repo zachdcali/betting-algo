@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:54+00:00",
+    "observed_at": "2026-07-19T04:22:01+00:00",
     "observed_values": {},
-    "source_content_sha256": "c99cc8296a48b4453400f5399b7d0d75b45ac1e7cc96235fa0f88ae07020d4f4",
+    "source_content_sha256": "0beb4b3361aa28dddcf67c764f13f520d025b07bba3f4c584c3c2a83c5e51fb8",
     "source_uri": "https://www.atptour.com/en/players/alan-wazny/w0f8/overview",
     "status": "fetch_error"
   },
@@ -464,9 +464,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:33+00:00",
+    "observed_at": "2026-07-19T04:21:41+00:00",
     "observed_values": {},
-    "source_content_sha256": "1b1f0ec91825640dd0d3ee23b539e93567bc93b726ee39f4989ed04cd79d2686",
+    "source_content_sha256": "b5196d505b0ea28e6946f43979cec334deb663f3fa26e584dd4c01094212608a",
     "source_uri": "https://www.atptour.com/en/players/christopher-papa/p0f0/overview",
     "status": "fetch_error"
   },
@@ -1789,9 +1789,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:38+00:00",
+    "observed_at": "2026-07-19T04:21:46+00:00",
     "observed_values": {},
-    "source_content_sha256": "8e362790664d7e024095b33b00f3ca87352c5bf690e13f9bf5cd41e96473232a",
+    "source_content_sha256": "88b3723dddd3fd76d86dc3c94fc1d1c6138de5d53adca4a34b49cc4391b0b8a2",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2145,9 +2145,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:59+00:00",
+    "observed_at": "2026-07-19T04:22:07+00:00",
     "observed_values": {},
-    "source_content_sha256": "86fc9ccca8ecdab8bc5676e7cb075f804e8a2dc848c9d9a2c737e7e6cf72c6a0",
+    "source_content_sha256": "409e55d4ca947f0e2a5d61d852562c390de8e08c4341e6ce0bbd3ae5e3c14d0d",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -2498,9 +2498,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:44+00:00",
+    "observed_at": "2026-07-19T04:21:51+00:00",
     "observed_values": {},
-    "source_content_sha256": "476cbc633a5a0a4b02c4f14ee3a906a96be98b963c13487d442d9f14ab2debb1",
+    "source_content_sha256": "27c16cc319514aa7dc1303d825ed6efe509a20a2e4a6ddd3cbfb3142ca06b69b",
     "source_uri": "https://www.atptour.com/en/players/oskar-brostrom-poulsen/p0in/overview",
     "status": "fetch_error"
   },
@@ -3294,9 +3294,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T02:01:49+00:00",
+    "observed_at": "2026-07-19T04:21:56+00:00",
     "observed_values": {},
-    "source_content_sha256": "1100d210b6b20dabf5d71ff4c0d86364143de512be4da5a95788f4b109c54507",
+    "source_content_sha256": "5c2f711404d69de1fb8f54183b0da6384cbd92657b751e1c6d161f367966da3c",
     "source_uri": "https://www.atptour.com/en/players/william-rejchtman-vinciguerra/r0iu/overview",
     "status": "fetch_error"
   },
