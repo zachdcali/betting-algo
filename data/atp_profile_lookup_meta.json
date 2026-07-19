@@ -870,9 +870,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T14:20:54+00:00",
+    "observed_at": "2026-07-19T15:37:51+00:00",
     "observed_values": {},
-    "source_content_sha256": "63f263d11f633ac19b0636e6c35a8f0a713d9e5e6505e889d7765d9704240f4f",
+    "source_content_sha256": "c858cc47bcf831fc7bc312e68e132ce1b1c478394be3c71d5616e49de6e8d4f6",
     "source_uri": "https://www.atptour.com/en/players/enzo-aguiard/a0ku/overview",
     "status": "fetch_error"
   },
@@ -1121,9 +1121,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T14:20:59+00:00",
+    "observed_at": "2026-07-19T15:37:56+00:00",
     "observed_values": {},
-    "source_content_sha256": "822a55896d15df3f42bbbf8c8752d9f379fdc6aaf01c597dd027f1b60733ab28",
+    "source_content_sha256": "13dbfab4a89ea391ab1de59977e521eac00ee1b8fc7c59012481faa30f337c81",
     "source_uri": "https://www.atptour.com/en/players/guillaume-dalmasso/d0k3/overview",
     "status": "fetch_error"
   },
@@ -2244,16 +2244,16 @@
   },
   "mikael arseneault": {
     "canonical_player_id": 212530,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T14:21:04+00:00",
-    "observed_values": {},
-    "source_content_sha256": "7ac0f586d5c940a4e76694844bdbfad10feb7a0737f324df88cf36aefa8a9936",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T15:38:02+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 160
+    },
+    "source_content_sha256": "a6c912e656f50f5f29b57d4ad3ff1a7dc15f50af7a7acd0e91f72fbc4eb4c24f",
     "source_uri": "https://www.atptour.com/en/players/mikael-arseneault/a0k4/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "mircea mortasifu": {
     "identity_binding": "",
@@ -2546,16 +2546,16 @@
   },
   "noah zamora": {
     "canonical_player_id": 212235,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T14:21:09+00:00",
-    "observed_values": {},
-    "source_content_sha256": "2cc7d8d8424bd56b7bc0e25382d815931c1edc26646f84d361af0ef6d4a96bbb",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T15:38:07+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 191
+    },
+    "source_content_sha256": "eed48e7fbec05ea7595bebca7a9e66ee8d1ff6fb38570c560d7fa45a59ea20c6",
     "source_uri": "https://www.atptour.com/en/players/noah-zamora/z0ce/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "noel larwig": {
     "canonical_player_id": 207864,
@@ -2907,9 +2907,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T14:21:15+00:00",
+    "observed_at": "2026-07-19T15:38:12+00:00",
     "observed_values": {},
-    "source_content_sha256": "e13ec91df7ad03b3dc82e29c1c4540a89c23f7f3b6627585cfcc57512b42bd73",
+    "source_content_sha256": "c4685ac5cd58be5f19a52862ab3c400e24fa4953b0acc02362fc635290eb12e4",
     "source_uri": "https://www.atptour.com/en/players/roger-pascual-ferra/p0k3/overview",
     "status": "fetch_error"
   },
