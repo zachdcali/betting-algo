@@ -308,6 +308,15 @@ def test_round_resolution_uses_expected_event_and_official_schedule(monkeypatch)
     assert resolved == "Q2"
 
 
+def test_name_match_accepts_official_pdf_leading_ellipsis_for_compound_surname():
+    from features.history_stitch import _names_loosely_match
+
+    assert _names_loosely_match(
+        "Botic van de Zandschulp",
+        "… VAN DE ZANDSCHULP",
+    )
+
+
 def test_infer_next_round():
     from features.history_stitch import infer_next_round
     m1 = pd.DataFrame([{"event": "Wimbledon", "round": "R32", "date": pd.Timestamp("2026-06-29")}])
