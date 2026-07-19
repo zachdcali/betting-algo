@@ -218,16 +218,16 @@
   },
   "amit vales": {
     "canonical_player_id": 211707,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T14:20:49+00:00",
-    "observed_values": {},
-    "source_content_sha256": "97772dc598b00a402e77a9677770cb2380a5d579cca7e10f45778cc2b708bcd6",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T22:33:54+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 173
+    },
+    "source_content_sha256": "b7f04673ef7f57ae6f6a19b460eab4095772222869d8e3e601fd36e8add602a6",
     "source_uri": "https://www.atptour.com/en/players/amit-vales/v0g2/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "anas mazdrashki": {
     "canonical_player_id": 212748,
@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T21:27:30+00:00",
+    "observed_at": "2026-07-19T22:33:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "925be51e129d95b856fe987a69e443a672da8e05f7f84d9b5b984c98bacbb37a",
+    "source_content_sha256": "31c53e5da8495b0dcc45b2aa55dc04d6cd9881557004a9a2366c65692bc1aa11",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -2712,16 +2712,17 @@
   },
   "petr nesterov": {
     "canonical_player_id": 209318,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
-      "height_cm",
-      "hand"
+      "height_cm"
     ],
-    "observed_at": "2026-07-19T12:33:34+00:00",
-    "observed_values": {},
-    "source_content_sha256": "5d89348052d7bb459cea44649bb5515be688320953882fa0eeaa8507cd6effc9",
+    "observed_at": "2026-07-19T22:34:05+00:00",
+    "observed_values": {
+      "hand": "R"
+    },
+    "source_content_sha256": "e38fdff3056740bc71077388ccc415ba6f0e41aadc7755a35297a9b75768085a",
     "source_uri": "https://www.atptour.com/en/players/petr-nesterov/n0cj/overview",
-    "status": "fetch_error"
+    "status": "partial"
   },
   "pierluigi basile": {
     "canonical_player_id": 213003,
@@ -2990,16 +2991,16 @@
   },
   "samuel heredia": {
     "canonical_player_id": 212831,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T07:11:03+00:00",
-    "observed_values": {},
-    "source_content_sha256": "aff892cb15cb70da04026f68d52635250bb0025c4dc4ca9ac06c3d7cc54027f5",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T22:34:11+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 191
+    },
+    "source_content_sha256": "4f352a63a8f493dc0354fd606561e15a0b6ca2da21de0de3cae39e5ba8d82e7d",
     "source_uri": "https://www.atptour.com/en/players/samuel-heredia/h0hu/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "samuele pieri": {
     "canonical_player_id": 210129,
