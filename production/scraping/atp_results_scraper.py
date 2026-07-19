@@ -584,7 +584,7 @@ def _pdf_round_from_label(label: str, qualifying_final_code: str) -> Optional[st
     ):
         if re.search(pattern, value):
             return code
-    if value == "FINAL":
+    if re.fullmatch(r"(?:SINGLES )?FINAL", value):
         return "F"
     return None
 
@@ -714,7 +714,32 @@ def parse_official_order_of_play_words(
                 _, label = max(label_candidates, key=lambda item: item[0])
                 round_code = _pdf_round_from_label(label, qualifying_final_code)
             else:
-                round_code = _qualifying_round_for_pair(p1, p2, qualifying_text)
+                # A few single-court PDFs position the lone round heading well
+                # outside the player column. Accept only a page-wide line that
+                # is itself one unambiguous round label; never choose among
+                # mixed round headings from a multi-court schedule.
+                global_round = None
+                for top in line_tops:
+                    if not (upper_top - 90 <= top < upper_top):
+                        continue
+                    whole_line = " ".join(
+                        str(word.get("text", ""))
+                        for word in sorted(
+                            [word for word in page_words
+                             if abs(float(word.get("top", 0.0)) - top) <= 1.0],
+                            key=lambda word: float(word.get("x0", 0.0)),
+                        )
+                    )
+                    candidate = _pdf_round_from_label(whole_line, qualifying_final_code)
+                    if candidate and re.fullmatch(
+                        r"(?:SINGLES )?FINAL|QUALIFYING FINAL|"
+                        r"Q[1-4]|R(?:128|64|32|16)|QF|SF",
+                        " ".join(whole_line.upper().split()),
+                    ):
+                        global_round = candidate
+                round_code = global_round or _qualifying_round_for_pair(
+                    p1, p2, qualifying_text,
+                )
             if not round_code:
                 continue
             rows.append({"round": round_code, "p1": p1, "p2": p2})

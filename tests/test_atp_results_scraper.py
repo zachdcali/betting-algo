@@ -188,6 +188,13 @@ def test_quali_round_headers_map():
     assert _round_code_from_header("Round of 32 - Center") == "R32"
 
 
+def test_official_pdf_singles_final_label_maps_to_final():
+    from scraping.atp_results_scraper import _pdf_round_from_label
+
+    assert _pdf_round_from_label("SINGLES FINAL", "Q2") == "F"
+    assert _pdf_round_from_label("QUALIFYING FINAL", "Q2") == "Q2"
+
+
 def test_parse_challenger_calendar_fixture():
     from scraping.atp_results_scraper import parse_challenger_calendar
     df = parse_challenger_calendar(_load("atp_chall_calendar.html.gz"))
