@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T10:16:04+00:00",
+    "observed_at": "2026-07-19T21:27:30+00:00",
     "observed_values": {},
-    "source_content_sha256": "cc8c1648c5df255607b353dd7dd2d635503608e73d5d351f14ac03335734b072",
+    "source_content_sha256": "925be51e129d95b856fe987a69e443a672da8e05f7f84d9b5b984c98bacbb37a",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
