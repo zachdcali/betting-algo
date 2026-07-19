@@ -865,16 +865,16 @@
   },
   "enzo aguiard": {
     "canonical_player_id": 212174,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T15:37:51+00:00",
-    "observed_values": {},
-    "source_content_sha256": "c858cc47bcf831fc7bc312e68e132ce1b1c478394be3c71d5616e49de6e8d4f6",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T16:42:37+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "e9e046ac8e6aa0db4687088d726cf45b46cb112fe3ff910925aee94676b117c5",
     "source_uri": "https://www.atptour.com/en/players/enzo-aguiard/a0ku/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "enzo lima": {
     "canonical_player_id": 211478,
@@ -1116,16 +1116,16 @@
   },
   "guillaume dalmasso": {
     "canonical_player_id": 211409,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T15:37:56+00:00",
-    "observed_values": {},
-    "source_content_sha256": "13dbfab4a89ea391ab1de59977e521eac00ee1b8fc7c59012481faa30f337c81",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T16:43:20+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 193
+    },
+    "source_content_sha256": "d8e6548c88ad86fd58248f8ac539f6a14688987d625240696527c0f7a09c9458",
     "source_uri": "https://www.atptour.com/en/players/guillaume-dalmasso/d0k3/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "henry jefferson": {
     "identity_binding": "",
@@ -2902,16 +2902,16 @@
   },
   "roger pascual ferra": {
     "canonical_player_id": 212837,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T15:38:12+00:00",
-    "observed_values": {},
-    "source_content_sha256": "c4685ac5cd58be5f19a52862ab3c400e24fa4953b0acc02362fc635290eb12e4",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-19T16:41:53+00:00",
+    "observed_values": {
+      "hand": "L",
+      "height_cm": 170
+    },
+    "source_content_sha256": "7d2e1a2a4b7b9a12932a3f51e181ae869e0c1397a542c609ce248df93fa52562",
     "source_uri": "https://www.atptour.com/en/players/roger-pascual-ferra/p0k3/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "ruben hartig": {
     "identity_binding": "",
