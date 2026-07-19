@@ -13154,3 +13154,7 @@ logged_at,run_id,p1,p2,flag
 2026-07-19T07:18:29+00:00,run_20260719T064646Z,kilian feldbausch,sandro kopp,P1_Country_SUI=1 (z=8.2)
 2026-07-19T07:19:37+00:00,run_20260719T064646Z,sebastian baez,miomir kecmanovic,P2_Country_SRB=1 (z=8.3)
 2026-07-19T07:20:49+00:00,run_20260719T064646Z,stan wawrinka,roman andres burruchaga,P1_Country_SUI=1 (z=8.2)
+2026-07-19T09:11:24+00:00,run_20260719T084451Z,hugo dellien,laslo djere,P2_Country_SRB=1 (z=8.3)
+2026-07-19T09:14:08+00:00,run_20260719T084451Z,kilian feldbausch,sandro kopp,P1_Country_SUI=1 (z=8.2)
+2026-07-19T09:14:24+00:00,run_20260719T084451Z,sebastian baez,miomir kecmanovic,P2_Country_SRB=1 (z=8.3)
+2026-07-19T09:15:38+00:00,run_20260719T084451Z,stan wawrinka,roman andres burruchaga,P1_Country_SUI=1 (z=8.2)
