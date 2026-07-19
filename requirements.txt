@@ -2,7 +2,7 @@
 # model unpickling (RF/scalers) is sklearn-version-sensitive, and pandas
 # major-version drift already broke a cloud run (LossySetitemError).
 requests>=2.31.0
-pandas==2.3.1
+pandas==3.0.3
 numpy==2.3.2
 python-dotenv>=1.0.0
 playwright>=1.40.0
