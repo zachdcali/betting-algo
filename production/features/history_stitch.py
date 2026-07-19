@@ -50,6 +50,17 @@ CURRENT_EVENT_REGISTRY = [
     # discovery miss cannot erase official round/surface evidence already
     # published at the stable event URLs below.
     {
+        "event": "Bunschoten",
+        "url": "https://www.atptour.com/en/scores/current-challenger/bunschoten/9198/results",
+        "start_date": "2026-07-13",
+        "date_verified": True,
+        "date_source": "official_atp_calendar",
+        "date_evidence_url": "https://www.atptour.com/en/scores/current-challenger/bunschoten/9198/draws",
+        "surface": "Clay",
+        "level": "C",
+        "window": ("2026-07-18", "2026-07-19"),
+    },
+    {
         "event": "Kitzbuhel",
         "url": "https://www.atptour.com/en/scores/current/kitzbuhel/319/results",
         "start_date": "2026-07-20",

@@ -270,12 +270,13 @@ def test_verified_current_week_registry_survives_empty_dynamic_discovery(monkeyp
     events = get_active_events("2026-07-18", cache)
     current = {event["event"]: event for event in events}
 
-    assert {"Kitzbuhel", "Estoril", "Tampere"} <= set(current)
+    assert {"Bunschoten", "Kitzbuhel", "Estoril", "Tampere"} <= set(current)
+    assert current["Bunschoten"]["level"] == "C"
     assert current["Estoril"]["surface"] == "Clay"
     assert current["Tampere"]["level"] == "C"
     assert all(current[name]["date_verified"] for name in current)
     assert cache["atp_event_discovery"]["status"] == "degraded_static_fallback"
-    assert cache["atp_event_discovery"]["active_window"] == 3
+    assert cache["atp_event_discovery"]["active_window"] == 4
 
 
 def test_round_resolution_uses_expected_event_and_official_schedule(monkeypatch):
