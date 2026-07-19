@@ -18,8 +18,11 @@ real values with honest provenance, never silent blending (see AGENTS.md).
 """
 from __future__ import annotations
 
+import io
 import re
 import time
+import unicodedata
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -377,10 +380,19 @@ def parse_event_draw(html: str) -> pd.DataFrame:
 
 
 def fetch_event_draw(url: str) -> pd.DataFrame:
-    """Fetch + parse a tournament draws page (results URL is rewritten)."""
+    """Fetch + parse a tournament draw from ATP's official static PDF first.
+
+    ``protennislive.com`` is ATP's own publication host for immutable draw and
+    order-of-play PDFs.  Those files are substantially more reliable from a
+    cloud runner than the JS site (which can return only its navigation shell
+    to data-centre IPs).  The rendered page remains a compatibility fallback.
+    """
+    pdf = fetch_official_draw_pdf(url)
+    if pdf is not None and not pdf.empty:
+        return pdf
     if url.endswith("/results"):
         url = url[: -len("/results")] + "/draws"
-    html = _fetch_rendered(url, "[class*=draw-item]")
+    html = _fetch_rendered(url, "[class*=draw-item]", require_selector=True)
     return parse_event_draw(html)
 
 
@@ -419,11 +431,325 @@ def parse_daily_schedule(html: str) -> pd.DataFrame:
 
 
 def fetch_daily_schedule(url: str) -> pd.DataFrame:
-    """Daily schedule for an event (accepts the event's results URL)."""
+    """Daily schedule for an event (accepts the event's results URL).
+
+    Prefer ATP's official order-of-play PDF, then require the data-bearing
+    schedule container on the JS page.  Waiting for merely ``body`` returned
+    a valid-looking 90 kB navigation shell before any match cards rendered.
+    """
+    pdf = fetch_official_order_of_play_pdf(url)
+    if pdf is not None and not pdf.empty:
+        return pdf
     if url.endswith("/results"):
         url = url[: -len("/results")] + "/daily-schedule"
-    html = _fetch_rendered(url, "body")
+    html = _fetch_rendered(url, ".schedule-content", require_selector=True)
     return parse_daily_schedule(html)
+
+
+# ---------------------------------------------------------------------------
+# Official ATP PDF fallbacks (static, no browser / cloud-IP rendering issue)
+# ---------------------------------------------------------------------------
+
+_PDF_SLOT = re.compile(r"^\s*(\d{1,3})\s+(.*?)\s*$")
+_PDF_PLAYER = re.compile(
+    r"([A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ .\-'’…]+),\s*"
+    r"([A-Za-zÀ-ÖØ-öø-ÿ .\-'’…]+?)\s+([A-Z]{3})(?:\s|$)"
+)
+_PDF_NON_PLAYER_PREFIX = re.compile(r"^(?:(?:\d+|WC|Q|LL|ALT|PR|SE|JR)\s+)+", re.I)
+_PDF_NATION = re.compile(r"^\([A-Z]{3}\)$")
+_PDF_SEED = re.compile(
+    r"^(?:\[(?:\d+|WC|Q|LL|ALT|PR|SE|JR)\]|\(\d+\)|WC|Q|LL|ALT|PR|SE|JR)$",
+    re.I,
+)
+
+
+def _official_pdf_base(event_url: str) -> Optional[str]:
+    """Return ATP's official posting base for a current/archive event URL."""
+    value = str(event_url or "")
+    archive = re.search(r"/scores/archive/[^/]+/(\d+)/(\d{4})/", value)
+    if archive:
+        event_id, year = archive.group(1), archive.group(2)
+    else:
+        current = re.search(r"/scores/current(?:-challenger)?/[^/]+/(\d+)(?:/|$)", value)
+        if not current:
+            return None
+        event_id = current.group(1)
+        year = str(datetime.now(timezone.utc).year)
+    return f"https://www.protennislive.com/posting/{year}/{event_id}"
+
+
+def _fetch_official_pdf(event_url: str, filename: str):
+    """Return ``(text, words)`` from an ATP posting PDF, or ``None``."""
+    base = _official_pdf_base(event_url)
+    if not base:
+        return None
+    import pdfplumber
+    import requests
+
+    pdf_url = f"{base}/{filename}"
+    try:
+        response = requests.get(
+            pdf_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=20,
+        )
+        response.raise_for_status()
+        if not response.content.startswith(b"%PDF"):
+            return None
+        text_parts: list[str] = []
+        words: list[dict] = []
+        with pdfplumber.open(io.BytesIO(response.content)) as pdf:
+            for page_number, page in enumerate(pdf.pages):
+                text_parts.append(page.extract_text() or "")
+                for word in page.extract_words():
+                    item = dict(word)
+                    item["page"] = page_number
+                    words.append(item)
+        return {
+            "url": pdf_url,
+            "text": "\n".join(text_parts),
+            "words": words,
+        }
+    except Exception as exc:
+        print(f"      ⚠️ official ATP PDF unavailable ({pdf_url}): {exc}")
+        return None
+
+
+def _pdf_slot_player(value: str) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw or raw.lower().startswith(("bye", "qualifier", "lucky loser", "tba")):
+        return None
+    match = _PDF_PLAYER.search(raw)
+    if not match:
+        # A very long name can lose its given name and comma in ATP's text
+        # layer (for example ``REJCHTMAN VINCIGUERR… SWE``). Preserve the
+        # substantive surname tokens so the order-of-play name can still bind
+        # to this exact draw slot.
+        fallback = re.match(r"(.+?)\s+[A-Z]{3}(?:\s|$)", raw)
+        if not fallback:
+            return None
+        surname_only = _PDF_NON_PLAYER_PREFIX.sub("", fallback.group(1)).strip()
+        return surname_only if surname_only else None
+    surname = _PDF_NON_PLAYER_PREFIX.sub("", match.group(1)).strip()
+    given = match.group(2).strip()
+    if not surname or not given:
+        return None
+    return " ".join(f"{given} {surname}".split())
+
+
+def parse_official_draw_pdf_text(text: str) -> pd.DataFrame:
+    """Parse first-round pairings from an ATP main-draw PDF text layer."""
+    slots: dict[int, Optional[str]] = {}
+    in_draw = False
+    for line in str(text or "").splitlines():
+        if "Main Draw Singles" in line:
+            in_draw = True
+            continue
+        if in_draw and re.search(r"\bRound of (?:128|64|32|16)\b", line, re.I):
+            break
+        if not in_draw:
+            continue
+        match = _PDF_SLOT.match(line)
+        if not match:
+            continue
+        slot = int(match.group(1))
+        slots[slot] = _pdf_slot_player(match.group(2))
+    if not slots:
+        return pd.DataFrame()
+    max_slot = max(slots)
+    draw_size = next((size for size in (128, 64, 32, 16, 8) if max_slot >= size), None)
+    if draw_size is None:
+        return pd.DataFrame()
+    round_code = f"R{draw_size}" if draw_size > 8 else "QF"
+    rows = []
+    for slot in range(1, draw_size + 1, 2):
+        p1, p2 = slots.get(slot), slots.get(slot + 1)
+        if p1 and p2:
+            rows.append({"round": round_code, "p1": p1, "p2": p2})
+    return pd.DataFrame(rows)
+
+
+def _pdf_round_from_label(label: str, qualifying_final_code: str) -> Optional[str]:
+    value = " ".join(str(label or "").upper().split())
+    if "QUALIFYING FINAL" in value or "FINAL QUALIFYING" in value:
+        return qualifying_final_code
+    for pattern, code in (
+        (r"\bQ3\b", "Q3"), (r"\bQ2\b", "Q2"), (r"\bQ1\b", "Q1"),
+        (r"QUALIFYING (?:ROUND )?3", "Q3"),
+        (r"QUALIFYING (?:ROUND )?2", "Q2"),
+        (r"QUALIFYING (?:ROUND )?1", "Q1"),
+        (r"ROUND OF 128", "R128"), (r"ROUND OF 64", "R64"),
+        (r"ROUND OF 32", "R32"), (r"ROUND OF 16", "R16"),
+        (r"QUARTER ?FINALS?", "QF"), (r"SEMI ?FINALS?", "SF"),
+    ):
+        if re.search(pattern, value):
+            return code
+    if value == "FINAL":
+        return "F"
+    return None
+
+
+def _words_on_line(words: list[dict], top: float, cx: float, radius: float = 105.0) -> list[dict]:
+    return sorted(
+        [word for word in words
+         if abs(float(word.get("top", 0.0)) - top) <= 1.0
+         and cx - radius <= (float(word.get("x0", 0.0)) + float(word.get("x1", 0.0))) / 2 <= cx + radius],
+        key=lambda word: float(word.get("x0", 0.0)),
+    )
+
+
+def _player_from_pdf_line(words: list[dict], top: float, cx: float) -> Optional[str]:
+    tokens = []
+    for word in _words_on_line(words, top, cx):
+        token = str(word.get("text", "")).strip()
+        if not token or _PDF_NATION.match(token) or _PDF_SEED.match(token):
+            continue
+        tokens.append(token)
+    value = " ".join(tokens).strip()
+    return value or None
+
+
+def _qualifying_slots(text: str) -> dict[int, Optional[str]]:
+    slots: dict[int, Optional[str]] = {}
+    in_draw = False
+    for line in str(text or "").splitlines():
+        if "Qualifying Singles" in line:
+            in_draw = True
+            continue
+        if in_draw and "Qualifying Round" in line:
+            break
+        if not in_draw:
+            continue
+        match = _PDF_SLOT.match(line)
+        if match:
+            slots[int(match.group(1))] = _pdf_slot_player(match.group(2))
+    return slots
+
+
+def _pdf_name_tokens(name: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKD", str(name or ""))
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    normalized = normalized.replace("…", " ")
+    return re.findall(r"[a-z]+", normalized.casefold())
+
+
+def _pdf_names_match(left: str, right: str) -> bool:
+    a, b = _pdf_name_tokens(left), _pdf_name_tokens(right)
+    if not a or not b:
+        return False
+    if a[-1] == b[-1] and a[0][0] == b[0][0]:
+        return True
+    # ATP truncates long given/compound names with an ellipsis in the PDF text
+    # layer. Require a common substantive token and matching first initial.
+    shared = {token for token in set(a) & set(b) if len(token) >= 4}
+    # Binding remains fail-closed at the caller: each side must resolve to one
+    # and only one official slot before a qualifying round is accepted.
+    return bool(shared)
+
+
+def _qualifying_round_for_pair(p1: str, p2: str, qualifying_text: str) -> Optional[str]:
+    slots = _qualifying_slots(qualifying_text)
+    if not slots:
+        return None
+    p1_slots = [slot for slot, name in slots.items() if name and _pdf_names_match(p1, name)]
+    p2_slots = [slot for slot, name in slots.items() if name and _pdf_names_match(p2, name)]
+    if len(p1_slots) != 1 or len(p2_slots) != 1 or p1_slots[0] == p2_slots[0]:
+        return None
+    max_round = int(_qualifying_final_code(qualifying_text)[1:])
+    a, b = p1_slots[0] - 1, p2_slots[0] - 1
+    for round_number in range(1, max_round + 1):
+        group_size = 2 ** round_number
+        if a // group_size == b // group_size:
+            return f"Q{round_number}"
+    return None
+
+
+def parse_official_order_of_play_words(
+    words: list[dict],
+    *,
+    qualifying_final_code: str = "Q2",
+    qualifying_text: str = "",
+) -> pd.DataFrame:
+    """Parse singles pairings from positioned ATP order-of-play PDF words."""
+    rows = []
+    pages = sorted({int(word.get("page", 0)) for word in words})
+    for page_number in pages:
+        page_words = [word for word in words if int(word.get("page", 0)) == page_number]
+        nations = [word for word in page_words if _PDF_NATION.match(str(word.get("text", "")))]
+        for versus in [word for word in page_words if str(word.get("text", "")).lower() == "vs"]:
+            cx = (float(versus["x0"]) + float(versus["x1"])) / 2
+            vy = float(versus["top"])
+            above = [word for word in nations
+                     if 0 < vy - float(word["top"]) <= 60
+                     and abs(((float(word["x0"]) + float(word["x1"])) / 2) - cx) <= 115]
+            below = [word for word in nations
+                     if 0 < float(word["top"]) - vy <= 60
+                     and abs(((float(word["x0"]) + float(word["x1"])) / 2) - cx) <= 115]
+            if not above or not below:
+                continue
+            horizontal_distance = lambda word: abs(
+                ((float(word["x0"]) + float(word["x1"])) / 2) - cx
+            )
+            upper_nation = min(above, key=horizontal_distance)
+            lower_nation = min(below, key=horizontal_distance)
+            upper_top, lower_top = float(upper_nation["top"]), float(lower_nation["top"])
+            if vy - upper_top > 60 or lower_top - vy > 60:
+                continue
+            p1 = _player_from_pdf_line(page_words, upper_top, cx)
+            p2 = _player_from_pdf_line(page_words, lower_top, cx)
+            if not p1 or not p2 or "/" in p1 or "/" in p2:
+                continue
+            label_candidates: list[tuple[float, str]] = []
+            line_tops = sorted({round(float(word.get("top", 0.0)), 1) for word in page_words})
+            for top in line_tops:
+                if not (upper_top - 90 <= top < upper_top):
+                    continue
+                label = " ".join(
+                    str(word.get("text", ""))
+                    for word in _words_on_line(page_words, top, cx, radius=140.0)
+                )
+                if _pdf_round_from_label(label, qualifying_final_code):
+                    label_candidates.append((top, label))
+            if label_candidates:
+                _, label = max(label_candidates, key=lambda item: item[0])
+                round_code = _pdf_round_from_label(label, qualifying_final_code)
+            else:
+                round_code = _qualifying_round_for_pair(p1, p2, qualifying_text)
+            if not round_code:
+                continue
+            rows.append({"round": round_code, "p1": p1, "p2": p2})
+    return pd.DataFrame(rows).drop_duplicates() if rows else pd.DataFrame()
+
+
+def _qualifying_final_code(text: str) -> str:
+    rounds = [int(value) for value in re.findall(r"Qualifying Round\s+(\d+)", str(text or ""), re.I)]
+    return f"Q{max(rounds)}" if rounds else "Q2"
+
+
+def fetch_official_draw_pdf(event_url: str) -> pd.DataFrame:
+    payload = _fetch_official_pdf(event_url, "mds.pdf")
+    if not payload:
+        return pd.DataFrame()
+    draw = parse_official_draw_pdf_text(payload["text"])
+    if not draw.empty:
+        print(f"      📄 Official ATP main-draw PDF: {len(draw)} pairings ({payload['url']})")
+    return draw
+
+
+def fetch_official_order_of_play_pdf(event_url: str) -> pd.DataFrame:
+    order = _fetch_official_pdf(event_url, "op.pdf")
+    if not order:
+        return pd.DataFrame()
+    qualifying = _fetch_official_pdf(event_url, "qs.pdf")
+    final_code = _qualifying_final_code(qualifying["text"] if qualifying else "")
+    schedule = parse_official_order_of_play_words(
+        order["words"],
+        qualifying_final_code=final_code,
+        qualifying_text=qualifying["text"] if qualifying else "",
+    )
+    if not schedule.empty:
+        print(f"      📄 Official ATP order-of-play PDF: {len(schedule)} pairings ({order['url']})")
+    return schedule
 
 
 def parse_tour_calendar(html: str) -> pd.DataFrame:

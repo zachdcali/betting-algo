@@ -106,6 +106,67 @@ def test_parse_event_draw_iasi():
     assert "Royer" in blob and "Jianu" in blob  # top seed pairing present
 
 
+def test_parse_official_main_draw_pdf_ignores_date_number_and_keeps_slot_20():
+    from scraping.atp_results_scraper import parse_official_draw_pdf_text
+
+    text = """
+    Example Open
+    20 July — 26 July 2026 | Clay
+    Main Draw Singles
+    1 1 PLAYER, Alpha USA
+    2 Bye
+    19 WAWRINKA, Stan SUI
+    20 BURRUCHAGA, Roman … ARG
+    21 MERIDA, Daniel ESP
+    22 Qualifier
+    31 Bye
+    32 2 PLAYER, Omega GBR
+    Round of 32 Round of 16 Quarterfinals Semifinals Final Winner
+    """
+
+    draw = parse_official_draw_pdf_text(text)
+
+    assert len(draw) == 1
+    assert draw.iloc[0].to_dict() == {
+        "round": "R32",
+        "p1": "Stan WAWRINKA",
+        "p2": "Roman … BURRUCHAGA",
+    }
+
+
+def test_parse_official_order_of_play_infers_q1_from_qualifying_slots():
+    from scraping.atp_results_scraper import parse_official_order_of_play_words
+
+    words = [
+        {"text": "William", "x0": 100, "x1": 135, "top": 100, "page": 0},
+        {"text": "REJCHTMAN", "x0": 137, "x1": 195, "top": 100, "page": 0},
+        {"text": "VINCIGUERRA", "x0": 197, "x1": 260, "top": 100, "page": 0},
+        {"text": "(SWE)", "x0": 262, "x1": 290, "top": 100, "page": 0},
+        {"text": "vs", "x0": 190, "x1": 202, "top": 115, "page": 0},
+        {"text": "Louis", "x0": 130, "x1": 155, "top": 130, "page": 0},
+        {"text": "WESSELS", "x0": 157, "x1": 210, "top": 130, "page": 0},
+        {"text": "(GER)", "x0": 212, "x1": 240, "top": 130, "page": 0},
+    ]
+    qualifying_text = """
+    Qualifying Singles
+    23 REJCHTMAN VINCIGUERR… SWE
+    24 10 WESSELS, Louis GER
+    Qualifying Round 1 Qualifying Round 2 Qualifier
+    """
+
+    schedule = parse_official_order_of_play_words(
+        words,
+        qualifying_final_code="Q2",
+        qualifying_text=qualifying_text,
+    )
+
+    assert schedule.to_dict("records") == [{
+        "round": "Q1",
+        "p1": "William REJCHTMAN VINCIGUERRA",
+        "p2": "Louis WESSELS",
+    }]
+
+
 def test_parse_results_archive_card_scoped():
     from scraping.atp_results_scraper import parse_results_archive
     df = parse_results_archive(_load("atp_archive_tour_2026.html.gz"), 2026)

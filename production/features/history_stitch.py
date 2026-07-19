@@ -114,7 +114,10 @@ def _names_loosely_match(a: str, b: str) -> bool:
     if la == lb:
         ia = str(a).strip()[0].lower()
         ib = str(b).strip()[0].lower()
-        return ia == ib or "." in a or "." in b  # initials tolerated
+        # Official ATP PDFs can replace a long given name with a leading
+        # ellipsis while preserving the full compound surname.
+        pdf_given_truncated = str(a).strip().startswith("…") or str(b).strip().startswith("…")
+        return ia == ib or "." in a or "." in b or pdf_given_truncated  # initials tolerated
     # token-subset: one full name (>=2 real tokens) contained in the other
     ta = {t for t in str(a).lower().replace("-", " ").replace(".", "").split() if len(t) > 1}
     tb = {t for t in str(b).lower().replace("-", " ").replace(".", "").split() if len(t) > 1}
@@ -629,25 +632,8 @@ def round_from_draws(
     events = _events_for_title(
         get_active_events(ref_date, cache), expected_event_title,
     )
-    for ev in events:
-        url = ev["url"]
-        if url not in draws_cache:
-            try:
-                print(f"      🧵 Fetching draw for {ev['event']} (shared, cached)")
-                draws_cache[url] = fetch_event_draw(url)
-            except Exception as exc:
-                print(f"      ⚠️ draw fetch failed (non-fatal): {exc}")
-                draws_cache[url] = pd.DataFrame()
-        draw = draws_cache[url]
-        if draw is None or draw.empty:
-            continue
-        for _, row in draw.iterrows():
-            a, b = str(row["p1"]), str(row["p2"])
-            if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
-               (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
-                return str(row["round"])
-    # draw sheets omit qualifying and TBD-qualifier slots; the daily-schedule
-    # page labels every match of the day with its exact round (Q2, R32, ...)
+    # The daily schedule/order-of-play labels qualifying matches exactly and is
+    # cheaper than a full draw. Try it first; main-draw PDF/HTML is the fallback.
     try:
         from atp_results_scraper import fetch_daily_schedule
     except ImportError:
@@ -670,6 +656,23 @@ def round_from_draws(
             if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
                (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
                 print(f"      📋 Round from daily schedule: {row['round']}")
+                return str(row["round"])
+    for ev in events:
+        url = ev["url"]
+        if url not in draws_cache:
+            try:
+                print(f"      🧵 Fetching draw for {ev['event']} (shared, cached)")
+                draws_cache[url] = fetch_event_draw(url)
+            except Exception as exc:
+                print(f"      ⚠️ draw fetch failed (non-fatal): {exc}")
+                draws_cache[url] = pd.DataFrame()
+        draw = draws_cache[url]
+        if draw is None or draw.empty:
+            continue
+        for _, row in draw.iterrows():
+            a, b = str(row["p1"]), str(row["p2"])
+            if (_names_loosely_match(a, p1) and _names_loosely_match(b, p2)) or \
+               (_names_loosely_match(a, p2) and _names_loosely_match(b, p1)):
                 return str(row["round"])
     return None
 
