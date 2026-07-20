@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T10:56:40+00:00",
+    "observed_at": "2026-07-20T11:53:29+00:00",
     "observed_values": {},
-    "source_content_sha256": "21564abca6da6f82a89878b7c929bfe570cdae6587c0ece154eecbf65873065b",
+    "source_content_sha256": "11e729725f91b4eef02779d47216d5d90124759cbe1b758db3f33cd0aa0b945f",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
     "status": "fetch_error"
   },
@@ -433,16 +433,16 @@
   },
   "cesar bouchelaghem": {
     "canonical_player_id": 210726,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
-    "missing_fields": [],
-    "observed_at": "2026-07-20T10:56:46+00:00",
-    "observed_values": {
-      "hand": "R",
-      "height_cm": 185
-    },
-    "source_content_sha256": "a645108adad4d868290f75fd0e8a45e1264bae0bb020dadf854322dc438298d1",
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T07:57:44+00:00",
+    "observed_values": {},
+    "source_content_sha256": "23b5cae2cbab9d78464bdcbc28e30409c7d53da73435862e55ceeaa5ec4156e0",
     "source_uri": "https://www.atptour.com/en/players/cesar-bouchelaghem/b0me/overview",
-    "status": "resolved"
+    "status": "fetch_error"
   },
   "cezar gabriel papoe": {
     "canonical_player_id": 212885,
@@ -1035,9 +1035,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T10:56:51+00:00",
+    "observed_at": "2026-07-20T11:53:34+00:00",
     "observed_values": {},
-    "source_content_sha256": "15465da23d8ea5b3f97bd53843b1436311aa5c2d40468f61fddb0369783afb58",
+    "source_content_sha256": "6cfe81c107c0f6af87e043cca89a0b7a4350fd02934ea60987753b32cce5a300",
     "source_uri": "https://www.atptour.com/en/players/gavin-young/y0bf/overview",
     "status": "fetch_error"
   },
@@ -2210,9 +2210,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T10:56:35+00:00",
+    "observed_at": "2026-07-20T11:53:24+00:00",
     "observed_values": {},
-    "source_content_sha256": "4289d0fa949886709d7cf11a1c2fbccc37f5bcede06cc0caa91ad7aeea43fd49",
+    "source_content_sha256": "b1c808913c0f83461a4271ddf7e704325c0f42230277d83786563d1b2e3b4605",
     "source_uri": "https://www.atptour.com/en/players/mert-alkaya/a09q/overview",
     "status": "fetch_error"
   },
@@ -3314,9 +3314,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T10:56:56+00:00",
+    "observed_at": "2026-07-20T11:53:39+00:00",
     "observed_values": {},
-    "source_content_sha256": "0c60a2e2c54229b1ef74c43b01d45b74cd79249380ee984852b6bc4fe7026ac8",
+    "source_content_sha256": "a09fb4dcdc4cc98ee35c261ee82adbb46333e2c3f43b50ca84ef3fefcee78598",
     "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
     "status": "fetch_error"
   },
