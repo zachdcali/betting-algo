@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T14:21:25+00:00",
+    "observed_at": "2026-07-20T02:43:53+00:00",
     "observed_values": {},
-    "source_content_sha256": "4ab12032d18e83281cf8eeebca72f9dd1c8a40d9f9fce10e9e216aeb69de21d8",
+    "source_content_sha256": "eadb712db9cfd7097985b7193f86782dc37a90ccbcafd97fd89e06f66a42ca45",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
     "status": "fetch_error"
   },
@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T00:35:06+00:00",
+    "observed_at": "2026-07-20T02:43:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "bcb0fbda5e54259ffb520aecabade4432ab4d3dbe1a98a56fa09bbb0c9d94b38",
+    "source_content_sha256": "95c16b224bd6f13a0fdbb942a26dff9af022dbd39626fbfffc3f38cf39d84641",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -1880,9 +1880,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T00:35:11+00:00",
+    "observed_at": "2026-07-20T02:44:04+00:00",
     "observed_values": {},
-    "source_content_sha256": "08a1b6f2104f69cdaea4364241f7053fb27ebabdbfac57354c8b93f63f6701d3",
+    "source_content_sha256": "74ae63c849af0bbc51008c68e97bbce2e286773e0a152d6d033d9017f38a64a4",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T00:35:16+00:00",
+    "observed_at": "2026-07-20T02:44:09+00:00",
     "observed_values": {},
-    "source_content_sha256": "8f6d37a4b41fc516b1f29a771369b5150ecda4e1dd39ad70dec94d5da80af51c",
+    "source_content_sha256": "89b1d4b0faa6b338864492856ed1a5760e1df9b1184a7f93754fe0ab0b009c0f",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -3288,9 +3288,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T00:35:27+00:00",
+    "observed_at": "2026-07-20T02:44:14+00:00",
     "observed_values": {},
-    "source_content_sha256": "9511b772cdb4e26025c173098b69c1b7c2b1d5511e0538b05844c8ae630b12f5",
+    "source_content_sha256": "e7eff668b5f5fc404d1498e15efce8061d210ce01d52114da4e425e4ec02d77f",
     "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
     "status": "fetch_error"
   },
