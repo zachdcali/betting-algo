@@ -511,16 +511,16 @@
   },
   "chen dong": {
     "canonical_player_id": 211317,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T16:28:45+00:00",
-    "observed_values": {},
-    "source_content_sha256": "83188134234c0c84312b8fe568e47d60566448b484f009221b99883e5fb1e6b6",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T18:40:05+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 173
+    },
+    "source_content_sha256": "abd18572f22a816a8f2d4dfdee4cda330d5bc1eea71131a95784bdcc726c5d41",
     "source_uri": "https://www.atptour.com/en/players/chen-dong/d0fn/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "chirag duhan": {
     "canonical_player_id": 210003,
@@ -1548,16 +1548,16 @@
   },
   "joshua charlton": {
     "canonical_player_id": 206916,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T16:37:13+00:00",
-    "observed_values": {},
-    "source_content_sha256": "3ebbcaa33bc1f1a4045e4de92efebd6b03a653d285a8c2a6f246f01a87b31cbd",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T18:41:49+00:00",
+    "observed_values": {
+      "hand": "L",
+      "height_cm": 191
+    },
+    "source_content_sha256": "8de68d7f208a8de717e37cb976d0401a7e03eb0467b321ab738023f2e3aaf128",
     "source_uri": "https://www.atptour.com/en/players/joshua-charlton/c09y/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "joshua peck": {
     "canonical_player_id": 200234,
