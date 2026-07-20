@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T23:34:18+00:00",
+    "observed_at": "2026-07-20T00:35:06+00:00",
     "observed_values": {},
-    "source_content_sha256": "05c39a711cba2ecee99b63360df4f1e5779e0311d7f91355821ca6ff6f155f05",
+    "source_content_sha256": "bcb0fbda5e54259ffb520aecabade4432ab4d3dbe1a98a56fa09bbb0c9d94b38",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -1880,9 +1880,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T23:34:23+00:00",
+    "observed_at": "2026-07-20T00:35:11+00:00",
     "observed_values": {},
-    "source_content_sha256": "af839d721bad6bb2b480a7ec88d4575ab2ee3ba4dddb67008893e8133600fa67",
+    "source_content_sha256": "08a1b6f2104f69cdaea4364241f7053fb27ebabdbfac57354c8b93f63f6701d3",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T23:34:28+00:00",
+    "observed_at": "2026-07-20T00:35:16+00:00",
     "observed_values": {},
-    "source_content_sha256": "2a9890a7d56600c0d345ed1165a37d7a58d7b4f7fb36009f930f19185ff45fa0",
+    "source_content_sha256": "8f6d37a4b41fc516b1f29a771369b5150ecda4e1dd39ad70dec94d5da80af51c",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -3106,16 +3106,16 @@
   },
   "sergio callejon hernando": {
     "canonical_player_id": 212090,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-19T23:34:34+00:00",
-    "observed_values": {},
-    "source_content_sha256": "67ad4cbeace612f91dbeb33f913d30565a14b7f371ebac09236131dcbb101ab5",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T00:35:22+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 175
+    },
+    "source_content_sha256": "b8732b4283360be98ca6acea60dcc35ed8dd67d45b2547f0927fb68d8e521995",
     "source_uri": "https://www.atptour.com/en/players/sergio-callejon-hernando/c0p0/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "seydina andre": {
     "canonical_player_id": 210252,
@@ -3288,9 +3288,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T23:34:13+00:00",
+    "observed_at": "2026-07-20T00:35:27+00:00",
     "observed_values": {},
-    "source_content_sha256": "6a54960c76e90f41a54ba52f111abaddf65672bfd605a9109dbd69a2c0588beb",
+    "source_content_sha256": "9511b772cdb4e26025c173098b69c1b7c2b1d5511e0538b05844c8ae630b12f5",
     "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
     "status": "fetch_error"
   },
