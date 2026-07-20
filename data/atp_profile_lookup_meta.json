@@ -51,16 +51,16 @@
   },
   "alan magadan": {
     "canonical_player_id": 209246,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T11:53:29+00:00",
-    "observed_values": {},
-    "source_content_sha256": "11e729725f91b4eef02779d47216d5d90124759cbe1b758db3f33cd0aa0b945f",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T13:38:41+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "8818aa62333d0775fe62534f10fb6ae60a064e9a4ba7dd55ce776925fe6a94a3",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "alan wazny": {
     "canonical_player_id": 213048,
@@ -1030,16 +1030,16 @@
   },
   "gavin young": {
     "canonical_player_id": 212405,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T11:53:34+00:00",
-    "observed_values": {},
-    "source_content_sha256": "6cfe81c107c0f6af87e043cca89a0b7a4350fd02934ea60987753b32cce5a300",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T13:38:47+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 193
+    },
+    "source_content_sha256": "d063e32757ad8193ad2d440e9603287c623ea88a59b4e3e8ec33664aab9359ea",
     "source_uri": "https://www.atptour.com/en/players/gavin-young/y0bf/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "giacomo crisostomo": {
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -2063,6 +2063,19 @@
     "source_uri": "https://www.atptour.com/en/players/matteo-fondriest/f0gu/overview",
     "status": "partial"
   },
+  "matteo gribaldo": {
+    "canonical_player_id": 214124,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T13:38:36+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/matteo%20gribaldo",
+    "status": "no_url"
+  },
   "matthew forbes": {
     "canonical_player_id": 212733,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -2205,16 +2218,16 @@
   },
   "mert alkaya": {
     "canonical_player_id": 207368,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T11:53:24+00:00",
-    "observed_values": {},
-    "source_content_sha256": "b1c808913c0f83461a4271ddf7e704325c0f42230277d83786563d1b2e3b4605",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T13:38:53+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 178
+    },
+    "source_content_sha256": "38cffd6854212a9c2946ca466c28009b58a934302c21739bf085873d8e576fd7",
     "source_uri": "https://www.atptour.com/en/players/mert-alkaya/a09q/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "michael antonius": {
     "canonical_player_id": 214004,
@@ -2775,6 +2788,20 @@
     "source_content_sha256": "eca7a4f63f63c06cfe6288d8d3375f0d2b2bb2ba89045f48c242b410bbac7a28",
     "source_uri": "https://www.atptour.com/en/players/pieter-de-lange/d0lk/overview",
     "status": "identity_mismatch"
+  },
+  "pietro romeo scomparin": {
+    "canonical_player_id": 210429,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [
+      "height_cm"
+    ],
+    "observed_at": "2026-07-20T13:39:00+00:00",
+    "observed_values": {
+      "hand": "R"
+    },
+    "source_content_sha256": "ff28c7a6b650f2c65fcd2e2781ef3779de099096804770c31a49425a7df93d1c",
+    "source_uri": "https://www.atptour.com/en/players/pietro-romeo-scomparin/s0i7/overview",
+    "status": "partial"
   },
   "pranav karthik": {
     "identity_binding": "",
