@@ -10,6 +10,8 @@ if str(PRODUCTION_DIR) not in sys.path:
 import pandas as pd
 import pytest
 from features.history_stitch import (
+    CURRENT_EVENT_REGISTRY,
+    _load_current_event_registry,
     activity_to_ta_schema,
     active_event_for,
     cache_event_ingest_metadata,
@@ -270,13 +272,43 @@ def test_verified_current_week_registry_survives_empty_dynamic_discovery(monkeyp
     events = get_active_events("2026-07-18", cache)
     current = {event["event"]: event for event in events}
 
-    assert {"Bunschoten", "Kitzbuhel", "Estoril", "Tampere"} <= set(current)
+    assert {
+        "Bunschoten", "Kitzbuhel", "Estoril", "Bloomfield Hills", "Zug",
+        "Segovia", "Tampere", "Winnipeg",
+    } <= set(current)
     assert current["Bunschoten"]["level"] == "C"
     assert current["Estoril"]["surface"] == "Clay"
+    assert current["Zug"]["surface"] == "Clay"
+    assert current["Segovia"]["surface"] == "Hard"
     assert current["Tampere"]["level"] == "C"
     assert all(current[name]["date_verified"] for name in current)
     assert cache["atp_event_discovery"]["status"] == "degraded_static_fallback"
-    assert cache["atp_event_discovery"]["active_window"] == 4
+    assert cache["atp_event_discovery"]["active_window"] == 8
+
+
+def test_official_event_registry_is_versioned_and_source_bound():
+    current = {event["event"]: event for event in CURRENT_EVENT_REGISTRY}
+
+    assert {"Bloomfield Hills", "Zug", "Segovia", "Tampere", "Winnipeg"} <= set(current)
+    assert current["Zug"]["url"].endswith("/zug/2785/results")
+    assert current["Segovia"]["url"].endswith("/segovia/783/results")
+    assert current["Zug"]["date_evidence_url"].startswith("https://www.atptour.com/")
+
+
+def test_official_event_registry_fails_closed_on_unverified_rows(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        '{"schema_version":"official_atp_event_registry@1.0.0","events":['
+        '{"event":"Example","slug":"example","id":"999",'
+        '"url":"https://www.atptour.com/en/scores/current-challenger/example/999/results",'
+        '"start_date":"2026-07-20","date_verified":false,'
+        '"date_source":"test","date_evidence_url":"https://www.atptour.com/example",'
+        '"surface":"Hard","surface_evidence_url":"https://www.atptour.com/example",'
+        '"level":"C","window":["2026-07-20","2026-07-21"]}]}'
+    )
+
+    with pytest.raises(ValueError, match="not source verified"):
+        _load_current_event_registry(registry)
 
 
 def test_round_resolution_uses_expected_event_and_official_schedule(monkeypatch):
@@ -307,6 +339,48 @@ def test_round_resolution_uses_expected_event_and_official_schedule(monkeypatch)
     )
 
     assert resolved == "Q2"
+
+
+@pytest.mark.parametrize(
+    ("event_title", "p1", "p2", "event_slug", "event_id"),
+    [
+        ("Challenger - Zug (11)", "Amit Vales", "Norbert Gombos", "zug", "2785"),
+        (
+            "Challenger - Segovia (6)",
+            "Massimo Giunta",
+            "Samuel Heredia",
+            "segovia",
+            "783",
+        ),
+    ],
+)
+def test_current_challenger_titles_select_their_official_schedule(
+    monkeypatch, event_title, p1, p2, event_slug, event_id,
+):
+    import importlib
+    from features.history_stitch import round_from_draws
+    try:
+        atp_results_scraper = importlib.import_module("atp_results_scraper")
+    except ImportError:
+        atp_results_scraper = importlib.import_module("scraping.atp_results_scraper")
+
+    monkeypatch.setattr(atp_results_scraper, "discover_active_events", lambda: [])
+    url = (
+        "https://www.atptour.com/en/scores/current-challenger/"
+        f"{event_slug}/{event_id}/results"
+    )
+    cache = {
+        "atp_calendar": {"df": pd.DataFrame()},
+        "atp_tour_calendar": {"df": pd.DataFrame()},
+        "atp_event_draws": {url: pd.DataFrame()},
+        "atp_event_schedules": {url: pd.DataFrame([{
+            "round": "Q2", "p1": p1, "p2": p2,
+        }])},
+    }
+
+    assert round_from_draws(
+        p1, p2, "2026-07-20", cache, expected_event_title=event_title,
+    ) == "Q2"
 
 
 def test_name_match_accepts_official_pdf_leading_ellipsis_for_compound_surname():

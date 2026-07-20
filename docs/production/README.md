@@ -52,6 +52,13 @@ Current production principles:
   results, and stable player IDs/profile links. The linked ITF profile is an
   exact-ID handedness fallback, not a height source; ATP/TA remain the verified
   height paths and missing height remains ineligible.
+- ATP event discovery normally reads the live hubs/calendars. When those
+  client-rendered pages return only a cloud-runner shell, the bounded,
+  source-verified fallback is
+  `production/features/official_atp_event_registry.json`. The loader validates
+  its schema, event URL identity, dates, surface, level, and evidence fields at
+  import time. Update that data file from official ATP pages/calendar evidence;
+  do not add weekly event facts back into feature code or guess a surface.
 - Prediction generation and auto-settlement are separate concerns.
 - `prediction_log.csv` is the operational view, while `prediction_snapshots.csv`,
   `odds_history.csv`, `kalshi_odds_history.csv`, and `logs/features_*.csv` are

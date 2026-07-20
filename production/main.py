@@ -154,33 +154,38 @@ def _atp_live_surface(event_label: str, session_cache: dict):
     surface even while the official Tour calendar said Clay.
     """
     try:
+        from features.history_stitch import _event_title_tokens
+
         city = str(event_label).split(",")[0].split("(")[0].strip().lower()
         city = " ".join(w for w in city.split()
                         if w.isalpha() and w not in ("atp", "challenger", "itf", "men", "mens", "wta"))
-        if len(city) < 4:
-            return None
         surfaces = set()
-        for cache_key in ("atp_calendar", "atp_tour_calendar"):
-            cal = (session_cache.get(cache_key) or {}).get("df")
-            if cal is None or cal.empty or "surface" not in cal.columns:
-                continue
-            hits = cal[
-                cal["event"].astype(str).str.lower().str.contains(city, regex=False)
-                & cal["surface"].notna()
-            ]
-            for value in hits["surface"].astype(str):
-                normalized = value.strip().title()
-                if normalized in {"Hard", "Clay", "Grass", "Carpet"}:
-                    surfaces.add(normalized)
+        if len(city) >= 4:
+            for cache_key in ("atp_calendar", "atp_tour_calendar"):
+                cal = (session_cache.get(cache_key) or {}).get("df")
+                if cal is None or cal.empty or "surface" not in cal.columns:
+                    continue
+                hits = cal[
+                    cal["event"].astype(str).str.lower().str.contains(city, regex=False)
+                    & cal["surface"].notna()
+                ]
+                for value in hits["surface"].astype(str):
+                    normalized = value.strip().title()
+                    if normalized in {"Hard", "Clay", "Grass", "Carpet"}:
+                        surfaces.add(normalized)
         # The bounded, source-verified registry is merged into the active-event
         # cache by get_active_events. Read it too so a cloud calendar miss still
-        # carries the verified event surface into feature construction.
+        # carries the verified event surface into feature construction. Token
+        # matching intentionally handles short official cities such as Zug,
+        # which the older >=4-character substring safety gate could never use.
+        expected_tokens = _event_title_tokens(event_label)
         for events in (session_cache.get("atp_active_events_by_ref_date") or {}).values():
             for event in events or []:
-                event_text = " ".join(
-                    [str(event.get("event", "")), str(event.get("slug", ""))]
-                ).lower()
-                if city not in event_text:
+                event_tokens = (
+                    _event_title_tokens(event.get("event", ""))
+                    | _event_title_tokens(event.get("slug", ""))
+                )
+                if not expected_tokens or not (expected_tokens & event_tokens):
                     continue
                 normalized = str(event.get("surface", "")).strip().title()
                 if normalized in {"Hard", "Clay", "Grass", "Carpet"}:

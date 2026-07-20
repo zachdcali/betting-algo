@@ -404,6 +404,23 @@ def test_missing_match_start_is_an_inference_guard():
     )
 
 
+def test_reviewed_ta_alias_resolves_schwarzler_to_canonical_profile():
+    from features.ta_feature_calculator import TAFeatureCalculator
+
+    calculator = TAFeatureCalculator.__new__(TAFeatureCalculator)
+    calculator.player_slug_map = calculator._load_player_mapping()
+
+    class NoNetworkFallback:
+        @staticmethod
+        def name_to_slug(_name):
+            raise AssertionError("reviewed alias should resolve before derivation")
+
+    calculator.scraper = NoNetworkFallback()
+
+    assert calculator.find_slug("Joel Josef Schwarzler") == "JoelSchwaerzler"
+    assert calculator.find_slug("Joel Josef Schwaerzler") == "JoelSchwaerzler"
+
+
 def test_auto_settle_reports_ta_unfinished_before_opponent_not_found(monkeypatch):
     import auto_settle
 
@@ -1825,12 +1842,16 @@ def test_atp_live_surface_reads_tour_and_challenger_calendars():
 
     static_only = {
         "atp_active_events_by_ref_date": {
-            "2026-07-18": [{
-                "event": "Estoril", "slug": "estoril", "surface": "Clay",
-            }],
+            "2026-07-18": [
+                {"event": "Estoril", "slug": "estoril", "surface": "Clay"},
+                {"event": "Zug", "slug": "zug", "surface": "Clay"},
+                {"event": "Segovia", "slug": "segovia", "surface": "Hard"},
+            ],
         },
     }
     assert _atp_live_surface("ATP - Estoril (10)", static_only) == "Clay"
+    assert _atp_live_surface("Challenger - Zug (11)", static_only) == "Clay"
+    assert _atp_live_surface("Challenger - Segovia (6)", static_only) == "Hard"
 
 
 def test_betting_edges_preserve_event_for_bet_slips():
