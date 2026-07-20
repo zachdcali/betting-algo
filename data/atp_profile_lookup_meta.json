@@ -509,6 +509,19 @@
     "source_uri": "https://www.atptour.com/en/players/chase-ferguson/f0c0/overview",
     "status": "resolved"
   },
+  "chen dong": {
+    "canonical_player_id": 211317,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T16:28:45+00:00",
+    "observed_values": {},
+    "source_content_sha256": "83188134234c0c84312b8fe568e47d60566448b484f009221b99883e5fb1e6b6",
+    "source_uri": "https://www.atptour.com/en/players/chen-dong/d0fn/overview",
+    "status": "fetch_error"
+  },
   "chirag duhan": {
     "canonical_player_id": 210003,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -1343,6 +1356,19 @@
     "source_uri": "https://www.atptour.com/en/players/jangjun-kim/k0kc/overview",
     "status": "resolved"
   },
+  "jay dylan hara friend": {
+    "canonical_player_id": 210221,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T16:28:40+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/jay%20dylan%20hara%20friend",
+    "status": "no_url"
+  },
   "jeffrey strydom": {
     "identity_binding": "",
     "missing_fields": [
@@ -1527,11 +1553,11 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-15T19:49:09+00:00",
+    "observed_at": "2026-07-20T16:37:13+00:00",
     "observed_values": {},
-    "source_content_sha256": "8b1e217c0012ba98d3bbce7c31c1d4069f6ecda2ace85ea601d44fa79dd93147",
+    "source_content_sha256": "3ebbcaa33bc1f1a4045e4de92efebd6b03a653d285a8c2a6f246f01a87b31cbd",
     "source_uri": "https://www.atptour.com/en/players/joshua-charlton/c09y/overview",
-    "status": "identity_mismatch"
+    "status": "fetch_error"
   },
   "joshua peck": {
     "canonical_player_id": 200234,
@@ -1794,6 +1820,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/ludvig%20fredrik%20hede",
     "status": "no_url"
+  },
+  "lui maxted": {
+    "canonical_player_id": 210747,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T16:28:50+00:00",
+    "observed_values": {},
+    "source_content_sha256": "72db8cff0879cdc61fec5e9cfc4531861d47e3da7cec9009cb2f46817ecf7837",
+    "source_uri": "https://www.atptour.com/en/players/lui-maxted/m0nj/overview",
+    "status": "fetch_error"
   },
   "luis jose nakamine": {
     "canonical_player_id": 149157,
@@ -2339,11 +2378,11 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T00:34:59+00:00",
+    "observed_at": "2026-07-20T16:28:40+00:00",
     "observed_values": {},
-    "source_content_sha256": "47773daae8fa134d629ab555f79e9fc420c40b7e7602cdfe071650850018dc96",
-    "source_uri": "https://www.atptour.com/en/players/mustafa-ege-sik/s1d0/overview",
-    "status": "identity_mismatch"
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/mustafa%20ege%20sik",
+    "status": "no_url"
   },
   "nathan cox": {
     "canonical_player_id": 213920,
@@ -2410,16 +2449,16 @@
   },
   "nicolas arseneault": {
     "canonical_player_id": 212531,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-15T11:57:48+00:00",
-    "observed_values": {},
-    "source_content_sha256": "7cdbd9398e45de0d7292a304d4298c8ce962fa423262df91e27393d536570160",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T16:35:57+00:00",
+    "observed_values": {
+      "hand": "L",
+      "height_cm": 183
+    },
+    "source_content_sha256": "bb9cec964efdd4d0f950c2fddcd7c0ee5530646d2fe13b7f4add9e886a8383c8",
     "source_uri": "https://www.atptour.com/en/players/nicolas-arseneault/a0k3/overview",
-    "status": "identity_mismatch"
+    "status": "resolved"
   },
   "nicolas parizzia": {
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
