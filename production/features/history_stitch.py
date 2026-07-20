@@ -23,77 +23,85 @@ TA rows only, never silently on NaN (see AGENTS.md no-silent-fallbacks).
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-# In-progress events whose results pages we can stitch from. start_date uses
-# TA's convention (tournament start for every round). Extend as events come up;
-# a future build derives this from ATP's results archive automatically.
-CURRENT_EVENT_REGISTRY = [
-    {
-        "event": "Wimbledon",
-        "url": "https://www.atptour.com/en/scores/current/wimbledon/540/results",
-        "start_date": "2026-06-29",
-        "date_verified": True,
-        "date_source": "static_registry",
-        "surface": "Grass",
-        "level": "G",
-        "window": ("2026-06-29", "2026-07-13"),
-    },
-    # Verified ATP calendar instances kept as a bounded break-glass path for
-    # the 2026-07-18 week. ATP's client-rendered calendar can expose only its
-    # navigation shell on a cloud runner; these entries ensure that a transient
-    # discovery miss cannot erase official round/surface evidence already
-    # published at the stable event URLs below.
-    {
-        "event": "Bunschoten",
-        "url": "https://www.atptour.com/en/scores/current-challenger/bunschoten/9198/results",
-        "start_date": "2026-07-13",
-        "date_verified": True,
-        "date_source": "official_atp_calendar",
-        "date_evidence_url": "https://www.atptour.com/en/scores/current-challenger/bunschoten/9198/draws",
-        "surface": "Clay",
-        "level": "C",
-        "window": ("2026-07-18", "2026-07-19"),
-    },
-    {
-        "event": "Kitzbuhel",
-        "url": "https://www.atptour.com/en/scores/current/kitzbuhel/319/results",
-        "start_date": "2026-07-20",
-        "date_verified": True,
-        "date_source": "official_atp_calendar",
-        "date_evidence_url": "https://www.atptour.com/en/tournaments/kitzbuhel/319/overview",
-        "surface": "Clay",
-        "level": "A",
-        "window": ("2026-07-18", "2026-07-27"),
-    },
-    {
-        "event": "Estoril",
-        "url": "https://www.atptour.com/en/scores/current/estoril/7290/results",
-        "start_date": "2026-07-20",
-        "date_verified": True,
-        "date_source": "official_atp_calendar",
-        "date_evidence_url": "https://www.atptour.com/en/tournaments/estoril/7290/overview",
-        "surface": "Clay",
-        "level": "A",
-        "window": ("2026-07-18", "2026-07-28"),
-    },
-    {
-        "event": "Tampere",
-        "url": "https://www.atptour.com/en/scores/current-challenger/tampere/221/results",
-        "start_date": "2026-07-20",
-        "date_verified": True,
-        "date_source": "official_atp_calendar",
-        "date_evidence_url": "https://www.atptour.com/en/tournaments/tampere/221/overview",
-        "surface": "Clay",
-        "level": "C",
-        "window": ("2026-07-18", "2026-07-28"),
-    },
-]
+_EVENT_REGISTRY_PATH = Path(__file__).with_name("official_atp_event_registry.json")
+_EVENT_REGISTRY_SCHEMA = "official_atp_event_registry@1.0.0"
+
+
+def _load_current_event_registry(path: Path = _EVENT_REGISTRY_PATH) -> list[dict]:
+    """Load the reviewed official-event fallback and fail closed on drift.
+
+    ATP's client-rendered calendars occasionally return only a navigation shell
+    on GitHub-hosted runners.  Keeping the bounded fallback in a versioned data
+    file makes each official event/date/surface addition reviewable without
+    burying weekly operational data inside feature code.
+    """
+    with path.open(encoding="utf-8") as fh:
+        payload = json.load(fh)
+    if payload.get("schema_version") != _EVENT_REGISTRY_SCHEMA:
+        raise ValueError(
+            f"unsupported ATP event registry schema: {payload.get('schema_version')!r}"
+        )
+    events = payload.get("events")
+    if not isinstance(events, list) or not events:
+        raise ValueError("ATP event registry must contain a non-empty events list")
+
+    required = {
+        "event", "slug", "id", "url", "start_date", "date_verified",
+        "date_source", "date_evidence_url", "surface", "surface_evidence_url",
+        "level", "window",
+    }
+    seen = set()
+    validated = []
+    for index, raw in enumerate(events):
+        if not isinstance(raw, dict):
+            raise ValueError(f"ATP event registry row {index} is not an object")
+        missing = sorted(required - set(raw))
+        if missing:
+            raise ValueError(f"ATP event registry row {index} missing {missing}")
+        event = dict(raw)
+        window = event.get("window")
+        if not isinstance(window, list) or len(window) != 2:
+            raise ValueError(f"ATP event registry row {index} has invalid window")
+        if event.get("date_verified") is not True:
+            raise ValueError(f"ATP event registry row {index} is not source verified")
+        if event.get("surface") not in {"Hard", "Clay", "Grass", "Carpet"}:
+            raise ValueError(f"ATP event registry row {index} has invalid surface")
+        if event.get("level") not in {"A", "C", "D", "G", "F"}:
+            raise ValueError(f"ATP event registry row {index} has invalid level")
+        if not str(event.get("url", "")).startswith("https://www.atptour.com/"):
+            raise ValueError(f"ATP event registry row {index} has non-official URL")
+        expected_path = f"/{event['slug']}/{event['id']}/results"
+        if not str(event["url"]).endswith(expected_path):
+            raise ValueError(f"ATP event registry row {index} URL identity mismatch")
+        start = pd.Timestamp(event["start_date"])
+        lo, hi = pd.Timestamp(window[0]), pd.Timestamp(window[1])
+        # A break-glass window may deliberately begin after the tournament
+        # start (for example when ATP's cloud calendar first degraded), but it
+        # must still overlap the source-verified event interval.
+        if start > hi or lo > hi:
+            raise ValueError(f"ATP event registry row {index} has inconsistent dates")
+        identity = (event["event"], event["start_date"])
+        if identity in seen:
+            raise ValueError(f"duplicate ATP event registry identity: {identity}")
+        seen.add(identity)
+        event["window"] = tuple(window)
+        validated.append(event)
+    return validated
+
+
+# Source-verified, bounded break-glass entries. Dynamic official discovery still
+# takes precedence when it works; this registry prevents a cloud calendar shell
+# from erasing official round and surface evidence for the active slate.
+CURRENT_EVENT_REGISTRY = _load_current_event_registry()
 
 # Stitch only when TA's newest row is at least this many days older than the
 # reference date — below this we cannot distinguish "TA lags" from "player rested".

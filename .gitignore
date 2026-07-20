@@ -6,9 +6,11 @@
 data/
 data-files/
 *.csv
+!production/ta_player_mapping.csv
 *.xlsx
 *.json
 !docs/dashboard_version.json
+!production/features/official_atp_event_registry.json
 results/*/predictions.csv
 results/*/raw_data/
 
