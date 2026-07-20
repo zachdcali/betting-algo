@@ -342,6 +342,19 @@
     "source_uri": "https://www.atptour.com/en/players/antoni-fabre/f0gf/overview",
     "status": "not_found"
   },
+  "arjun rathi": {
+    "canonical_player_id": 213889,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T22:15:26+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "1673f34d646e9b3a1b9d2613e3e8d51109daa726fef7b00d1a06bb0e4bc1dd55",
+    "source_uri": "https://www.atptour.com/en/players/arjun-rathi/r0mv/overview",
+    "status": "resolved"
+  },
   "arthur bellegy": {
     "canonical_player_id": 213004,
     "identity_binding": "",
@@ -2314,9 +2327,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T07:58:04+00:00",
+    "observed_at": "2026-07-20T22:15:21+00:00",
     "observed_values": {},
-    "source_content_sha256": "04ebfdcf0907f29d004bc59c96dcfb7ace974d7c577735d0e25e8278bc32b211",
+    "source_content_sha256": "39ade2a287456280c63820735761127e49c1ed817dd32520a224fd93f24d1474",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -2802,6 +2815,19 @@
     "source_uri": "https://www.atptour.com/en/players/petr-nesterov/n0cj/overview",
     "status": "partial"
   },
+  "philip henning": {
+    "canonical_player_id": 202475,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T22:15:16+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "25f72d30aa86cd13c91751a9d68f6d4645e3f53235d3b70905fc90d7c04609ce",
+    "source_uri": "https://www.atptour.com/en/players/philip-henning/h0bf/overview",
+    "status": "resolved"
+  },
   "pierluigi basile": {
     "canonical_player_id": 213003,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -3054,6 +3080,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/ryo%20minakata",
     "status": "no_url"
+  },
+  "ryotaro taguchi": {
+    "canonical_player_id": 211774,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T22:15:32+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 173
+    },
+    "source_content_sha256": "a6aa0d905e77b99d42cd6910ee8c98bd1ba3097267a8119fd6b99b3361679f18",
+    "source_uri": "https://www.atptour.com/en/players/ryotaro-taguchi/t0ia/overview",
+    "status": "resolved"
   },
   "samir banerjee": {
     "canonical_player_id": 209079,
