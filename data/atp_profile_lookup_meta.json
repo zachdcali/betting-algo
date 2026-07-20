@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T10:15:01+00:00",
+    "observed_at": "2026-07-19T23:34:18+00:00",
     "observed_values": {},
-    "source_content_sha256": "041ae02536ced725906c90e39bfe757843581c4fb575c79ef9d01790360f5ab9",
+    "source_content_sha256": "05c39a711cba2ecee99b63360df4f1e5779e0311d7f91355821ca6ff6f155f05",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -1880,9 +1880,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T12:32:59+00:00",
+    "observed_at": "2026-07-19T23:34:23+00:00",
     "observed_values": {},
-    "source_content_sha256": "4007dcd76479a05d61cc52946433b4566eebd5942a59503a81fd89897e16106b",
+    "source_content_sha256": "af839d721bad6bb2b480a7ec88d4575ab2ee3ba4dddb67008893e8133600fa67",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
     "status": "fetch_error"
   },
@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T22:33:59+00:00",
+    "observed_at": "2026-07-19T23:34:28+00:00",
     "observed_values": {},
-    "source_content_sha256": "31c53e5da8495b0dcc45b2aa55dc04d6cd9881557004a9a2366c65692bc1aa11",
+    "source_content_sha256": "2a9890a7d56600c0d345ed1165a37d7a58d7b4f7fb36009f930f19185ff45fa0",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -3111,9 +3111,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T07:11:14+00:00",
+    "observed_at": "2026-07-19T23:34:34+00:00",
     "observed_values": {},
-    "source_content_sha256": "14f8a3dda54278160401645098b7ba02e9e21de990ef8d1811f6460ea9dc84a8",
+    "source_content_sha256": "67ad4cbeace612f91dbeb33f913d30565a14b7f371ebac09236131dcbb101ab5",
     "source_uri": "https://www.atptour.com/en/players/sergio-callejon-hernando/c0p0/overview",
     "status": "fetch_error"
   },
@@ -3280,6 +3280,19 @@
     "source_content_sha256": "8d3cc6852f7b95fd0fcd925cf0a4ff0bcd205e31c6d0659187f4bf029057932d",
     "source_uri": "https://www.atptour.com/en/players/thijs-boogaard/b0t6/overview",
     "status": "resolved"
+  },
+  "thomas faurel": {
+    "canonical_player_id": 212225,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-19T23:34:13+00:00",
+    "observed_values": {},
+    "source_content_sha256": "6a54960c76e90f41a54ba52f111abaddf65672bfd605a9109dbd69a2c0588beb",
+    "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
+    "status": "fetch_error"
   },
   "tiago pereira": {
     "canonical_player_id": 211500,
