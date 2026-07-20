@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T02:43:53+00:00",
+    "observed_at": "2026-07-20T04:31:46+00:00",
     "observed_values": {},
-    "source_content_sha256": "eadb712db9cfd7097985b7193f86782dc37a90ccbcafd97fd89e06f66a42ca45",
+    "source_content_sha256": "67efb0830efc02f3a8328b124e96823cef4479e094d5952daa011a8565e29155",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
     "status": "fetch_error"
   },
@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T02:43:59+00:00",
+    "observed_at": "2026-07-20T04:31:51+00:00",
     "observed_values": {},
-    "source_content_sha256": "95c16b224bd6f13a0fdbb942a26dff9af022dbd39626fbfffc3f38cf39d84641",
+    "source_content_sha256": "5023963e829afb879f124dd7c1b6947156b4be3379261a1199239d7a7856661f",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -1875,16 +1875,16 @@
   },
   "marcel zielinski": {
     "canonical_player_id": 210505,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-20T02:44:04+00:00",
-    "observed_values": {},
-    "source_content_sha256": "74ae63c849af0bbc51008c68e97bbce2e286773e0a152d6d033d9017f38a64a4",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-20T04:31:57+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "458078d85e5c87999f05d5efddac6504727414d5eb1b1cc54fe1eb4d2f2ff4c2",
     "source_uri": "https://www.atptour.com/en/players/marcel-zielinski/z0c9/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "marcos castro fabra": {
     "identity_binding": "",
@@ -2236,9 +2236,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T02:44:09+00:00",
+    "observed_at": "2026-07-20T04:32:03+00:00",
     "observed_values": {},
-    "source_content_sha256": "89b1d4b0faa6b338864492856ed1a5760e1df9b1184a7f93754fe0ab0b009c0f",
+    "source_content_sha256": "4ace24d33278a9140e9a2d80d7e3b48e823402a5a13af522b3ecae3fa8e19bce",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -3288,9 +3288,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T02:44:14+00:00",
+    "observed_at": "2026-07-20T04:32:08+00:00",
     "observed_values": {},
-    "source_content_sha256": "e7eff668b5f5fc404d1498e15efce8061d210ce01d52114da4e425e4ec02d77f",
+    "source_content_sha256": "2ba8e335ef467f266a96bf7d321d589c94f0efdca26840df776f86ebc908fd67",
     "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
     "status": "fetch_error"
   },
