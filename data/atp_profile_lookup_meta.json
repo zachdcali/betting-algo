@@ -56,9 +56,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T04:31:46+00:00",
+    "observed_at": "2026-07-20T07:57:49+00:00",
     "observed_values": {},
-    "source_content_sha256": "67efb0830efc02f3a8328b124e96823cef4479e094d5952daa011a8565e29155",
+    "source_content_sha256": "d4c95c8925018c306f1a02d94b4a2b22e0743b08466646e085230d0ab5605837",
     "source_uri": "https://www.atptour.com/en/players/alan-magadan/m0hd/overview",
     "status": "fetch_error"
   },
@@ -171,9 +171,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T04:31:51+00:00",
+    "observed_at": "2026-07-20T07:57:54+00:00",
     "observed_values": {},
-    "source_content_sha256": "5023963e829afb879f124dd7c1b6947156b4be3379261a1199239d7a7856661f",
+    "source_content_sha256": "9a553d91958abdb34565265baa5152d21a519db5f262ebc34883f86251b9b3c9",
     "source_uri": "https://www.atptour.com/en/players/alexander-vasilev/v0gr/overview",
     "status": "fetch_error"
   },
@@ -430,6 +430,19 @@
     "source_content_sha256": "2bec203d7ac2d1d840cc8ea2a465c27e0575e14b288f36406c592ed1e33d7be1",
     "source_uri": "https://www.atptour.com/en/players/carlos-maria-zarate/z0da/overview",
     "status": "resolved"
+  },
+  "cesar bouchelaghem": {
+    "canonical_player_id": 210726,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-20T07:57:44+00:00",
+    "observed_values": {},
+    "source_content_sha256": "23b5cae2cbab9d78464bdcbc28e30409c7d53da73435862e55ceeaa5ec4156e0",
+    "source_uri": "https://www.atptour.com/en/players/cesar-bouchelaghem/b0me/overview",
+    "status": "fetch_error"
   },
   "cezar gabriel papoe": {
     "canonical_player_id": 212885,
@@ -1022,9 +1035,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-19T12:32:53+00:00",
+    "observed_at": "2026-07-20T07:57:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "36f43afe0cd0096d0711d5c71d4cb4a518e441df99d72bf80c56cd7578e8b763",
+    "source_content_sha256": "6d18521ced8762598aee73c8de2d0509a07d1290953b34a80b8524881625727b",
     "source_uri": "https://www.atptour.com/en/players/gavin-young/y0bf/overview",
     "status": "fetch_error"
   },
@@ -2236,9 +2249,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T04:32:03+00:00",
+    "observed_at": "2026-07-20T07:58:04+00:00",
     "observed_values": {},
-    "source_content_sha256": "4ace24d33278a9140e9a2d80d7e3b48e823402a5a13af522b3ecae3fa8e19bce",
+    "source_content_sha256": "04ebfdcf0907f29d004bc59c96dcfb7ace974d7c577735d0e25e8278bc32b211",
     "source_uri": "https://www.atptour.com/en/players/mika-petkovic/p0o9/overview",
     "status": "fetch_error"
   },
@@ -3288,9 +3301,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-20T04:32:08+00:00",
+    "observed_at": "2026-07-20T07:58:09+00:00",
     "observed_values": {},
-    "source_content_sha256": "2ba8e335ef467f266a96bf7d321d589c94f0efdca26840df776f86ebc908fd67",
+    "source_content_sha256": "64e6068758e53433a169d0bbb563d1030eec933d02ccccb312dae28ee00fe6ac",
     "source_uri": "https://www.atptour.com/en/players/thomas-faurel/f0ho/overview",
     "status": "fetch_error"
   },
