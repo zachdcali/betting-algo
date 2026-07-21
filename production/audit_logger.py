@@ -309,3 +309,48 @@ def upsert_run_history(row: dict) -> None:
     else:
         df = pd.concat([df, pd.DataFrame([normalized])], ignore_index=True)
     df.to_csv(RUN_HISTORY_LOG_PATH, index=False)
+
+
+def finalize_latest_running_run(
+    *, status: str = "cancelled", error_message: str = "pipeline process interrupted"
+) -> str:
+    """Close the newest still-running pipeline row after its process exits.
+
+    GitHub can terminate the Python process at the job deadline before the
+    orchestrator's exception handler runs. The workflow calls this helper in
+    the following always-capable step, before checkpointing the CSVs. It only
+    closes the newest running prediction attempt; it never rewrites a terminal
+    row or guesses at prediction/settlement counters.
+    """
+    terminal_status = str(status or "").strip().lower()
+    if terminal_status in {"", "running", "started"}:
+        raise ValueError("interrupted run status must be terminal")
+
+    df = ensure_csv_columns(RUN_HISTORY_LOG_PATH, RUN_HISTORY_COLUMNS)
+    if df.empty:
+        return ""
+    kinds = df["run_kind"].fillna("").astype(str).str.strip().str.lower()
+    run_ids = df["run_id"].fillna("").astype(str).str.strip()
+    statuses = df["status"].fillna("").astype(str).str.strip().str.lower()
+    candidates = df[
+        run_ids.str.startswith("run_")
+        & kinds.isin(["", "prediction_pipeline"])
+        & statuses.isin(["", "running", "started"])
+    ].copy()
+    if candidates.empty:
+        return ""
+
+    candidates["_started"] = pd.to_datetime(
+        candidates["started_at"], errors="coerce", utc=True, format="mixed"
+    )
+    candidates = candidates.sort_values(
+        ["_started", "run_id"], kind="stable", na_position="first"
+    )
+    idx = candidates.index[-1]
+    run_id = str(df.at[idx, "run_id"]).strip()
+    df = df.astype(object)
+    df.at[idx, "status"] = terminal_status
+    df.at[idx, "completed_at"] = utc_now_iso()
+    df.at[idx, "error_message"] = str(error_message or "").strip()
+    df.to_csv(RUN_HISTORY_LOG_PATH, index=False)
+    return run_id

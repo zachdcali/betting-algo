@@ -40,6 +40,41 @@ from operational_state import (  # noqa: E402
 RETRYABLE_PUBLICATION_SQLSTATES = frozenset({"40P01", "40001"})
 PUBLICATION_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 
+# The public dashboard filters every projection by its manifest sync_id and
+# then reads in a stable order. These indexes survive TRUNCATE/COPY generations
+# and prevent the browser's exact-count probes from competing through repeated
+# full scans and sorts as the immutable shadow/ROC histories grow.
+DASHBOARD_QUERY_INDEX_SPECS = {
+    "dash_predictions": (
+        ("sync_id", ""), ("match_date", ""), ("p1", ""), ("p2", "")
+    ),
+    "dash_odds_history": (("sync_id", ""), ("logged_at", "DESC NULLS LAST")),
+    "dash_kalshi_odds_history": (
+        ("sync_id", ""), ("polled_at", "DESC NULLS LAST")
+    ),
+    "dash_shadow": (("sync_id", ""), ("logged_at", "DESC NULLS LAST")),
+    "dash_runs": (("sync_id", ""), ("started_at", "DESC NULLS LAST")),
+    "dash_bets": (("sync_id", ""), ("timestamp", "DESC NULLS LAST")),
+    "dash_snapshots": (("sync_id", ""), ("logged_at", "DESC NULLS LAST")),
+    "dash_skipped_live_matches": (
+        ("sync_id", ""), ("logged_at", "DESC NULLS LAST")
+    ),
+    "dash_settlement_audit": (
+        ("sync_id", ""), ("logged_at", "DESC NULLS LAST")
+    ),
+    "dash_features": (("sync_id", ""), ("logged_at", "DESC NULLS LAST")),
+    "dash_bankroll": (("sync_id", ""), ("timestamp", "DESC NULLS LAST")),
+    "dash_sessions": (("sync_id", ""), ("start_time", "DESC NULLS LAST")),
+    "dash_model_metrics": (
+        ("sync_id", ""), ("tier", ""), ("log_loss", "NULLS LAST"),
+        ("model", "")
+    ),
+    "dash_model_calibration": (
+        ("sync_id", ""), ("tier", ""), ("model", ""), ("bin_index", "")
+    ),
+    "dash_model_roc": (("sync_id", ""), ("roc_row_key", "")),
+}
+
 
 def _json_scalar(value):
     if value is None or pd.isna(value):
@@ -266,8 +301,24 @@ def _ensure_schema(cur, table: str, frame: pd.DataFrame) -> None:
             cur.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" text')
 
 
+def _ensure_query_index(cur, table: str, frame: pd.DataFrame) -> None:
+    index_spec = DASHBOARD_QUERY_INDEX_SPECS.get(table)
+    index_columns = {column for column, _order in index_spec or ()}
+    if not index_spec or not index_columns.issubset(frame.columns):
+        return
+    index_name = f"{table}_generation_read_v2_idx"
+    columns = ", ".join(
+        f'"{column}"{f" {order}" if order else ""}'
+        for column, order in index_spec
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table}" ({columns})'
+    )
+
+
 def _replace_table(cur, table: str, frame: pd.DataFrame) -> None:
     _ensure_schema(cur, table, frame)
+    _ensure_query_index(cur, table, frame)
     cur.execute(f'TRUNCATE "{table}"')
     if frame.empty:
         return

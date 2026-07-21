@@ -21,6 +21,9 @@ test("dashboard loads one manifest-pinned generation and retries a moving manife
   assert.match(client, /const currentRunFilter = acceptedRunId \? \{ sync_id: syncId, run_id: acceptedRunId \} : null/);
   assert.match(client, /latestAttemptRunId: Logic\.clean\(store\.manifest && store\.manifest\.latest_attempt_run_id\)/);
   assert.match(client, /return fetchAll\(table, columns, order, \{ sync_id: syncId/);
+  assert.match(client, /async function runBounded\(tasks, concurrency = 4\)/);
+  assert.match(client, /await runBounded\(\[/);
+  assert.match(client, /\], 4\);/);
 });
 
 test("deployed build changes self-heal already-open tabs", () => {
@@ -58,6 +61,9 @@ test("one hourly target is explicitly best effort and cannot queue a half-hour d
   assert.match(html, /Next hourly target/);
   assert.match(html, /:17 · best effort; delivery not guaranteed/);
   assert.doesNotMatch(html, /:17 \/ :47/);
+  assert.match(hourlyWorkflow, /Finalize interrupted pipeline attempt/);
+  assert.match(hourlyWorkflow, /if: failure\(\) \|\| cancelled\(\)/);
+  assert.match(hourlyWorkflow, /finalize_interrupted_run\.py/);
 });
 
 test("current slate is snapshot and skipped-audit based, never canonical-latest based", () => {
