@@ -198,7 +198,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/alexander%20chang",
@@ -505,7 +505,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/azuma%20visaya",
@@ -1048,19 +1048,6 @@
     "source_uri": "https://www.atptour.com/en/players/duje-markovina/m0u9/overview",
     "status": "resolved"
   },
-  "dusan obradovic": {
-    "canonical_player_id": 207708,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
-    "missing_fields": [],
-    "observed_at": "2026-07-21T20:02:59+00:00",
-    "observed_values": {
-      "hand": "L",
-      "height_cm": 185
-    },
-    "source_content_sha256": "4732fdde809c5eed55ab81cc83bdc72ca7694f8e3ed3709166d4946f69e5dc4a",
-    "source_uri": "https://www.atptour.com/en/players/dusan-obradovic/o0ai/overview",
-    "status": "resolved"
-  },
   "dylan long": {
     "identity_binding": "",
     "missing_fields": [
@@ -1182,7 +1169,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/ethan%20david%20zapp",
@@ -1399,7 +1386,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/gheorghe%20claudiu%20schinteie",
@@ -1614,7 +1601,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/hitesh%20chauhan",
@@ -1843,7 +1830,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:16:55+00:00",
+    "observed_at": "2026-07-21T21:07:49+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jeremy%20zhang",
@@ -2060,7 +2047,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jovan%20bjelobrk",
@@ -3737,16 +3724,16 @@
   },
   "robert guna": {
     "canonical_player_id": 211491,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:47+00:00",
+    "observed_at": "2026-07-21T21:01:20+00:00",
     "observed_values": {},
-    "source_content_sha256": "4961887dc420ecaf785bd7a51cf5d7a590e2c1f8472ed78c7634206105522fea",
+    "source_content_sha256": "566cf022dabc29dcb91e755119a75b903c6d967c2a08dd492b82c7fc6c858506",
     "source_uri": "https://www.atptour.com/en/players/robert-guna/g0kq/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "rodrigo alujas": {
     "canonical_player_id": 212286,
@@ -4405,9 +4392,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:53+00:00",
+    "observed_at": "2026-07-21T21:01:25+00:00",
     "observed_values": {},
-    "source_content_sha256": "8687ff4d6e9c2b914055cdbe7fcd5f107376ba870e5fae08c134cf11f01c75ca",
+    "source_content_sha256": "9fe603afd8069e7eccc2002145eb378eb8b34fc482a0d06d0da65e7e6f35443f",
     "source_uri": "https://www.atptour.com/en/players/tudor-batin/b0u1/overview",
     "status": "fetch_error"
   },
@@ -4532,7 +4519,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:02:42+00:00",
+    "observed_at": "2026-07-21T21:01:14+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/wihan%20van%20der%20merwe",
@@ -4647,7 +4634,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T20:16:56+00:00",
+    "observed_at": "2026-07-21T21:07:50+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/ymerali%20ibraimi",
