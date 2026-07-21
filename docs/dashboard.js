@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-17.3";
+  const BUILD_ID = "2026-07-21.1";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -357,6 +357,20 @@
     }
   }
 
+  async function runBounded(tasks, concurrency = 4) {
+    let next = 0;
+    async function worker() {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= tasks.length) return;
+        await tasks[index]();
+      }
+    }
+    const workerCount = Math.min(Math.max(1, concurrency), tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  }
+
   async function loadGeneration(manifest, retryCount = 0) {
     const syncId = Logic.clean(manifest && manifest.sync_id);
     const acceptedRunId = Logic.clean(manifest && manifest.accepted_prediction_run_id);
@@ -382,11 +396,11 @@
       delete store.errors.rocCurve;
     }
 
-    await Promise.all([
-      refreshResource("predictions", () => fetchAll("dash_predictions", PREDICTION_COLUMNS, "match_date.asc,p1.asc,p2.asc", generationFilter), (rows) => rows.map(normalizedPrediction)),
-      refreshResource("snapshots", () => currentRunFilter ? fetchAll("dash_snapshots", SNAPSHOT_COLUMNS, "logged_at.desc.nullslast,prediction_uid.asc", currentRunFilter) : Promise.resolve([])),
-      refreshResource("skipped", () => currentRunFilter ? fetchAll("dash_skipped_live_matches", SKIPPED_COLUMNS, "logged_at.desc.nullslast,skip_event_id.asc", currentRunFilter) : Promise.resolve([])),
-      refreshResource(
+    await runBounded([
+      () => refreshResource("predictions", () => fetchAll("dash_predictions", PREDICTION_COLUMNS, "match_date.asc,p1.asc,p2.asc", generationFilter), (rows) => rows.map(normalizedPrediction)),
+      () => refreshResource("snapshots", () => currentRunFilter ? fetchAll("dash_snapshots", SNAPSHOT_COLUMNS, "logged_at.desc.nullslast,prediction_uid.asc", currentRunFilter) : Promise.resolve([])),
+      () => refreshResource("skipped", () => currentRunFilter ? fetchAll("dash_skipped_live_matches", SKIPPED_COLUMNS, "logged_at.desc.nullslast,skip_event_id.asc", currentRunFilter) : Promise.resolve([])),
+      () => refreshResource(
         "acceptedFeatures",
         () => currentRunFilter ? fetchAll("dash_features", "feature_snapshot_id,run_id,sync_id,build_status,features_complete,p1_hand,p2_hand,feature_schema_sha256,feature_vector_sha256,feature_count", "feature_snapshot_id.asc", currentRunFilter) : Promise.resolve([]),
         (rows) => ({
@@ -403,37 +417,37 @@
           )).map((row) => Logic.clean(row.feature_snapshot_id)).filter(Boolean),
         }),
       ),
-      refreshResource("runs", () => fetchAll(
+      () => refreshResource("runs", () => fetchAll(
         "dash_runs",
         kalshiPublished ? RUN_COLUMNS : LEGACY_RUN_COLUMNS,
         "started_at.desc.nullslast,run_id.desc",
         generationFilter,
       )),
-      refreshResource("bets", () => fetchAll("dash_bets", BET_COLUMNS, "timestamp.desc.nullslast,bet_id.desc", generationFilter)),
-      refreshResource("bankroll", () => fetchAll("dash_bankroll", BANKROLL_COLUMNS, "timestamp.desc.nullslast,dashboard_row_key.desc", generationFilter)),
-      refreshResource("metrics", () => fetchAll(
+      () => refreshResource("bets", () => fetchAll("dash_bets", BET_COLUMNS, "timestamp.desc.nullslast,bet_id.desc", generationFilter)),
+      () => refreshResource("bankroll", () => fetchAll("dash_bankroll", BANKROLL_COLUMNS, "timestamp.desc.nullslast,dashboard_row_key.desc", generationFilter)),
+      () => refreshResource("metrics", () => fetchAll(
         "dash_model_metrics",
         kalshiPublished ? MODEL_METRIC_COLUMNS : LEGACY_MODEL_METRIC_COLUMNS,
         "tier.asc,log_loss.asc.nullslast,model.asc",
         generationFilter,
       )),
-      refreshResource("calibration", () => calibrationPublished
+      () => refreshResource("calibration", () => calibrationPublished
         ? fetchAll("dash_model_calibration", CALIBRATION_COLUMNS, "tier.asc,model.asc,bin_index.asc", generationFilter)
         : Promise.resolve([])),
-      refreshMeta("roc_total", () => rocPublished
+      () => refreshMeta("roc_total", () => rocPublished
         ? fetchTableMeta("dash_model_roc", "roc_row_key", "roc_row_key.asc", generationFilter)
         : Promise.resolve({ count: 0, latest: null })),
-      refreshMeta("odds", () => fetchTableMeta("dash_odds_history", "logged_at,odds_scraped_at,run_id,match_uid", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("kalshi", () => kalshiPublished
+      () => refreshMeta("odds", () => fetchTableMeta("dash_odds_history", "logged_at,odds_scraped_at,run_id,match_uid", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("kalshi", () => kalshiPublished
         ? fetchTableMeta("dash_kalshi_odds_history", "polled_at,run_id,match_uid,market_ticker", "polled_at.desc.nullslast", generationFilter)
         : Promise.resolve({ count: 0, latest: null })),
-      refreshMeta("shadows", () => fetchTableMeta("dash_shadow", "logged_at,run_id,match_uid,model_version", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("features", () => fetchTableMeta("dash_features", "logged_at,run_id", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("snapshots_total", () => fetchTableMeta("dash_snapshots", "logged_at,run_id,prediction_uid", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("skipped_total", () => fetchTableMeta("dash_skipped_live_matches", "logged_at,run_id,skip_event_id", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("settlement", () => fetchTableMeta("dash_settlement_audit", "logged_at,run_id,settlement_event_id", "logged_at.desc.nullslast", generationFilter)),
-      refreshMeta("sessions", () => fetchTableMeta("dash_sessions", "start_time,session_id", "start_time.desc.nullslast", generationFilter)),
-    ]);
+      () => refreshMeta("shadows", () => fetchTableMeta("dash_shadow", "logged_at,run_id,match_uid,model_version", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("features", () => fetchTableMeta("dash_features", "logged_at,run_id", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("snapshots_total", () => fetchTableMeta("dash_snapshots", "logged_at,run_id,prediction_uid", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("skipped_total", () => fetchTableMeta("dash_skipped_live_matches", "logged_at,run_id,skip_event_id", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("settlement", () => fetchTableMeta("dash_settlement_audit", "logged_at,run_id,settlement_event_id", "logged_at.desc.nullslast", generationFilter)),
+      () => refreshMeta("sessions", () => fetchTableMeta("dash_sessions", "start_time,session_id", "start_time.desc.nullslast", generationFilter)),
+    ], 4);
 
     const confirmedManifest = await fetchOne("dash_sync_manifest", "published_at.desc,sync_id.desc");
     const confirmedSyncId = Logic.clean(confirmedManifest && confirmedManifest.sync_id);

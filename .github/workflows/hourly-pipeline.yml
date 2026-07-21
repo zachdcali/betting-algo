@@ -82,6 +82,13 @@ jobs:
         # the budget math — 35/52 of the board was ITF); revert if runs exceed ~40m
         run: python -u main.py
 
+      - name: Finalize interrupted pipeline attempt
+        if: failure() || cancelled()
+        run: >-
+          python production/finalize_interrupted_run.py
+          --status cancelled
+          --reason "GitHub Actions pipeline step ended before terminal publication"
+
       - name: Commit updated logs
         if: always()
         run: |

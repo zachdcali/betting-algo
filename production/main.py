@@ -1700,14 +1700,15 @@ class LiveBettingOrchestrator:
                 self.run_metrics['canonical_ingest_status'] = 'success'
                 self.run_metrics['canonical_ingest_rows'] = total
                 # cross-source reconciliation: conflicts loud, curated-level
-                # repair, capped stats gap-fill for the active registry events
+                # repair. ATP match-stat gap filling is deliberately excluded
+                # from the latency-sensitive live path: each blocked rendered
+                # event page can consume nearly a minute, and the old per-event
+                # cap allowed this optional enrichment to exhaust the complete
+                # 75-minute cloud job. The explicit reconcile_store CLI remains
+                # the maintenance path for bounded stats backfills.
                 try:
                     import reconcile_store as rcs
-                    from features.history_stitch import CURRENT_EVENT_REGISTRY
-                    import pandas as _pd
-                    urls = [ev["url"] for ev in CURRENT_EVENT_REGISTRY
-                            if _pd.Timestamp(ev["window"][0]) <= _pd.Timestamp.now() <= _pd.Timestamp(ev["window"][1])]
-                    rcs.run(conn=conn, since_days=75, stats_urls=urls, stats_cap=10)
+                    rcs.run(conn=conn, since_days=75)
                     self.run_metrics['reconcile_status'] = 'success'
                 except Exception as _rc_exc:
                     self.run_metrics['reconcile_status'] = 'error'
