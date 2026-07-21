@@ -147,6 +147,6 @@ def test_dashboard_sync_creates_generation_read_index():
     dashboard_sync._ensure_query_index(Cursor(), "dash_shadow", frame)
 
     assert statements == [
-        'CREATE INDEX IF NOT EXISTS "dash_shadow_generation_read_idx" '
-        'ON "dash_shadow" ("sync_id", "logged_at")'
+        'CREATE INDEX IF NOT EXISTS "dash_shadow_generation_read_v2_idx" '
+        'ON "dash_shadow" ("sync_id", "logged_at" DESC NULLS LAST)'
     ]
