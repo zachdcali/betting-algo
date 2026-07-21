@@ -223,9 +223,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T07:09:27+00:00",
+    "observed_at": "2026-07-21T10:09:26+00:00",
     "observed_values": {},
-    "source_content_sha256": "10e28655f5e6b8923b5cb2efb1ca9cea3b7b2f7056c7b0c633ffd7d4089a09a8",
+    "source_content_sha256": "f6aaf6f0965b162b0f05537e29e6d0c48a776f70f859f558bb23b0b0ec4b5659",
     "source_uri": "https://www.atptour.com/en/players/alvin-nicholas-tudorica/t0iz/overview",
     "status": "fetch_error"
   },
@@ -1762,9 +1762,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-21T07:09:04+00:00",
+    "observed_at": "2026-07-21T10:09:31+00:00",
     "observed_values": {},
-    "source_content_sha256": "cc454abdd936dc099b68b91ee1d8768e2af1af35f81e3d934b15039c546d225a",
+    "source_content_sha256": "3665fa07cea69439f6cecacd9cec0344932af5bc77d27f5549d149687a831baa",
     "source_uri": "https://www.atptour.com/en/players/joaquin-guilleme/g0os/overview",
     "status": "fetch_error"
   },
@@ -2096,6 +2096,19 @@
     "source_content_sha256": "6e4e144aefbcecc67f510c12f150e1e6cbb0e7fbd1c66718ca34688607de1ba2",
     "source_uri": "https://www.atptour.com/en/players/linus-lagerbohm/l0hy/overview",
     "status": "not_found"
+  },
+  "loann massard": {
+    "canonical_player_id": 210604,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-21T10:09:36+00:00",
+    "observed_values": {},
+    "source_content_sha256": "362501d953d999a8f0cccb3a3e008ef7b5d0a6ffbe27ae521e21feadf4da98f8",
+    "source_uri": "https://www.atptour.com/en/players/loann-massard/m0qk/overview",
+    "status": "fetch_error"
   },
   "loic namigandet tenguere": {
     "canonical_player_id": 149108,
@@ -3076,6 +3089,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/nikolas%20stoot",
+    "status": "no_url"
+  },
+  "noah boutleux": {
+    "canonical_player_id": 214189,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-21T10:09:21+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/noah%20boutleux",
     "status": "no_url"
   },
   "noah johnston": {
