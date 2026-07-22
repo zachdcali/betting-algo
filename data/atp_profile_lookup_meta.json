@@ -2444,16 +2444,16 @@
   },
   "karim bennani": {
     "canonical_player_id": 211558,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-22T12:32:40+00:00",
-    "observed_values": {},
-    "source_content_sha256": "9204fadfdc4cc53a25f02aaae01e780a063def1f4220f8e85ffa410bc7e866bf",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-22T13:15:36+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 183
+    },
+    "source_content_sha256": "cf9b1f53bc4a512d38b272b7470a075fb23d52826879dcc21b9a195eb2b3e333",
     "source_uri": "https://www.atptour.com/en/players/karim-bennani/b0qq/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "karim mabrouk": {
     "identity_binding": "",
@@ -3013,7 +3013,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-22T12:32:35+00:00",
+    "observed_at": "2026-07-22T13:15:30+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/mario%20arce%20fernandez",
@@ -3212,16 +3212,16 @@
   },
   "matthew thomson": {
     "canonical_player_id": 207452,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-22T12:32:45+00:00",
+    "observed_at": "2026-07-22T13:15:42+00:00",
     "observed_values": {},
-    "source_content_sha256": "278b10aa767b5f4bb7b67977c5b8cd455abc916812064fa01deda255062413fe",
+    "source_content_sha256": "d5e97d046284677f6b497266f26f63aa846f55cb8589bc3897ac9d97fc93c230",
     "source_uri": "https://www.atptour.com/en/players/matthew-thomson/t0bh/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "matthieu chambonniere": {
     "canonical_player_id": 212676,
@@ -4829,7 +4829,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-22T12:32:35+00:00",
+    "observed_at": "2026-07-22T13:15:30+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/stiles%20brockett",
