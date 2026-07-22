@@ -2449,9 +2449,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-22T10:12:26+00:00",
+    "observed_at": "2026-07-22T12:32:40+00:00",
     "observed_values": {},
-    "source_content_sha256": "a462cf0c88105a610525e1a5c0b94285196c83fa3e3eed5b291399cb5b6cfdf1",
+    "source_content_sha256": "9204fadfdc4cc53a25f02aaae01e780a063def1f4220f8e85ffa410bc7e866bf",
     "source_uri": "https://www.atptour.com/en/players/karim-bennani/b0qq/overview",
     "status": "fetch_error"
   },
@@ -3013,7 +3013,7 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-15T11:57:33+00:00",
+    "observed_at": "2026-07-22T12:32:35+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/mario%20arce%20fernandez",
@@ -3217,9 +3217,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-22T10:12:31+00:00",
+    "observed_at": "2026-07-22T12:32:45+00:00",
     "observed_values": {},
-    "source_content_sha256": "a8a1ce1260e11cd2c155ddc0a9cc3c77094437035c9c5f658ebbbfee19f1c0b7",
+    "source_content_sha256": "278b10aa767b5f4bb7b67977c5b8cd455abc916812064fa01deda255062413fe",
     "source_uri": "https://www.atptour.com/en/players/matthew-thomson/t0bh/overview",
     "status": "fetch_error"
   },
@@ -4821,6 +4821,19 @@
     "source_content_sha256": "45beaa98779adfd24ee4b712aed16cb82411fa652edcc025b4b3779e57b70b0b",
     "source_uri": "https://www.atptour.com/en/players/stefano-d'agostino/d0d9/overview",
     "status": "resolved"
+  },
+  "stiles brockett": {
+    "canonical_player_id": 148677,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-22T12:32:35+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/stiles%20brockett",
+    "status": "no_url"
   },
   "sulaiman syed": {
     "identity_binding": "",
