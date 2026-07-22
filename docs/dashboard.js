@@ -5,7 +5,7 @@
   if (!Logic) throw new Error("dashboard_logic.js did not load");
 
   const API_ROOT = "https://nwcayyusigznreygjlxl.supabase.co/rest/v1";
-  const BUILD_ID = "2026-07-21.1";
+  const BUILD_ID = "2026-07-22.1";
   // Supabase publishable keys are intentionally public. RLS must remain read-only.
   const API_KEY = "sb_publishable_3GMmWx4Zws9G_tCbU5faXw_X_0SdrHq";
   const PAGE_SIZE = 1000;
@@ -671,10 +671,15 @@
     const titles = {
       healthy: "Pipeline and dashboard projection are current",
       degraded: "Pipeline is running with a degraded signal",
-      stale: "Pipeline state is stale",
-      failed: "Pipeline health cannot be trusted",
+      stale: "Serving a verified but stale pipeline generation",
+      failed: "Pipeline refresh failed or dashboard trust checks are incomplete",
     };
-    setText("health-title", titles[health.state]);
+    const refreshTitle = health.refreshInProgress && !health.attemptOverdue && health.state !== "failed"
+      ? (health.state === "stale"
+        ? "Refresh in progress; serving verified stale data"
+        : "Pipeline refresh is in progress")
+      : titles[health.state];
+    setText("health-title", refreshTitle);
     setText("health-message", health.reasons.length ? health.reasons.join(" ") : "Latest attempt and accepted predictions are current. GitHub's hourly :17 target is best effort; delivery is not guaranteed.");
 
     if (health.latestAttempt) {
