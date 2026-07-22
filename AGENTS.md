@@ -180,6 +180,13 @@ Project instructions for future Codex/Claude-style maintenance sessions.
   Only URL/full-name/canonical-ID/body-hash-bound values in [150, 230] may
   improve completeness; misses remain default-marked and ineligible. The
   all-slate canonical key/allowlist gate also covers hand-only fallback.
+  Remaining missing heights may use the bounded ESPN JSON fallback capped by
+  `ESPN_PROFILE_RUN_HYDRATION_LIMIT` (default 64), but only when exactly one
+  tennis athlete search result and its athlete body both match the canonical
+  full name. The observation must revalidate canonical player ID, external
+  athlete ID, source URI, body SHA-256, identity binding, and physical range at
+  the write boundary. Abbreviations, duplicate ESPN IDs, and identity drift
+  remain missing; `data/espn_heights.json` is compatibility evidence only.
 - Exact feature lineage stores the ordered 141-feature schema SHA-256 and vector
   SHA-256. Inference and GOLD verification require a structurally valid, finite
   persisted vector with valid binary/cardinality one-hot groups; a corrupt file,
@@ -215,8 +222,8 @@ Project instructions for future Codex/Claude-style maintenance sessions.
 - ITF order-of-play rows retain the official numeric player ID, nationality,
   and profile link. The linked official profile may supply handedness only
   after exact name+ID validation; ITF does not publish height there, so height
-  must remain missing/ineligible unless TA, ATP, or accepted profile evidence
-  supplies it.
+  must remain missing/ineligible unless TA, exact ATP/ESPN compatibility
+  evidence, or accepted profile evidence supplies it.
 - Only `actual_winner in {1, 2}` is settled model ground truth. Voids and
   cancellations are excluded/refunded rather than coerced into a player-two win.
 - Paper-account equity is configured starting capital plus realized settled

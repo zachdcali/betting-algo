@@ -25,6 +25,10 @@ from atp_rankings_scraper import (
     load_rankings,
 )
 from atp_height_scraper import batch_get_profiles, profile_lookup_evidence_states
+from espn_height_resolver import (
+    batch_height_observations,
+    validated_resolved_height,
+)
 
 # Import shared round offset function (same directory)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -70,6 +74,7 @@ MIN_HEIGHT_CM = 150.0
 MAX_HEIGHT_CM = 230.0
 DEFAULT_RUN_HEIGHT_HYDRATION_LIMIT = 32
 DEFAULT_RUN_ITF_PROFILE_LIMIT = 48
+DEFAULT_RUN_ESPN_HEIGHT_LIMIT = 64
 
 
 def _validated_height_cm(value) -> Optional[float]:
@@ -111,6 +116,17 @@ def _run_itf_profile_limit() -> int:
         return max(0, int(raw))
     except (TypeError, ValueError, OverflowError):
         return DEFAULT_RUN_ITF_PROFILE_LIMIT
+
+
+def _run_espn_height_limit() -> int:
+    raw = os.environ.get(
+        "ESPN_PROFILE_RUN_HYDRATION_LIMIT",
+        str(DEFAULT_RUN_ESPN_HEIGHT_LIMIT),
+    )
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_RUN_ESPN_HEIGHT_LIMIT
 
 
 def reconcile_upcoming_surface(surface: str, ta_surface: str, metadata_source: str) -> Tuple[str, bool]:
@@ -476,6 +492,10 @@ class TAFeatureCalculator:
             "resolved_heights": 0,
             "remaining_budget": 0,
             "evidence_states": {},
+            "espn_candidates": 0,
+            "espn_attempts": 0,
+            "espn_resolved_heights": 0,
+            "espn_statuses": {},
         }
         if odds_df is None or odds_df.empty:
             summary["status"] = "empty_slate"
@@ -657,10 +677,48 @@ class TAFeatureCalculator:
         attempted_after = set(refresh_state.get("attempted_keys") or ())
         summary["browser_attempts"] = len(attempted_after - attempted_before)
 
+        espn_candidates = [
+            {
+                "canonical_player_id": candidate.canonical_player_id,
+                "player_name": candidate.player_name,
+            }
+            for candidate in plan
+            if _validated_height_cm(
+                (resolved.get(candidate.player_name) or {}).get("height_cm")
+            ) is None
+        ]
+        summary["espn_candidates"] = len(espn_candidates)
+        espn_results: dict[str, dict] = {}
+        try:
+            espn_results = batch_height_observations(
+                espn_candidates,
+                limit=_run_espn_height_limit(),
+                verbose=False,
+            )
+        except Exception as espn_exc:
+            summary["espn_statuses"] = {"source_error": len(espn_candidates)}
+            print(f"   ⚠️ ESPN height hydration skipped (non-fatal): {espn_exc}")
+        else:
+            for observation in espn_results.values():
+                status = str((observation or {}).get("status") or "fetch_error")
+                statuses = summary["espn_statuses"]
+                statuses[status] = int(statuses.get(status, 0)) + 1
+                summary["espn_attempts"] += max(
+                    0, int((observation or {}).get("attempt_count", 0) or 0)
+                )
+
         for candidate in plan:
             values = resolved.get(candidate.player_name) or {}
             height = _validated_height_cm(values.get("height_cm"))
             profile = profiles_by_id[candidate.canonical_player_id]
+            if height is None:
+                height = validated_resolved_height(
+                    espn_results.get(candidate.player_name),
+                    canonical_player_id=candidate.canonical_player_id,
+                    player_name=candidate.player_name,
+                )
+                if height is not None:
+                    summary["espn_resolved_heights"] += 1
             if height is not None:
                 summary["resolved_heights"] += 1
                 self._persist_player_field(profile, "height_cm", height)
@@ -673,6 +731,13 @@ class TAFeatureCalculator:
         )
         summary["status"] = "complete"
         cache["height_hydration"] = summary
+        cache["espn_height_hydration"] = {
+            "status": "complete",
+            "candidate_players": summary["espn_candidates"],
+            "source_attempts": summary["espn_attempts"],
+            "resolved_heights": summary["espn_resolved_heights"],
+            "profile_statuses": summary["espn_statuses"],
+        }
         return summary
 
     @staticmethod
