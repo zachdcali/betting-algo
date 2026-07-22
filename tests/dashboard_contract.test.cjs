@@ -40,6 +40,14 @@ test("deployed build changes self-heal already-open tabs", () => {
   assert.match(html, /id="dashboard-build"/);
 });
 
+test("active refreshes serving old accepted data are labeled stale instead of untrusted", () => {
+  assert.match(client, /Refresh in progress; serving verified stale data/);
+  assert.match(client, /Pipeline refresh failed or dashboard trust checks are incomplete/);
+  assert.doesNotMatch(client, /Pipeline health cannot be trusted/);
+  assert.match(logic, /const attemptOverdue = refreshInProgress/);
+  assert.doesNotMatch(logic, /predictionAgeMinutes !== null && predictionAgeMinutes > 180/);
+});
+
 test("deployment-version checks are allowed by the dashboard CSP", () => {
   assert.match(
     html,

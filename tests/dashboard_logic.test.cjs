@@ -570,6 +570,41 @@ test("pipeline health distinguishes failure, degraded no-odds, and stale state",
     now: NOW,
   });
   assert.equal(stale.state, "stale");
+
+  const refreshingStale = Logic.computeHealth({
+    runs: [
+      { ...previousRun, run_id: "run_20260713T173000Z", status: "running", started_at: "2026-07-13T17:30:00Z" },
+      previousRun,
+    ],
+    predictions: [{ ...predictions[0], latest_logged_at: "2026-07-13T14:30:00Z" }],
+    latestAttemptRunId: "run_20260713T173000Z",
+    acceptedPredictionRunId: previousRun.run_id,
+    now: NOW,
+  });
+  assert.equal(refreshingStale.state, "stale");
+  assert.equal(refreshingStale.refreshInProgress, true);
+  assert.equal(refreshingStale.attemptOverdue, false);
+  assert.match(refreshingStale.reasons.join(" "), /refresh is in progress/);
+  assert.match(refreshingStale.reasons.join(" "), /accepted prediction generation is 210 minutes old/);
+
+  const overdueRefresh = Logic.computeHealth({
+    runs: [{ ...previousRun, status: "running", started_at: "2026-07-13T16:20:00Z" }],
+    predictions,
+    latestAttemptRunId: previousRun.run_id,
+    acceptedPredictionRunId: previousRun.run_id,
+    now: NOW,
+  });
+  assert.equal(overdueRefresh.state, "failed");
+  assert.equal(overdueRefresh.attemptOverdue, true);
+
+  const untrustedLoad = Logic.computeHealth({
+    runs: [previousRun],
+    predictions,
+    errors: { shadows: "request timed out" },
+    now: NOW,
+  });
+  assert.equal(untrustedLoad.state, "failed");
+  assert.match(untrustedLoad.reasons.join(" "), /Partial dashboard load: shadows/);
 });
 
 test("terminal run freshness uses completion time while active runs use start time", () => {

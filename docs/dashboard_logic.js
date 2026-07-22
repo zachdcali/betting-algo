@@ -62,7 +62,7 @@
   function runTimestamp(run) {
     if (!run) return null;
     const status = clean(run.status).toLowerCase();
-    const isActive = !status || ["running", "started"].includes(status);
+    const isActive = !status || ["running", "started", "pending"].includes(status);
     if (isActive) {
       return (
         parseTimestamp(run.started_at) ||
@@ -156,6 +156,8 @@
     const loadErrors = Object.entries(errors || {}).filter(([, value]) => Boolean(value));
     const reasons = [];
     const attemptStatus = clean(attempt && attempt.run.status).toLowerCase();
+    const refreshInProgress = ["running", "started", "pending"].includes(attemptStatus);
+    const attemptOverdue = refreshInProgress && attemptAgeMinutes !== null && attemptAgeMinutes > 90;
 
     if (!attempt) reasons.push("No pipeline attempt is visible in run history.");
     if (!predictionRun) reasons.push("No successful prediction-bearing run is visible.");
@@ -163,14 +165,16 @@
       reasons.push(`Latest pipeline attempt ended ${attemptStatus.replaceAll("_", " ")}.`);
     } else if (attempt && DEGRADED_STATUSES.has(attemptStatus)) {
       reasons.push(`Latest pipeline attempt ended ${attemptStatus.replaceAll("_", " ")}.`);
-    } else if (attemptStatus === "running") {
-      reasons.push("Latest pipeline attempt is still running.");
+    } else if (refreshInProgress) {
+      reasons.push("A new pipeline refresh is in progress.");
     }
     if (attemptAgeMinutes !== null && attemptAgeMinutes > 90) {
-      reasons.push(`No pipeline attempt has appeared for ${Math.round(attemptAgeMinutes)} minutes.`);
+      reasons.push(refreshInProgress
+        ? `The current pipeline attempt has been running for ${Math.round(attemptAgeMinutes)} minutes.`
+        : `No pipeline attempt has appeared for ${Math.round(attemptAgeMinutes)} minutes.`);
     }
     if (predictionAgeMinutes !== null && predictionAgeMinutes > 90) {
-      reasons.push(`Last successful prediction run is ${Math.round(predictionAgeMinutes)} minutes old.`);
+      reasons.push(`The accepted prediction generation is ${Math.round(predictionAgeMinutes)} minutes old.`);
     }
     if (loadErrors.length) {
       reasons.push(`Partial dashboard load: ${loadErrors.map(([name]) => name).join(", ")}.`);
@@ -207,8 +211,9 @@
     if (
       !attempt ||
       !predictionRun ||
+      loadErrors.length > 0 ||
       FAILURE_STATUSES.has(attemptStatus) ||
-      (predictionAgeMinutes !== null && predictionAgeMinutes > 180)
+      attemptOverdue
     ) {
       state = "failed";
     } else if (
@@ -228,6 +233,8 @@
       attemptAgeMinutes,
       predictionAgeMinutes,
       loadErrors,
+      refreshInProgress,
+      attemptOverdue,
     };
   }
 
