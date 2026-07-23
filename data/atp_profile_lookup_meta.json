@@ -2805,16 +2805,16 @@
   },
   "loann massard": {
     "canonical_player_id": 210604,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-23T07:13:48+00:00",
-    "observed_values": {},
-    "source_content_sha256": "08700276ede186720d5a8079a70e9ba9eb02389a32ce7be1ebfdd464fd74e621",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-23T10:04:58+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 180
+    },
+    "source_content_sha256": "cbd257659c05a5ef232f098cf872f1ca3b0058f9ac869e7555b3cc0a2adeabc1",
     "source_uri": "https://www.atptour.com/en/players/loann-massard/m0qk/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "loic namigandet tenguere": {
     "canonical_player_id": 149108,
@@ -3204,29 +3204,29 @@
   },
   "mathys domenc": {
     "canonical_player_id": 212912,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T07:13:38+00:00",
+    "observed_at": "2026-07-23T10:04:51+00:00",
     "observed_values": {},
-    "source_content_sha256": "7713dd52609238d309e42fc753deeb964abdecbcba6457d8e0f2d74d92959bc0",
+    "source_content_sha256": "cf8864fac9a8b2b5e6ee65ad13fafdf3e1e3ad15dfb1a4fd79874ca8bc90d785",
     "source_uri": "https://www.atptour.com/en/players/mathys-domenc/d0lz/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "mathys picard": {
     "canonical_player_id": 214229,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T07:13:59+00:00",
+    "observed_at": "2026-07-23T10:05:05+00:00",
     "observed_values": {},
-    "source_content_sha256": "991b3eaa707d5e7ca8aa0c2512aff04fd7c81926e53af8963696c1e6467d53aa",
+    "source_content_sha256": "e3f1e063cf92864ca7c55a12c17846d1bae206f6ef63aea905d4daf18de0c43d",
     "source_uri": "https://www.atptour.com/en/players/mathys-picard/p0qh/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "matic dimic": {
     "identity_binding": "",
