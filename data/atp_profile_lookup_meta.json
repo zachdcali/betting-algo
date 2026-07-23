@@ -603,6 +603,19 @@
     "source_uri": "atp-rankings://unmapped/azuma%20visaya",
     "status": "no_url"
   },
+  "bastian malla": {
+    "canonical_player_id": 109334,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-23T14:58:20+00:00",
+    "observed_values": {},
+    "source_content_sha256": "157b85139b669e8f7b2c555ec323c2c80e87e5741bb1aa43f119de28c8282f18",
+    "source_uri": "https://www.atptour.com/en/players/bastian-malla/mm24/overview",
+    "status": "not_found"
+  },
   "benedikt szerencsits": {
     "identity_binding": "",
     "missing_fields": [
@@ -2161,6 +2174,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/jeffrey%20strydom",
+    "status": "no_url"
+  },
+  "jelani sarr": {
+    "canonical_player_id": 212137,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-23T14:58:12+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/jelani%20sarr",
     "status": "no_url"
   },
   "jeremy zhang": {
@@ -3869,12 +3895,13 @@
     "status": "no_url"
   },
   "nikita filin": {
+    "canonical_player_id": 212570,
     "identity_binding": "",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-15T09:48:35+00:00",
+    "observed_at": "2026-07-23T14:58:12+00:00",
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/nikita%20filin",
