@@ -388,16 +388,16 @@
   },
   "andrea de marchi": {
     "canonical_player_id": 212972,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "identity_binding": "",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T04:44:50+00:00",
+    "observed_at": "2026-07-23T07:13:43+00:00",
     "observed_values": {},
-    "source_content_sha256": "327c0c2e0e15994b052a4ab9f7845cf7b1978d924ec780b900b33b1e5a743308",
+    "source_content_sha256": "7e72bae8602438abddf74152671b837be08de993892ea0201916df4af28434ba",
     "source_uri": "https://www.atptour.com/en/players/andrea-de-marchi/d0jz/overview",
-    "status": "not_found"
+    "status": "fetch_error"
   },
   "andrea fiorentini": {
     "canonical_player_id": 209253,
@@ -1288,9 +1288,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T04:19:25+00:00",
+    "observed_at": "2026-07-23T07:13:33+00:00",
     "observed_values": {},
-    "source_content_sha256": "8a50a8b261288d5a037cb6515917e9d2a3091403dfb0176fc031a0229e71370c",
+    "source_content_sha256": "44eb6b2242a21c8b8facb6a972750e2fb2e461d1878f68bbeddfa07adbb08d35",
     "source_uri": "https://www.atptour.com/en/players/elgin-khoeblal/k0ht/overview",
     "status": "fetch_error"
   },
@@ -2277,6 +2277,19 @@
     "source_uri": "https://www.atptour.com/en/players/joaquin-aguilar-cardozo/a0jw/overview",
     "status": "resolved"
   },
+  "joaquin bianchi": {
+    "canonical_player_id": 214129,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-23T07:13:27+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/joaquin%20bianchi",
+    "status": "no_url"
+  },
   "joaquin guilleme": {
     "canonical_player_id": 213603,
     "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
@@ -2797,9 +2810,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T04:19:38+00:00",
+    "observed_at": "2026-07-23T07:13:48+00:00",
     "observed_values": {},
-    "source_content_sha256": "243a3d98478208e52bf23de4e2a1b0db1993e91a16fff4191e7671508d0c4814",
+    "source_content_sha256": "08700276ede186720d5a8079a70e9ba9eb02389a32ce7be1ebfdd464fd74e621",
     "source_uri": "https://www.atptour.com/en/players/loann-massard/m0qk/overview",
     "status": "fetch_error"
   },
@@ -3157,9 +3170,9 @@
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T04:19:43+00:00",
+    "observed_at": "2026-07-23T07:13:53+00:00",
     "observed_values": {},
-    "source_content_sha256": "7e8830be3badc938742e9b61e3a588b05e2184f21ccade0fe408abd6647a3750",
+    "source_content_sha256": "da51104de087c4039d2a24290d4db4a32278a07927807291f3e750c74a8def7b",
     "source_uri": "https://www.atptour.com/en/players/matei-florin-breazu/b0tt/overview",
     "status": "fetch_error"
   },
@@ -3191,29 +3204,29 @@
   },
   "mathys domenc": {
     "canonical_player_id": 212912,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "identity_binding": "",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T04:45:31+00:00",
+    "observed_at": "2026-07-23T07:13:38+00:00",
     "observed_values": {},
-    "source_content_sha256": "17921f95c835dd1f1b4c15deb3db495009a59abf63bc6424ad2e5fe7ff5954ff",
+    "source_content_sha256": "7713dd52609238d309e42fc753deeb964abdecbcba6457d8e0f2d74d92959bc0",
     "source_uri": "https://www.atptour.com/en/players/mathys-domenc/d0lz/overview",
-    "status": "not_found"
+    "status": "fetch_error"
   },
   "mathys picard": {
     "canonical_player_id": 214229,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "identity_binding": "",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-16T04:45:37+00:00",
+    "observed_at": "2026-07-23T07:13:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "d5fcd1cdcbf048c18efd94294e34fc1243cc2b60eb950f1b7357da82cea99dec",
+    "source_content_sha256": "991b3eaa707d5e7ca8aa0c2512aff04fd7c81926e53af8963696c1e6467d53aa",
     "source_uri": "https://www.atptour.com/en/players/mathys-picard/p0qh/overview",
-    "status": "not_found"
+    "status": "fetch_error"
   },
   "matic dimic": {
     "identity_binding": "",
