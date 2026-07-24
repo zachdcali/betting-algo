@@ -310,16 +310,16 @@
   },
   "alvin nicholas tudorica": {
     "canonical_player_id": 212202,
-    "identity_binding": "",
-    "missing_fields": [
-      "height_cm",
-      "hand"
-    ],
-    "observed_at": "2026-07-21T11:24:16+00:00",
-    "observed_values": {},
-    "source_content_sha256": "7e1ac96b9cdddbab0206afa0bc87a321ff0bb8ec684ac7a7066f2ae583866e95",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-24T16:14:13+00:00",
+    "observed_values": {
+      "hand": "L",
+      "height_cm": 178
+    },
+    "source_content_sha256": "5224b6c9c1ee64dccd28f35cdd20dcc8e9002032e347e334a5926168614874bb",
     "source_uri": "https://www.atptour.com/en/players/alvin-nicholas-tudorica/t0iz/overview",
-    "status": "fetch_error"
+    "status": "resolved"
   },
   "amine jamji": {
     "canonical_player_id": 213026,
