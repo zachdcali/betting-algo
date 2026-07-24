@@ -13441,3 +13441,8 @@ logged_at,run_id,p1,p2,flag
 2026-07-24T10:07:58+00:00,run_20260724T094021Z,marc-andrea huesler,dominic stephan stricker,P1_Country_SUI=1 (z=8.2)
 2026-07-24T10:07:58+00:00,run_20260724T094021Z,marc-andrea huesler,dominic stephan stricker,Handedness_Matchup_LL=1 (z=8.3)
 2026-07-24T10:08:17+00:00,run_20260724T094021Z,johan nikles,yannik kelm,P1_Country_SUI=1 (z=8.2)
+2026-07-24T12:37:56+00:00,run_20260724T121058Z,marc-andrea huesler,dominic stephan stricker,P2_Country_SUI=1 (z=8.2)
+2026-07-24T12:37:56+00:00,run_20260724T121058Z,marc-andrea huesler,dominic stephan stricker,P1_Country_SUI=1 (z=8.2)
+2026-07-24T12:37:56+00:00,run_20260724T121058Z,marc-andrea huesler,dominic stephan stricker,Handedness_Matchup_LL=1 (z=8.3)
+2026-07-24T12:39:20+00:00,run_20260724T121058Z,dusan obradovic,elgin khoeblal,P1_Country_SRB=1 (z=8.3)
+2026-07-24T12:39:21+00:00,run_20260724T121058Z,johan nikles,yannik kelm,P1_Country_SUI=1 (z=8.2)
