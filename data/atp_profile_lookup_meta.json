@@ -1296,16 +1296,16 @@
   },
   "elgin khoeblal": {
     "canonical_player_id": 210163,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T07:13:33+00:00",
+    "observed_at": "2026-07-24T00:33:58+00:00",
     "observed_values": {},
-    "source_content_sha256": "44eb6b2242a21c8b8facb6a972750e2fb2e461d1878f68bbeddfa07adbb08d35",
+    "source_content_sha256": "119661e7f65ba0e74ade567e3f14f0a5b8eb8b93f4c445a37d174bd38bf4c08e",
     "source_uri": "https://www.atptour.com/en/players/elgin-khoeblal/k0ht/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "eli stephenson": {
     "canonical_player_id": 213274,
