@@ -1603,15 +1603,17 @@
   },
   "gabriele bosio": {
     "canonical_player_id": 208152,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm"
     ],
-    "observed_at": "2026-07-24T04:16:53+00:00",
-    "observed_values": {},
-    "source_content_sha256": "79afef2bb32ec07dd8f31fcdc1aef56aa195c77764096fa89f11cb4b83bea676",
+    "observed_at": "2026-07-24T07:13:12+00:00",
+    "observed_values": {
+      "hand": "R"
+    },
+    "source_content_sha256": "9028d42250fb4888f4014e18c66736ef8068a12391447cfc4159811f83fd38cf",
     "source_uri": "https://www.atptour.com/en/players/gabriele-bosio/b0g4/overview",
-    "status": "fetch_error"
+    "status": "partial"
   },
   "gabriele crivellaro": {
     "canonical_player_id": 213927,
@@ -3712,6 +3714,19 @@
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/mustafa%20ege%20sik",
     "status": "no_url"
+  },
+  "naoya honda": {
+    "canonical_player_id": 211897,
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "missing_fields": [],
+    "observed_at": "2026-07-24T07:13:18+00:00",
+    "observed_values": {
+      "hand": "R",
+      "height_cm": 175
+    },
+    "source_content_sha256": "6667fce07175db455435a08c900493463c70cb2afe04da75f9584f6fe3469e46",
+    "source_uri": "https://www.atptour.com/en/players/naoya-honda/h0j1/overview",
+    "status": "resolved"
   },
   "nathan cox": {
     "canonical_player_id": 213920,
