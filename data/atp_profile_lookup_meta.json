@@ -1603,17 +1603,15 @@
   },
   "gabriele bosio": {
     "canonical_player_id": 208152,
-    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
+    "identity_binding": "",
     "missing_fields": [
       "height_cm"
     ],
-    "observed_at": "2026-07-16T09:52:56+00:00",
-    "observed_values": {
-      "hand": "R"
-    },
-    "source_content_sha256": "008df432f12a9c5274fc4638d9c0cc2bc1725d70630e13303c299cdac7f3df20",
+    "observed_at": "2026-07-24T04:16:53+00:00",
+    "observed_values": {},
+    "source_content_sha256": "79afef2bb32ec07dd8f31fcdc1aef56aa195c77764096fa89f11cb4b83bea676",
     "source_uri": "https://www.atptour.com/en/players/gabriele-bosio/b0g4/overview",
-    "status": "partial"
+    "status": "fetch_error"
   },
   "gabriele crivellaro": {
     "canonical_player_id": 213927,
@@ -3191,16 +3189,16 @@
   },
   "matei florin breazu": {
     "canonical_player_id": 149134,
-    "identity_binding": "",
+    "identity_binding": "official_rankings_or_slug_name_plus_rendered_full_name",
     "missing_fields": [
       "height_cm",
       "hand"
     ],
-    "observed_at": "2026-07-23T07:13:53+00:00",
+    "observed_at": "2026-07-24T04:16:59+00:00",
     "observed_values": {},
-    "source_content_sha256": "da51104de087c4039d2a24290d4db4a32278a07927807291f3e750c74a8def7b",
+    "source_content_sha256": "98ef034d2d3da7c6f26f8704184ef2bba6d1660fae794dc07fbf264b9b64703f",
     "source_uri": "https://www.atptour.com/en/players/matei-florin-breazu/b0tt/overview",
-    "status": "fetch_error"
+    "status": "not_found"
   },
   "matei todoran": {
     "canonical_player_id": 212294,
@@ -5661,6 +5659,19 @@
     "observed_values": {},
     "source_content_sha256": "",
     "source_uri": "atp-rankings://unmapped/yannic%20nittmann",
+    "status": "no_url"
+  },
+  "yannick alexandrescou": {
+    "canonical_player_id": 212960,
+    "identity_binding": "",
+    "missing_fields": [
+      "height_cm",
+      "hand"
+    ],
+    "observed_at": "2026-07-24T04:16:48+00:00",
+    "observed_values": {},
+    "source_content_sha256": "",
+    "source_uri": "atp-rankings://unmapped/yannick%20alexandrescou",
     "status": "no_url"
   },
   "yannik kelm": {
